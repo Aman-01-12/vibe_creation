@@ -1,0 +1,102 @@
+name: CI
+
+# Runs on every push and pull request. The lint, type-check, and test jobs are
+# blocking merge gates. The eval-gate job is present but DISARMED (see below):
+# it never blocks a merge until a non-zero pass@k baseline is established at or
+# after M1 and the gate is armed in task 19.5 (Requirement 15.7).
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typescript:
+    name: TypeScript lint / type-check / test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (includes the import-boundary gate)
+        run: npm run lint
+
+      - name: Prettier format check
+        run: npm run format:check
+
+      - name: Type-check (tsc -b, project references)
+        run: npm run typecheck
+
+      - name: Unit + property tests
+        run: npm test
+
+  python-worker:
+    name: Python worker lint / type-check / test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/tools/sandbox/worker
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv (pins Python 3.12)
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
+      - name: Ruff lint
+        run: uv run --extra dev ruff check .
+
+      - name: Ruff format check
+        run: uv run --extra dev ruff format --check .
+
+      - name: Type-check (mypy, strict)
+        run: uv run --extra dev mypy
+
+      - name: Unit + property tests (Hypothesis)
+        run: |
+          set +e
+          uv run --extra test --extra dev pytest -q
+          code=$?
+          set -e
+          if [ "$code" -eq 5 ]; then
+            echo "No tests collected yet - the Hypothesis property suite is wired in task 1.3. Passing so bootstrapping merges are not blocked."
+            exit 0
+          fi
+          exit "$code"
+
+  eval-gate:
+    name: Eval pass@k gate (DISARMED)
+    runs-on: ubuntu-latest
+    steps:
+      # DISARMED PLACEHOLDER - do not make this block merges yet.
+      #
+      # Requirement 15.7: the eval pass@k gate is armed only after a non-zero
+      # baseline is established (at or after M1). Until then the TypeScript and
+      # Python gates above are the merge authority, so bootstrapping merges are
+      # not deadlocked. Task 19.5 replaces the body of this step with the real
+      # ratcheting decision (Eval_Harness pass@k vs. baseline minus tolerance,
+      # plus the absolute floor) and turns this into a blocking gate.
+      - name: Eval gate (disarmed)
+        run: |
+          echo "eval gate disarmed: no non-zero baseline yet (Requirement 15.7)."
+          echo "Armed in task 19.5 once a baseline exists; until then this step never blocks."
+          exit 0

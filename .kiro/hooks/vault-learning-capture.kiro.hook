@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Capture learning to vault",
+  "description": "After a spec task completes, capture a concise candidate learning note into the chipAgent Obsidian vault _inbox for later curation and eval-gating.",
+  "version": "1",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A spec task just completed. If (and only if) something worth remembering emerged — a decision, a reusable pattern, a gotcha/dead-end, or a verification recipe — write ONE concise note into the Obsidian vault at /Users/aman_01/test_idea/chipAgent/_inbox/ as a new markdown file.\n\nRules:\n- Use the matching template in chipAgent/templates/ and set frontmatter: type, title, tags, provenance (this task), timestamp (now), and status: candidate (NEVER trusted).\n- Keep it short and specific: what was attempted, what the deterministic oracle said, what failed and why, the fix/rule. Capture continuity facts (dead-ends, \"validation not run\") over generic prose.\n- Do NOT store secrets or PII (those go only in _private/, which is gitignored).\n- If nothing is genuinely worth remembering, do nothing. Do not manufacture a note.\n- Do not mark anything trusted and do not change generation behavior based on it; curation + the eval harness gate promotion later."
+  }
+}

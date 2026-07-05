@@ -1,0 +1,64 @@
+# Python virtual environment (Playwright lives here; recreate via uv)
+.venv/
+
+# Secrets — env files and mcp.json (holds a live FIRECRAWL_API_KEY), never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.kiro/settings/mcp.json
+
+# Obsidian knowledge vault: keep notes versioned, but never commit private/sensitive area or user-local UI state
+chipAgent/_private/
+chipAgent/.obsidian/workspace.json
+
+# Ignore ONLY things nothing references at build time (no dangling-pointer effect):
+#   exploration history, strategy/market/marketing docs, and the human index.
+/agent-native-map/
+/archive-exploration/
+/scanner/
+/product-ece/share/
+/product-ece/00-INDEX.md
+/product-ece/ECE-STUDENT-PLATFORM.md
+/product-ece/ECE-CURRICULUM-ROADMAP.md
+/product-ece/ECE-GTM-TOOLCHAIN-COMPETITORS.md
+/product-ece/ECE-GTM-PLAYBOOKS.md
+/product-ece/ECE-COMPETITORS-DEEPDIVE.md
+
+# KEPT TRACKED on purpose (steering / AGENTS.md / hooks reference them — ignoring would break
+# the build guardrails in fresh clones / CI / no-mistakes worktrees):
+#   product-ece/ECE-CODE-QUALITY-STANDARDS.md, ECE-SECURITY-PERFORMANCE-RESILIENCE.md,
+#   ECE-VERIFICATION-METHODOLOGY.md, ECE-KNOWLEDGE-ARCHITECTURE.md, ECE-PRD-v1.md,
+#   ECE-PHILOSOPHY.md, ECE-TECH-DECISIONS.md, ECE-RELIABILITY-SELFHEALING.md,
+#   ECE-IMPLEMENTATION-REFERENCES.md, ECE-OBSIDIAN-KNOWLEDGE-MEMORY.md, and the chipAgent/ vault
+#   (chipAgent/_private/ + .obsidian/workspace.json remain ignored above).
+
+# Design sandbox — throwaway UI/UX trial-and-error (promote to app/web when finalized)
+/design-sandbox/
+
+# Lavish review artifacts (scratch HTML)
+/.lavish/
+
+# OS / editor cruft
+.DS_Store
+
+# Node
+node_modules/
+
+# TypeScript build output (project references emit dist/ + .tsbuildinfo)
+dist/
+*.tsbuildinfo
+
+# Python build/cache artifacts (Tool_Runner worker)
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+uv.lock
+build/
+
+# Playwright test artifacts
+/tmp/inspect.png

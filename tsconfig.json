@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./app/core" },
+    { "path": "./app/knowledge" },
+    { "path": "./app/tools" },
+    { "path": "./app/agent" },
+    { "path": "./app/api" },
+    { "path": "./app/web" },
+    { "path": "./app/eval" },
+    { "path": "./app/test" }
+  ]
+}

@@ -1,0 +1,31 @@
+# Prettier owns formatting for the code we author (app/ TypeScript/JS/JSON,
+# root tooling configs, and the CI workflow). Everything below is intentionally
+# out of scope.
+
+# Generated / vendored
+node_modules/
+**/dist/
+*.tsbuildinfo
+package-lock.json
+.venv/
+build/
+**/__pycache__/
+*.egg-info/
+
+# Generated HTML review artifacts from the lavish skill (not hand-authored).
+.lavish/
+
+# The Python worker is formatted by ruff, not Prettier.
+app/tools/sandbox/worker/
+
+# Markdown is authored by hand under founder conventions (one sentence per line,
+# plain dashes); Prettier must not reflow it.
+**/*.md
+
+# Knowledge, product, and exploration docs (prose, not code).
+.kiro/
+chipAgent/
+product-ece/
+agent-native-map/
+archive-exploration/
+scanner/

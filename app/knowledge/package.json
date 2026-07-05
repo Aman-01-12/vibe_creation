@@ -1,0 +1,21 @@
+{
+  "name": "@app/knowledge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Knowledge_Retriever, OKF traversal, and the web-fetch adapter. Depends on core only.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@app/core": "*"
+  }
+}

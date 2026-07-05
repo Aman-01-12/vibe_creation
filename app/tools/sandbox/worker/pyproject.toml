@@ -1,0 +1,69 @@
+[project]
+name = "tool-runner-worker"
+version = "0.0.0"
+description = "Thin Python worker for the Tool_Runner sandbox: the sole TS-to-Python seam. Invokes iverilog/vvp/Yosys and returns results over a language-neutral job/result schema. No trust-boundary logic and no secrets live here."
+readme = "README.md"
+requires-python = ">=3.12"
+# Runtime dependency, pinned exactly per the engineering standards. The worker
+# validates the untrusted stdin job against the shared seam schema before acting
+# on it (both-sides validation is the seam's design intent), so a JSON Schema
+# validator is a genuine runtime need, not test-only. Kept to this single, small,
+# well-known package to keep the sandbox image minimal.
+dependencies = ["jsonschema==4.23.0"]
+
+[project.optional-dependencies]
+# Property-based testing for the worker (task 1.3); kept out of the runtime
+# dependency set so the sandbox image stays minimal. Pinned to exact versions
+# per the engineering standards (no floating ranges).
+test = ["hypothesis==6.156.1", "pytest==8.4.2"]
+# Lint, format, and type-check tooling for the worker. Pinned to exact versions
+# per the engineering standards (no floating ranges). Kept out of the runtime
+# set so the sandbox image stays minimal.
+dev = ["ruff==0.15.20", "mypy==2.1.0", "types-jsonschema==4.23.0.20250516"]
+
+[project.scripts]
+tool-runner-worker = "tool_runner_worker.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tool_runner_worker"]
+
+# --- Worker tooling (task 1.2) -------------------------------------------------
+# Ruff owns both linting and formatting for the worker; mypy provides strict type
+# checking. Both are scoped to this worker package only - no Python tooling lives
+# anywhere else in the repo.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+# A focused, well-known rule set: pyflakes/pycodestyle errors, import sorting,
+# pyupgrade, bugbear, simplify, pylint, and ruff-native checks.
+select = ["E", "F", "I", "UP", "B", "SIM", "PL", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert against literal expected values; magic-value checks add noise
+# rather than safety there.
+"tests/**" = ["PLR2004"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+explicit_package_bases = true
+files = ["src"]
+
+# --- Test harness (task 1.3) ---------------------------------------------------
+# The Hypothesis property suite lives in tests/. `pythonpath` puts the shared
+# strategy/tag helper module on the import path; the settings profile that sets
+# the >= 100 example default is registered in tests/conftest.py.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "-q"

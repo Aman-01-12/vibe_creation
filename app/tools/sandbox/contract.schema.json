@@ -1,0 +1,177 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ece.dev/schemas/sandbox-contract.json",
+  "title": "Tool_Runner sandbox job/result contract",
+  "definitions": {
+    "SourceFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "contents"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contents": {
+          "type": "string"
+        }
+      }
+    },
+    "ResourceLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu", "memMb", "procs", "diskMb", "wallMs"],
+      "properties": {
+        "cpu": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "memMb": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "procs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "diskMb": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "wallMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "RequiredOutput": {
+      "type": "string",
+      "enum": ["stdout", "stderr", "exitCode", "vcd", "netlistJson"]
+    },
+    "SandboxJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "workspaceFiles", "limits", "requiredOutputs"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["simulate", "synthesize"]
+        },
+        "workspaceFiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SourceFile"
+          }
+        },
+        "limits": {
+          "$ref": "#/definitions/ResourceLimits"
+        },
+        "requiredOutputs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/RequiredOutput"
+          }
+        }
+      }
+    },
+    "ArtifactBlobRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sizeBytes", "sha256"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "DeniedOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "detail"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["filesystem", "network", "process"]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "ResourceUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wallMs", "maxMemMb", "cpuMs"],
+      "properties": {
+        "wallMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxMemMb": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cpuMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "SandboxResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "exitCode",
+        "stdout",
+        "stderr",
+        "artifacts",
+        "deniedOperations",
+        "resourceUsage"
+      ],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["pass", "fail", "error"]
+        },
+        "exitCode": {
+          "type": ["integer", "null"]
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "artifacts": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/ArtifactBlobRef"
+          }
+        },
+        "deniedOperations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DeniedOperation"
+          }
+        },
+        "resourceUsage": {
+          "$ref": "#/definitions/ResourceUsage"
+        }
+      }
+    }
+  }
+}

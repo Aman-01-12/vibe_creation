@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Capture learning now",
+  "description": "Manually capture the current session's key learning as a candidate note in the chipAgent vault _inbox (for non-spec work where the post-task hook does not fire).",
+  "version": "1",
+  "when": {
+    "type": "userTriggered"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Capture the most important learning from the current session as ONE concise candidate note in /Users/aman_01/test_idea/chipAgent/_inbox/, using the matching template in chipAgent/templates/. Set frontmatter type/title/tags/provenance/timestamp and status: candidate (never trusted). Prefer continuity facts (what failed, dead-ends, what the oracle said, the fix). No secrets/PII (those go in _private/). If nothing is worth capturing, say so and do nothing."
+  }
+}

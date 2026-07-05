@@ -1,0 +1,310 @@
+// Property 8: Capture-all-or-error (task 3.3).
+//
+// This is the universal complement to the concrete example checks in
+// `app/tools/sandbox/sandbox.test.ts`. It asserts, over many generated
+// SandboxJob + RawRunCapture pairs, the capture-all-or-error rule the Tool_Runner
+// must never break (Design: Property 8; Req 2.4, 2.5, 2.9):
+//
+//   1. If the run timed out, the runtime failed (infraFailure), OR any required
+//      output is missing, the whole SandboxResult verdict is `error` - never a
+//      partial or functional result.
+//   2. Otherwise (all required outputs present, no timeout, no infra failure) the
+//      verdict reflects the run: `pass` when the process exit code is 0 and
+//      `fail` when it is anything else (including a null exit code).
+//   3. `missingRequiredOutputs` is exactly the required outputs not present in the
+//      capture, and is empty if and only if every required output was captured.
+//   4. The returned SandboxResult always validates against the language-neutral
+//      seam contract.
+//
+// The classification functions are imported through `@app/tools` (which
+// re-exports `classifyCapture`, `missingRequiredOutputs`, and
+// `validateSandboxResult` from the sandbox package), never from a deep path.
+//
+// Generators note: the shared `capture-state.ts` fixtures model a primitive,
+// structural snapshot (`CaptureState`) that is deliberately decoupled from the
+// seam types. The seam here needs the richer `RawRunCapture` shape (separate
+// `vcd`/`netlistJson` artifact presence, distinct `timedOut`/`infraFailure`
+// signals, and schema-valid artifact/usage records), so this file builds local
+// arbitraries that produce contract-valid captures rather than adapting the
+// structural fixture.
+
+import fc from 'fast-check';
+import { describe, expect, it } from 'vitest';
+
+import {
+  classifyCapture,
+  missingRequiredOutputs,
+  validateSandboxResult,
+  type ArtifactBlobRef,
+  type DeniedOperation,
+  type RawRunCapture,
+  type RequiredOutput,
+  type ResourceLimits,
+  type ResourceUsage,
+  type SandboxJob,
+  type SourceFile,
+} from '@app/tools';
+import { propertyParameters, propertyTag } from '@app/test';
+
+const PROPERTY = propertyTag(8, 'Capture-all-or-error');
+
+/** Every required-output kind, so generated jobs draw from the full input space. */
+const REQUIRED_OUTPUTS: readonly RequiredOutput[] = [
+  'stdout',
+  'stderr',
+  'exitCode',
+  'vcd',
+  'netlistJson',
+];
+
+/** The two artifact-backed required outputs; their presence is tracked in the map. */
+const ARTIFACT_OUTPUTS: readonly RequiredOutput[] = ['vcd', 'netlistJson'];
+
+// -- Independent oracle -----------------------------------------------------
+
+/**
+ * Whether a required output is present in the capture, computed independently
+ * from the requirement text (stream/exit-code null-checks, artifact key
+ * presence). This is the test's own characterization of "captured"; the property
+ * asserts the runner's classification agrees with it.
+ */
+function outputPresent(output: RequiredOutput, capture: RawRunCapture): boolean {
+  switch (output) {
+    case 'stdout':
+      return capture.stdout !== null;
+    case 'stderr':
+      return capture.stderr !== null;
+    case 'exitCode':
+      return capture.exitCode !== null;
+    case 'vcd':
+    case 'netlistJson':
+      return Object.prototype.hasOwnProperty.call(capture.artifacts, output);
+    default: {
+      const unreachable: never = output;
+      return unreachable;
+    }
+  }
+}
+
+/** The required outputs the capture did not produce, in the required-list order. */
+function expectedMissing(job: SandboxJob, capture: RawRunCapture): RequiredOutput[] {
+  return job.requiredOutputs.filter((output) => !outputPresent(output, capture));
+}
+
+// -- Generators -------------------------------------------------------------
+
+/** A lowercase-hex SHA-256 exactly 64 chars long, matching the seam schema pattern. */
+const sha256Arbitrary: fc.Arbitrary<string> = fc
+  .array(fc.constantFrom(...'0123456789abcdef'.split('')), { minLength: 64, maxLength: 64 })
+  .map((chars) => chars.join(''));
+
+/** A schema-valid artifact blob reference. */
+function artifactBlobRefArbitrary(): fc.Arbitrary<ArtifactBlobRef> {
+  return fc.record({
+    name: fc.string({ minLength: 1, maxLength: 16 }),
+    sizeBytes: fc.nat({ max: 1_048_576 }),
+    sha256: sha256Arbitrary,
+  });
+}
+
+/**
+ * A captured-artifacts map keyed only by known artifact names, so `vcd` and
+ * `netlistJson` are each independently present or absent across runs.
+ */
+function artifactsArbitrary(): fc.Arbitrary<Readonly<Record<string, ArtifactBlobRef>>> {
+  return fc.dictionary(
+    fc.constantFrom('vcd', 'netlistJson', 'coverage'),
+    artifactBlobRefArbitrary(),
+    {
+      maxKeys: 3,
+    },
+  );
+}
+
+/** A schema-valid resource-usage record (all non-negative). */
+function resourceUsageArbitrary(): fc.Arbitrary<ResourceUsage> {
+  return fc.record({
+    wallMs: fc.double({ min: 0, max: 60_000, noNaN: true }),
+    maxMemMb: fc.double({ min: 0, max: 4096, noNaN: true }),
+    cpuMs: fc.double({ min: 0, max: 60_000, noNaN: true }),
+  });
+}
+
+/** A recorded out-of-sandbox denial; `path` is present or omitted, never `undefined`. */
+function deniedOperationArbitrary(): fc.Arbitrary<DeniedOperation> {
+  const kind = fc.constantFrom('filesystem', 'network', 'process') as fc.Arbitrary<
+    DeniedOperation['kind']
+  >;
+  return fc.oneof(
+    fc.record({ kind, detail: fc.string({ maxLength: 32 }) }),
+    fc.record({ kind, detail: fc.string({ maxLength: 32 }), path: fc.string({ maxLength: 32 }) }),
+  );
+}
+
+/** Valid, positive per-invocation resource limits. */
+function limitsArbitrary(): fc.Arbitrary<ResourceLimits> {
+  return fc.record({
+    cpu: fc.double({ min: 0.1, max: 8, noNaN: true }),
+    memMb: fc.integer({ min: 1, max: 4096 }),
+    procs: fc.integer({ min: 1, max: 256 }),
+    diskMb: fc.integer({ min: 1, max: 1024 }),
+    wallMs: fc.integer({ min: 1, max: 60_000 }),
+  });
+}
+
+/** A workspace source file with a non-empty relative path. */
+function sourceFileArbitrary(): fc.Arbitrary<SourceFile> {
+  return fc.record({
+    path: fc.string({ minLength: 1, maxLength: 24 }),
+    contents: fc.string({ maxLength: 64 }),
+  });
+}
+
+/** A SandboxJob with a unique subset of required outputs (possibly empty). */
+function jobArbitrary(): fc.Arbitrary<SandboxJob> {
+  return fc.record({
+    kind: fc.constantFrom('simulate', 'synthesize'),
+    workspaceFiles: fc.array(sourceFileArbitrary(), { maxLength: 3 }),
+    limits: limitsArbitrary(),
+    requiredOutputs: fc.uniqueArray(fc.constantFrom(...REQUIRED_OUTPUTS), { maxLength: 5 }),
+  });
+}
+
+/**
+ * A fully general RawRunCapture: every field is free to be present or missing, so
+ * the pair spans complete captures, partial captures, timeouts, and infra
+ * failures.
+ */
+function captureArbitrary(): fc.Arbitrary<RawRunCapture> {
+  return fc.record({
+    timedOut: fc.boolean(),
+    infraFailure: fc.boolean(),
+    exitCode: fc.option(fc.integer(), { nil: null }),
+    stdout: fc.option(fc.string({ maxLength: 64 }), { nil: null }),
+    stderr: fc.option(fc.string({ maxLength: 64 }), { nil: null }),
+    artifacts: artifactsArbitrary(),
+    deniedOperations: fc.array(deniedOperationArbitrary(), { maxLength: 3 }),
+    resourceUsage: resourceUsageArbitrary(),
+  });
+}
+
+/** A job paired with a fully general capture. */
+function jobAndCaptureArbitrary(): fc.Arbitrary<{ job: SandboxJob; capture: RawRunCapture }> {
+  return fc.record({ job: jobArbitrary(), capture: captureArbitrary() });
+}
+
+/**
+ * A capture that is complete by construction: not timed out, no infra failure,
+ * every stream and exit code present, and both artifact outputs present. Any
+ * required-output subset is therefore fully captured, isolating the "reflect the
+ * run" branch. The exit code is biased toward 0 so both pass and fail arise.
+ */
+function completeCaptureArbitrary(): fc.Arbitrary<RawRunCapture> {
+  const bothArtifacts = fc
+    .tuple(artifactBlobRefArbitrary(), artifactBlobRefArbitrary())
+    .map(([vcd, netlistJson]) => ({ vcd, netlistJson }));
+  return fc.record({
+    timedOut: fc.constant(false),
+    infraFailure: fc.constant(false),
+    exitCode: fc.oneof(fc.constant(0), fc.integer()),
+    stdout: fc.string({ maxLength: 64 }),
+    stderr: fc.string({ maxLength: 64 }),
+    artifacts: bothArtifacts,
+    deniedOperations: fc.array(deniedOperationArbitrary(), { maxLength: 2 }),
+    resourceUsage: resourceUsageArbitrary(),
+  });
+}
+
+// -- Properties -------------------------------------------------------------
+
+describe(PROPERTY, () => {
+  it('classifies error on timeout, infra failure, or any missing required output, else reflects the exit', () => {
+    fc.assert(
+      fc.property(jobAndCaptureArbitrary(), ({ job, capture }) => {
+        const missing = expectedMissing(job, capture);
+        const mustError = capture.timedOut || capture.infraFailure || missing.length > 0;
+
+        const result = classifyCapture(job, capture);
+
+        if (mustError) {
+          expect(result.verdict).toBe('error');
+        } else {
+          expect(result.verdict).toBe(capture.exitCode === 0 ? 'pass' : 'fail');
+        }
+      }),
+      propertyParameters(),
+    );
+  });
+
+  it('reflects the process exit as pass/fail for a fully captured, non-timeout, non-infra run', () => {
+    fc.assert(
+      fc.property(jobArbitrary(), completeCaptureArbitrary(), (job, capture) => {
+        // Guard the isolating precondition rather than assuming it.
+        expect(missingRequiredOutputs(job.requiredOutputs, capture)).toEqual([]);
+
+        const result = classifyCapture(job, capture);
+
+        expect(result.verdict).toBe(capture.exitCode === 0 ? 'pass' : 'fail');
+      }),
+      propertyParameters(),
+    );
+  });
+
+  it('missingRequiredOutputs returns exactly the uncaptured required outputs, empty iff all captured', () => {
+    fc.assert(
+      fc.property(jobAndCaptureArbitrary(), ({ job, capture }) => {
+        const actual = missingRequiredOutputs(job.requiredOutputs, capture);
+        const expected = expectedMissing(job, capture);
+
+        // Exact set membership and order (the function preserves required order).
+        expect(actual).toEqual(expected);
+
+        const allCaptured = job.requiredOutputs.every((output) => outputPresent(output, capture));
+        expect(actual.length === 0).toBe(allCaptured);
+
+        // Every reported-missing output really is absent from the capture.
+        for (const output of actual) {
+          expect(outputPresent(output, capture)).toBe(false);
+        }
+      }),
+      propertyParameters(),
+    );
+  });
+
+  it('artifact-only requirements force error exactly when the artifact key is absent', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...ARTIFACT_OUTPUTS),
+        jobArbitrary(),
+        captureArbitrary(),
+        (artifact, baseJob, baseCapture) => {
+          // Require only the chosen artifact, and neutralize the other error causes
+          // so the artifact's presence is the sole determinant of the verdict.
+          const job: SandboxJob = { ...baseJob, requiredOutputs: [artifact] };
+          const capture: RawRunCapture = { ...baseCapture, timedOut: false, infraFailure: false };
+
+          const present = outputPresent(artifact, capture);
+          const result = classifyCapture(job, capture);
+
+          if (present) {
+            expect(result.verdict).toBe(capture.exitCode === 0 ? 'pass' : 'fail');
+          } else {
+            expect(result.verdict).toBe('error');
+          }
+        },
+      ),
+      propertyParameters(),
+    );
+  });
+
+  it('always returns a SandboxResult that validates against the seam contract', () => {
+    fc.assert(
+      fc.property(jobAndCaptureArbitrary(), ({ job, capture }) => {
+        const result = classifyCapture(job, capture);
+
+        expect(validateSandboxResult(result).ok).toBe(true);
+      }),
+      propertyParameters(),
+    );
+  });
+});

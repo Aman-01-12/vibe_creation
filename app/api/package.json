@@ -1,0 +1,26 @@
+{
+  "name": "@app/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "API_Gateway: authN, per-object authZ, payload validation, sanitized errors, streaming, and the Project_Store. Depends inward on agent (and deeper).",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@app/agent": "*",
+    "@trpc/server": "11.18.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43"
+  }
+}

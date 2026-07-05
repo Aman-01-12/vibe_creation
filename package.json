@@ -1,0 +1,41 @@
+{
+  "name": "ece-creation-copilot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ECE Creation Copilot monorepo. Dependencies flow inward only: web -> api -> agent -> {knowledge, tools} -> core.",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "app/core",
+    "app/knowledge",
+    "app/tools",
+    "app/agent",
+    "app/api",
+    "app/web",
+    "app/eval",
+    "app/test"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "clean": "tsc -b --clean",
+    "lint": "eslint app --max-warnings=0",
+    "lint:boundaries": "eslint app --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@typescript-eslint/parser": "8.62.1",
+    "eslint": "9.39.4",
+    "eslint-config-prettier": "10.1.8",
+    "fast-check": "4.8.0",
+    "prettier": "3.9.4",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.62.1",
+    "vitest": "4.1.9"
+  }
+}

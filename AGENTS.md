@@ -1,0 +1,104 @@
+
+
+
+
+## General Guidelines
+Never use the em dash "-". Use plain dash "-" instead
+• When writing commit messages, NEVER auto-add your agent name as co-author
+• Never manually modify CHANGELOG.md files or any files that are marked as auto-generated
+• When writing or substantially editing long Markdown files, put each full sentence on its own line.
+Preserve normal Markdown structure, but avoid wrapping multiple sentences onto one physical line.
+• When making technical decisions, do not give much weight to development cost.
+Instead, preter quality, simplicity, robustness, scalability, and long term maintainability.
+• When doing bug fixes, always start with reproducing the bug in an EZE setting as closely aligned with how an end use
+This makes sure you find the real problem so your fix will actually solve it.
+• When end-to-end testing a product, be picky about the UI you see and be obsessed with pixel perfection.
+If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along
+• Apply that same high standard to engineering excellence: lint, test failures, and test flakiness.
+If you see one, even if it is not caused by what you are working on right now, still get it fixed.
+
+
+
+
+## Skill Locations
+
+Superpowers skills are at:
+~/.copilot/installed-plugins/superpowers-marketplace/superpowers/skills/
+
+<!-- Paranoid implementation skill is at:
+~/.copilot/installed-plugins/superpowers-marketplace/superpowers/skills/paranoid-implementation/SKILL.md -->
+
+## Behaviour
+
+Skill selection is dynamic, not explicit-only.
+Before and during a task, reason about what the task actually needs, then choose the best-fitting skill(s) from the available set on your own initiative.
+You do not need the developer to name a skill first.
+
+How to decide:
+- Match the task's intent to each skill's stated purpose (its `description`), and pick the one whose scope fits best.
+- Prefer the most specific applicable skill over a general one. Use more than one only when the task genuinely spans them.
+- If no skill clearly fits, do the task without one. Never force a skill just to use it.
+- If the developer explicitly names a skill, that overrides your choice.
+
+All workspace skills are model-invocable, so the workflow may select any of them autonomously.
+There are two tiers, with different strictness:
+
+Standard skills - select and run autonomously with no checkpoint.
+Currently: `frontend-design`, `brand-guidelines`, `algorithmic-art`, `lavish`, `webapp-testing`.
+
+Heavy skills - model-invocable, but run behind a confirmation checkpoint.
+A skill is heavy if it is long-running, spins up an interactive session, scans the whole codebase, or carries high token cost.
+Currently: `improve-codebase-architecture`.
+For a heavy skill:
+- Select it only on a strong, direct task match (its `description` states the trigger); never as a side quest during unrelated work.
+- Before running it, state which skill you intend to use and why, then get explicit confirmation from the developer.
+- Skip the checkpoint only when the developer already asked for exactly that work (naming the skill, or unambiguously requesting its core action).
+
+When you do load any skill, follow it fully without skipping steps.
+If a skill's own frontmatter sets `disable-model-invocation: true`, honor it as manual-only (no workspace skill currently sets this).
+
+Be transparent: when you select a skill on your own, briefly say which one and why before acting on it.
+
+
+## Workspace Tooling & Skills
+
+This project has additional tools and skills installed under `.kiro/`. Full reference:
+`.kiro/steering/dev-tooling.md`.
+
+Workspace skills live at `.kiro/skills/`:
+- `lavish` - rich reviewable HTML artifacts for human feedback (`npx -y lavish-axi <file.html>`)
+- `frontend-design` - intentional UI/visual design
+- `brand-guidelines` - consistent brand look-and-feel
+- `algorithmic-art` - generative visuals (p5.js)
+- `improve-codebase-architecture` - visual HTML report of deepening opportunities, then a grill (manual-only)
+- `webapp-testing` - Playwright toolkit for driving/testing the local web app
+
+All of these are model-invocable; select them dynamically based on the ongoing task's needs (see Behaviour above).
+Standard skills run autonomously. `improve-codebase-architecture` is the one heavy skill: run it only on a strong task match and only after announcing it and getting confirmation (see the two-tier policy in Behaviour).
+
+MCP servers are configured in `.kiro/settings/mcp.json`:
+- `aceternity-ui` - Aceternity UI component search/install (enabled)
+- `firecrawl` - web scraping/extraction (disabled until `FIRECRAWL_API_KEY` is set)
+
+CLI quality/automation tools:
+- `gnhf` - autonomous overnight agent loop (installed globally)
+- `no-mistakes` - git-proxy quality gate + clean-PR pipeline (installed v1.31.2; run `no-mistakes init` once the repo + remote exist)
+
+The always-on coding doctrine lives at `.kiro/steering/coding.md`.
+
+## Engineering Standards (all agents, including external CLIs)
+
+These apply to Kiro and to any external agent (no-mistakes, gnhf, copilot/claude). The always-on core is `.kiro/steering/engineering-standards.md`; the full standards live in `product-ece/` and are pulled on demand.
+
+Non-negotiables for every change (ours and agent-generated code):
+- Tools decide correctness, not the model; verify with the deterministic oracle before calling anything correct.
+- Validate all external input (client, files, API, model output, web content) at every trust boundary.
+- Server-side authN + per-object authZ (IDOR/BOLA) on every endpoint; never trust client/UI/model output as a security control.
+- Secrets never in source, bundles, prompts, logs, errors, or traces (env/secret manager only; gitignored).
+- Agent-generated code runs only in a sandbox (isolated, no secrets, no default network, resource-capped).
+- Side-effectful actions use idempotency keys + approval gate; never blind-retry on timeout.
+- Sanitized errors to clients; every failure path handled and fails safe.
+
+Full docs: `product-ece/ECE-CODE-QUALITY-STANDARDS.md`, `product-ece/ECE-SECURITY-PERFORMANCE-RESILIENCE.md`, `product-ece/ECE-VERIFICATION-METHODOLOGY.md`, `product-ece/ECE-PRD-v1.md`. Read the relevant one before coding in its area.
+
+Note: this is build-time guidance. The shipped product enforces the same rules on its own generated code through its runtime system prompt + OKF knowledge + CI/SAST, not through this file.

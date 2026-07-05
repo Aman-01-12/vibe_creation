@@ -1,0 +1,26 @@
+{
+  "name": "@app/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Editor, Display_Layer, Waveform_Viewer, Schematic_View, Live_Run (React/TS). Outermost layer; depends inward on api.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@app/api": "*",
+    "@app/core": "*",
+    "@trpc/client": "11.18.0"
+  },
+  "devDependencies": {
+    "vitest": "4.1.9"
+  }
+}
