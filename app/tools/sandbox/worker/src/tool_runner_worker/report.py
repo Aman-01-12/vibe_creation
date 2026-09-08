@@ -73,11 +73,34 @@ class ResourceUsage:
 
 @dataclass(frozen=True, slots=True)
 class WorkerReport:
-    """The raw capture emitted on stdout, matching the TypeScript ``WorkerReport``."""
+    """The raw capture emitted on stdout, matching the TypeScript ``WorkerReport``.
+
+    The truncation flags are part of the seam, not a diagnostic afterthought: the
+    worker bounds how much of a child's output it retains
+    (:mod:`tool_runner_worker.commands`), so a caller that could not tell "this is
+    all the output" from "this is some of the output" would read a bounded prefix
+    as a complete run. The TypeScript verdict path uses them to refuse a pass on
+    output it knows is incomplete. ``disk_limit_exceeded`` is on the seam for the
+    same reason: the worker is the side that enforces the workspace disk cap, so it
+    is the only side that can report the kill, and a caller that could not see it
+    would read a run stopped mid-flight as one that finished.
+    """
 
     exit_code: int | None
     stdout: str | None
     stderr: str | None
+    #: True when ``stdout`` is a bounded prefix of what the child actually wrote.
+    stdout_truncated: bool
+    #: True when ``stderr`` is a bounded prefix of what the child actually wrote.
+    stderr_truncated: bool
+    #: True when a tool was KILLED for exceeding the workspace disk cap
+    #: (``ResourceLimits.diskMb``), so the run stopped mid-flight.
+    #:
+    #: Reported for the same reason as the truncation flags and with the same
+    #: discipline: it is the one cause a caller cannot re-derive from what is left,
+    #: and an omitted flag would be indistinguishable from a run that stayed inside
+    #: its cap. The TypeScript side refuses a passing verdict for it.
+    disk_limit_exceeded: bool
     artifacts: dict[str, ArtifactRef]
     denied_operations: list[DeniedOperation]
     resource_usage: ResourceUsage
@@ -88,6 +111,9 @@ class WorkerReport:
             "exitCode": self.exit_code,
             "stdout": self.stdout,
             "stderr": self.stderr,
+            "stdoutTruncated": self.stdout_truncated,
+            "stderrTruncated": self.stderr_truncated,
+            "diskLimitExceeded": self.disk_limit_exceeded,
             "artifacts": {key: ref.as_dict() for key, ref in self.artifacts.items()},
             "deniedOperations": [denial.as_dict() for denial in self.denied_operations],
             "resourceUsage": self.resource_usage.as_dict(),

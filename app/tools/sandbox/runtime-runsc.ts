@@ -11,8 +11,15 @@
 // gVisor runtime and the built worker image are present. Where neither exists (for
 // example this development environment), it reports an infrastructure failure,
 // which the adapter classifies as `error` - it never fabricates a run.
-
-import { spawn } from 'node:child_process';
+//
+// WHY THIS RUNTIME HAS NO WORKSPACE CLEANUP OF ITS OWN
+//   `LocalWorkerRuntime` creates the run's workspace on the host and removes it in a
+//   `finally`, because a SIGKILLed worker cannot clean up after itself. Here the
+//   workspace is a size-capped tmpfs INSIDE the container (`isolation.ts`), so it
+//   exists only as long as the container does and `--rm` disposes of it along with
+//   the container. There is no host directory to leak, which is why the two runtimes
+//   differ here and agree everywhere else: the same job contract, the same wall-clock
+//   kill shape, the same worker enforcing the same `diskMb` from inside.
 
 import type {
   ArtifactBlobRef,
@@ -24,6 +31,7 @@ import type {
   SandboxRuntime,
 } from './contract.js';
 import { buildRunscArgs, SANDBOX_WORKER_IMAGE } from './isolation.js';
+import { spawnInOwnProcessGroup } from './workspace-lifecycle.js';
 
 /** Zeroed usage used when a run could not report its own consumption. */
 const ZERO_USAGE: ResourceUsage = { wallMs: 0, maxMemMb: 0, cpuMs: 0 };
@@ -36,9 +44,27 @@ interface WorkerReport {
   readonly exitCode: number | null;
   readonly stdout: string | null;
   readonly stderr: string | null;
+  readonly stdoutTruncated: boolean;
+  readonly stderrTruncated: boolean;
+  readonly diskLimitExceeded: boolean;
   readonly artifacts: Readonly<Record<string, ArtifactBlobRef>>;
   readonly deniedOperations: readonly DeniedOperation[];
   readonly resourceUsage: ResourceUsage;
+}
+
+/**
+ * Narrow a reported resource-bound flag, defaulting an unusable value to `true`.
+ *
+ * The worker always reports the truncation flags and the disk-cap flag, so a missing
+ * or non-boolean value means a report we do not understand. `true` is the fail-safe
+ * reading: an unknown status is not a known-clean one, and it costs at most a `pass`
+ * downgraded to `error`, whereas `false` would let an unrecognized report's bounded
+ * prefix - or a run the worker killed for disk - be classified as a complete, passing
+ * run. The worker owns the disk cap, so this side must never be able to assume the
+ * enforcement did not happen.
+ */
+function asBoundFlag(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : true;
 }
 
 /** The mutable accumulation of one spawned run, resolved into a `RawRunCapture`. */
@@ -56,6 +82,15 @@ function infraCapture(timedOut: boolean): RawRunCapture {
     exitCode: null,
     stdout: null,
     stderr: null,
+    // No stream was captured at all, so nothing was dropped from one. The run is
+    // already `error` via `timedOut`/`infraFailure`, so this cannot create a pass.
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    // Same reasoning: the report that would have carried the worker's disk-cap
+    // verdict was discarded with everything else, and the run is already `error`, so
+    // `false` here cannot manufacture a pass. It is a statement about what THIS
+    // capture knows, not a claim that the workspace stayed inside its cap.
+    diskLimitExceeded: false,
     artifacts: {},
     deniedOperations: [],
     resourceUsage: ZERO_USAGE,
@@ -81,6 +116,9 @@ function parseWorkerReport(raw: string): WorkerReport | null {
     exitCode: typeof report.exitCode === 'number' ? report.exitCode : null,
     stdout: typeof report.stdout === 'string' ? report.stdout : null,
     stderr: typeof report.stderr === 'string' ? report.stderr : null,
+    stdoutTruncated: asBoundFlag(report.stdoutTruncated),
+    stderrTruncated: asBoundFlag(report.stderrTruncated),
+    diskLimitExceeded: asBoundFlag(report.diskLimitExceeded),
     artifacts: report.artifacts ?? {},
     deniedOperations: report.deniedOperations ?? [],
     resourceUsage: report.resourceUsage,
@@ -98,6 +136,9 @@ function captureFromReport(report: WorkerReport | null): RawRunCapture {
     exitCode: report.exitCode,
     stdout: report.stdout,
     stderr: report.stderr,
+    stdoutTruncated: report.stdoutTruncated,
+    stderrTruncated: report.stderrTruncated,
+    diskLimitExceeded: report.diskLimitExceeded,
     artifacts: report.artifacts,
     deniedOperations: report.deniedOperations,
     resourceUsage: report.resourceUsage,
@@ -133,15 +174,17 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   ): Promise<RawRunCapture> {
     return new Promise<RawRunCapture>((resolve) => {
       const acc: RunAccumulator = { containerStdout: '', timedOut: false, spawnFailed: false };
-      // No shell and array args prevent command injection from job contents.
-      const child = spawn(this.cliBinary, [...args], { stdio: ['pipe', 'pipe', 'pipe'] });
+      // No shell and array args prevent command injection from job contents. Spawned
+      // in its own process group so the wall-clock kill uses the same shape as the
+      // local runtime's, rather than two dissimilar kills for one bound.
+      const { child, killTree } = spawnInOwnProcessGroup(this.cliBinary, args, process.env);
 
       const killTimer = setTimeout(() => {
         acc.timedOut = true;
-        child.kill('SIGKILL');
+        killTree();
       }, wallMs);
 
-      child.stdout.on('data', (chunk: Buffer) => {
+      child.stdout?.on('data', (chunk: Buffer) => {
         acc.containerStdout += chunk.toString('utf8');
       });
       child.on('error', () => {
@@ -152,7 +195,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         resolve(this.resolveCapture(acc));
       });
 
-      child.stdin.end(JSON.stringify(job));
+      child.stdin?.end(JSON.stringify(job));
     });
   }
 

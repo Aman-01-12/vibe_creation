@@ -135,9 +135,13 @@
       "additionalProperties": false,
       "required": [
         "verdict",
+        "timedOut",
         "exitCode",
         "stdout",
         "stderr",
+        "stdoutTruncated",
+        "stderrTruncated",
+        "diskLimitExceeded",
         "artifacts",
         "deniedOperations",
         "resourceUsage"
@@ -147,6 +151,9 @@
           "type": "string",
           "enum": ["pass", "fail", "error"]
         },
+        "timedOut": {
+          "type": "boolean"
+        },
         "exitCode": {
           "type": ["integer", "null"]
         },
@@ -155,6 +162,15 @@
         },
         "stderr": {
           "type": "string"
+        },
+        "stdoutTruncated": {
+          "type": "boolean"
+        },
+        "stderrTruncated": {
+          "type": "boolean"
+        },
+        "diskLimitExceeded": {
+          "type": "boolean"
         },
         "artifacts": {
           "type": "object",

@@ -49,8 +49,31 @@ export {
 // Capture-all-or-error classification.
 export { classifyCapture, missingRequiredOutputs } from './classification.js';
 
-// The adapter and the two interchangeable runtimes (real gVisor, test fake).
+// The adapter and the three interchangeable runtimes: real gVisor isolation
+// (production), the real worker as a local process (real toolchain, no isolation -
+// integration suites and a provisioned eval host), and the no-toolchain fake.
 export { SandboxToolRunner } from './adapter.js';
 export { RunscSandboxRuntime } from './runtime-runsc.js';
+export { LocalWorkerRuntime, WORKER_SOURCE_ROOT } from './runtime-local-worker.js';
 export { FakeSandboxRuntime } from './fake-runtime.js';
 export type { FakeCaptureScript } from './fake-runtime.js';
+
+// Workspace lifecycle: creation, the process-tree kill that ends the writers, the
+// removal that runs whether a run exited or was killed, and the bounded reaper for
+// directories an earlier crashed parent orphaned.
+export {
+  createWorkspaceRoot,
+  reapStaleWorkspaceRoots,
+  removeWorkspaceRoot,
+  spawnInOwnProcessGroup,
+  STALE_WORKSPACE_MIN_AGE_MS,
+  TOOL_RUNNER_WORKSPACE_ENV,
+  WORKSPACE_CLEANUP_FAILED_NOTE,
+  WORKSPACE_DIR_PREFIX,
+} from './workspace-lifecycle.js';
+export type {
+  ProcessGroupChild,
+  WorkspaceNoteSink,
+  WorkspaceReapOptions,
+  WorkspaceReapOutcome,
+} from './workspace-lifecycle.js';
