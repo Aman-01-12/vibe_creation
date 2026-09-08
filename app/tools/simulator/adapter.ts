@@ -35,7 +35,7 @@ import type {
   SourceFile,
   ToolRunner,
 } from '../sandbox/index.js';
-import { parseCheckResults } from './check-signalling.js';
+import { readCheckSignals } from './check-signalling.js';
 
 /**
  * The artifact-map key under which the captured VCD waveform is returned.
@@ -120,13 +120,19 @@ function capturedVcd(result: SandboxResult): ArtifactBlobRef | null {
 /**
  * Interpret a raw `SandboxResult` into a `SimulationVerdict`.
  *
- * The sandbox already reserved `error` for a timeout, an infrastructure failure,
- * or a missing required output (including the VCD); that decision is propagated
- * unchanged with no checks, because such a run verified nothing. For a run whose
- * capture succeeded, the per-check functional verdict is derived from the parsed
- * testbench signalling via the core rules: a completed run with no parseable check
- * is `error` (verified nothing), all checks passing is `pass`, and any failing
- * check is `fail` (Req 8.10). Pure and exported for unit testing.
+ * The sandbox already reserved `error` for a timeout, a workspace disk-cap kill, an
+ * infrastructure failure, or a missing required output (including the VCD); that
+ * decision is propagated unchanged with no checks, because such a run verified
+ * nothing about the design. For a run whose
+ * capture succeeded, the per-check functional verdict is derived from the testbench
+ * signalling via the core rules: a completed run with no readable check is `error`
+ * (verified nothing), any failing check is `fail`, a run that emitted a check
+ * signal the reader could not parse is `error` (it verified nothing about that
+ * check, so it must not read as a pass), a run whose stdout was TRUNCATED is
+ * `error` for the same reason one step earlier (a failing check may sit in the
+ * bytes the Tool_Runner never retained), and only an entirely readable, entirely
+ * complete, entirely passing run is `pass` (Req 8.10). Pure and exported for unit
+ * testing.
  */
 export function interpretSandboxResult(result: SandboxResult): SimulationVerdict {
   const vcd = capturedVcd(result);
@@ -140,14 +146,33 @@ export function interpretSandboxResult(result: SandboxResult): SimulationVerdict
   if (result.verdict === 'error') {
     return { verdict: 'error', checks: [], ...diagnostics };
   }
-  const checks = parseCheckResults(result.stdout);
+  const reading = readCheckSignals(result.stdout);
   const outcome: InvocationOutcome = {
     timedOut: false,
     toolFailure: false,
     completed: true,
-    checks,
+    checks: reading.checks,
+    unreadableCheckSignals: reading.unreadableSignals,
+    // A run killed for exceeding its workspace disk cap stopped part-way through the
+    // stimulus, so the checks it managed to print describe a fraction of it. Stated
+    // here as well as in the sandbox for the same reason the truncation flag is: this
+    // is the layer that reads the stream and derives the per-check verdict, and it
+    // must not silently lose the precondition that the stream is the whole run.
+    diskLimitExceeded: result.diskLimitExceeded,
+    // The reader only ever saw `result.stdout`. If that is a bounded prefix, a
+    // `CHECK ... FAIL` line may be among the bytes the Tool_Runner discarded, and
+    // the retained prefix cannot rule it out - so the run must not read as `pass`.
+    //
+    // The sandbox already refuses a truncated run in `classifyCapture`, so on the
+    // real path this branch is reached only with `false`. Stating the rule here
+    // anyway is deliberate: THIS is the layer whose verdict actually depends on
+    // reading stdout, and the sandbox's contribution rests on its own coarse
+    // process-exit check, which is documented as a placeholder for exactly this
+    // per-check classification. If that placeholder is ever narrowed, the layer
+    // that reads the stream must not silently lose its precondition with it.
+    stdoutTruncated: result.stdoutTruncated,
   };
-  return { verdict: classifyVerdict(outcome), checks, ...diagnostics };
+  return { verdict: classifyVerdict(outcome), checks: reading.checks, ...diagnostics };
 }
 
 /**

@@ -9,4 +9,5 @@
 
 export { IcarusSimulatorAdapter, assembleSimulateJob, interpretSandboxResult } from './adapter.js';
 export type { SimulationVerdict, SimulatorAdapter } from './adapter.js';
-export { parseCheckResults } from './check-signalling.js';
+export { readCheckSignals } from './check-signalling.js';
+export type { CheckSignalReading } from './check-signalling.js';
