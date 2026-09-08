@@ -25,6 +25,7 @@ chipAgent/.obsidian/workspace.json
 /product-ece/ECE-GTM-TOOLCHAIN-COMPETITORS.md
 /product-ece/ECE-GTM-PLAYBOOKS.md
 /product-ece/ECE-COMPETITORS-DEEPDIVE.md
+/product-ece
 
 # KEPT TRACKED on purpose (steering / AGENTS.md / hooks reference them — ignoring would break
 # the build guardrails in fresh clones / CI / no-mistakes worktrees):
@@ -34,6 +35,19 @@ chipAgent/.obsidian/workspace.json
 #   ECE-IMPLEMENTATION-REFERENCES.md, ECE-OBSIDIAN-KNOWLEDGE-MEMORY.md, and the chipAgent/ vault
 #   (chipAgent/_private/ + .obsidian/workspace.json remain ignored above).
 
+# Eval corpora fetched at a pinned commit, never vendored (see app/eval/corpus/pinned-source.ts).
+# Populated by `npm run corpus:fetch`; the commit hash is the integrity guarantee, so the
+# third-party tree itself is deliberately not committed.
+/.eval-corpus/
+# Eval sweep (model bake-off) run artifacts: manifest.json, results.jsonl, summary.txt.
+# Produced by `npm run eval:sweep`; these are run outputs, not source. Keep the ones you
+# cite by copying them out of the tree deliberately.
+/.eval-runs/
+
+# Mutation-calibration cache. A DERIVED artifact: keyed by the pinned corpus commit, the
+# mutation config, and the mutant wall cap, and recomputed on any miss. Committing it would
+# ship a cache whose key can silently disagree with the checkout that reads it.
+/.eval-cache/
 # Design sandbox — throwaway UI/UX trial-and-error (promote to app/web when finalized)
 /design-sandbox/
 
@@ -62,3 +76,4 @@ build/
 
 # Playwright test artifacts
 /tmp/inspect.png
+.eval-corpus/
