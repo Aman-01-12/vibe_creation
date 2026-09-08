@@ -8,6 +8,9 @@
 import { API_LAYER } from '@app/api';
 
 export * from './editor/index.js';
+export * from './display/index.js';
+export * from './visualizations/index.js';
+export * from './live-run/index.js';
 
 /** Layer identifier, proving inward resolution of @app/api through the scaffold. */
 export const WEB_LAYER = `${API_LAYER}:web` as const;

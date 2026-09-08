@@ -17,6 +17,7 @@ import { isErr } from '@app/core';
 
 import type { AuthenticatedPrincipal } from '../gateway/auth.js';
 import { authorizeObject, type ObjectAuthorizer } from '../gateway/authorize-object.js';
+import { resolveDownstreamSignal } from '../gateway/cancellation.js';
 import { filterInjection } from '../gateway/injection-filter.js';
 import {
   approveSpecInput,
@@ -53,25 +54,35 @@ export interface ProjectSnapshot {
  * The gateway owns authentication, authorization, validation, and sanitization;
  * these handlers own the spine behavior. Streaming stages return an async
  * iterable of events; discrete actions return a promise.
+ *
+ * Every streaming stage receives the run's `AbortSignal` so a client-driven
+ * cancellation (unmount, navigation, or timeout) threads through the handler into
+ * the downstream model and tool calls it makes, abandoning in-flight work
+ * promptly rather than leaving it orphaned (Req 17.6). The gateway validates the
+ * signal at the boundary before handing it over.
  */
 export interface GatewayHandlers {
   submitIntent(
     principal: AuthenticatedPrincipal,
     input: SubmitIntentInput,
+    signal: AbortSignal,
   ): AsyncIterable<GatewayStreamEvent>;
   confirmIntent(principal: AuthenticatedPrincipal, input: { sessionId: string }): Promise<void>;
   approveSpec(
     principal: AuthenticatedPrincipal,
     input: { sessionId: string; approved: boolean },
+    signal: AbortSignal,
   ): AsyncIterable<GatewayStreamEvent>;
   requestIteration(
     principal: AuthenticatedPrincipal,
     input: RequestIterationInput,
+    signal: AbortSignal,
   ): AsyncIterable<GatewayStreamEvent>;
   openProject(principal: AuthenticatedPrincipal, input: OpenProjectInput): Promise<ProjectSnapshot>;
   runSkeletonSimulation(
     principal: AuthenticatedPrincipal,
     input: { rtl: string; testbench: string },
+    signal: AbortSignal,
   ): AsyncIterable<GatewayStreamEvent>;
 }
 
@@ -88,11 +99,12 @@ export function createAppRouter(deps: AppRouterDeps) {
     submitIntent: authedProcedure.input(submitIntentInput).subscription(async function* ({
       ctx,
       input,
+      signal,
     }) {
       const clean: SubmitIntentInput = {
         description: filterInjection(input.description).sanitized,
       };
-      yield* deps.handlers.submitIntent(ctx.principal, clean);
+      yield* deps.handlers.submitIntent(ctx.principal, clean, resolveDownstreamSignal(signal));
     }),
 
     // S0: explicit confirmation gate before generation.
@@ -103,19 +115,22 @@ export function createAppRouter(deps: AppRouterDeps) {
     // S1: approve (or reject) the spec.
     approveSpec: authedProcedure
       .input(approveSpecInput)
-      .subscription(({ ctx, input }) => deps.handlers.approveSpec(ctx.principal, input)),
+      .subscription(({ ctx, input, signal }) =>
+        deps.handlers.approveSpec(ctx.principal, input, resolveDownstreamSignal(signal)),
+      ),
 
     // S9: object-scoped iteration; authorize the project, then filter the change text.
     requestIteration: authedProcedure.input(requestIterationInput).subscription(async function* ({
       ctx,
       input,
+      signal,
     }) {
       await ensureObjectAccess(deps.objectAuthorizer, ctx.principal, input.projectId);
       const clean: RequestIterationInput = {
         ...input,
         change: filterInjection(input.change).sanitized,
       };
-      yield* deps.handlers.requestIteration(ctx.principal, clean);
+      yield* deps.handlers.requestIteration(ctx.principal, clean, resolveDownstreamSignal(signal));
     }),
 
     // Reopen a stored project; object-scoped, authorized per object.
@@ -127,7 +142,9 @@ export function createAppRouter(deps: AppRouterDeps) {
     // M0 oracle path (Req 1.4): NOT injection-filtered (code goes to the oracle).
     runSkeletonSimulation: authedProcedure
       .input(skeletonSimulationInput)
-      .subscription(({ ctx, input }) => deps.handlers.runSkeletonSimulation(ctx.principal, input)),
+      .subscription(({ ctx, input, signal }) =>
+        deps.handlers.runSkeletonSimulation(ctx.principal, input, resolveDownstreamSignal(signal)),
+      ),
   });
 }
 

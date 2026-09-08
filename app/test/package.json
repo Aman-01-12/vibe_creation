@@ -21,6 +21,8 @@
     "@app/tools": "*",
     "@app/agent": "*",
     "@app/api": "*",
+    "@app/web": "*",
+    "@app/eval": "*",
     "fast-check": "4.8.0"
   },
   "devDependencies": {

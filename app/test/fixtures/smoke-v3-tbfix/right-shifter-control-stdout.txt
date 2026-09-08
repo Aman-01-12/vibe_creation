@@ -1,0 +1,13 @@
+VCD info: dumpfile dump.vcd opened for output.
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces PASS
+CHECK ac1_under_simulation_right_shifter_produces FAIL at cycle           0: expected 10000000, got 11101011
+instrument_control_tb.v:146: $finish called at 116 (1s)
