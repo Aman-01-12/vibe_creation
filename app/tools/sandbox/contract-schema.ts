@@ -109,18 +109,39 @@ export const sandboxContractSchema: SchemaObject = {
       additionalProperties: false,
       required: [
         'verdict',
+        'timedOut',
         'exitCode',
         'stdout',
         'stderr',
+        'stdoutTruncated',
+        'stderrTruncated',
+        'diskLimitExceeded',
         'artifacts',
         'deniedOperations',
         'resourceUsage',
       ],
       properties: {
         verdict: { type: 'string', enum: ['pass', 'fail', 'error'] },
+        // Required, not optional: `error` collapses timeout / infra failure /
+        // missing output / truncation, and a wall-clock kill leaves no exit code,
+        // no streams, and zeroed usage behind, so an omitted flag would make a
+        // timeout indistinguishable from a crash. Classified TypeScript-side
+        // alongside `verdict`; the worker does not report it.
+        timedOut: { type: 'boolean' },
         exitCode: { type: ['integer', 'null'] },
         stdout: { type: 'string' },
         stderr: { type: 'string' },
+        // Required, not optional: the worker bounds how much of a child's output
+        // it retains, so a result that omitted the truncation status would let a
+        // bounded prefix read as a complete run.
+        stdoutTruncated: { type: 'boolean' },
+        stderrTruncated: { type: 'boolean' },
+        // Required, not optional: the worker enforces `diskMb` by killing the tool
+        // mid-run, and unlike a wall-clock kill that leaves nothing behind, a
+        // disk-cap kill still reports an exit code and streams. An omitted flag
+        // would make it indistinguishable from a tool that failed on its own -
+        // which is how a cap that IS enforced comes to look like one that is not.
+        diskLimitExceeded: { type: 'boolean' },
         artifacts: {
           type: 'object',
           additionalProperties: { $ref: '#/definitions/ArtifactBlobRef' },

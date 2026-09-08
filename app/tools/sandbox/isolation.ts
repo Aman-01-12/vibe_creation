@@ -12,6 +12,7 @@
 // of these flags may be weakened on the real path.
 
 import type { ContainerSpec, ResourceLimits, SandboxJob } from './contract.js';
+import { TOOL_RUNNER_WORKSPACE_ENV } from './workspace-lifecycle.js';
 
 /**
  * The pinned worker image the sandbox runs. The image is built out of band and
@@ -71,7 +72,10 @@ function resourceArgs(limits: ResourceLimits, workspacePath: string): string[] {
     `--cpus=${limits.cpu}`,
     // Process cap defeats the fork-bomb class.
     `--pids-limit=${limits.procs}`,
-    // The only writable mount: a non-exec-suid, size-capped tmpfs workspace.
+    // The only writable mount: a non-exec-suid, size-capped tmpfs workspace. The
+    // `size=` here is the kernel's half of the disk cap; the worker enforces the same
+    // number from inside by measuring the mount and killing the tool, so the cause is
+    // reported across the seam instead of surfacing only as a tool write error.
     `--tmpfs=${workspacePath}:rw,nosuid,nodev,size=${limits.diskMb}m`,
   ];
 }
@@ -97,6 +101,13 @@ export function buildRunscArgs(spec: ContainerSpec): readonly string[] {
     `--network=${spec.network}`,
     ...resourceArgs(spec.limits, spec.workspacePath),
     `--workdir=${spec.workspacePath}`,
+    // Point the worker at the tmpfs. Without this the worker falls back to its own
+    // temporary directory, which on a `--read-only` rootfs is either unwritable or -
+    // worse - somewhere OTHER than the size-capped mount, so the disk cap would apply
+    // to a directory the run does not use. Naming it here makes the tmpfs both the
+    // workspace and the thing `diskMb` bounds, twice over: once by the kernel via
+    // `size=`, once by the worker measuring the same tree.
+    `--env=${TOOL_RUNNER_WORKSPACE_ENV}=${spec.workspacePath}`,
     spec.image,
   ];
   return flags;

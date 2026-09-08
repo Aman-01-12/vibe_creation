@@ -21,17 +21,30 @@ from .workspace import materialize_workspace
 #: Exit code reported for a job kind this worker slice does not implement.
 _UNSUPPORTED_KIND_EXIT = 1
 
+#: Bytes per mebibyte. ``ResourceLimits.diskMb`` is declared in mebibytes, matching
+#: ``memMb`` and the container runtime's own ``size=<n>m`` tmpfs suffix, so the two
+#: bounds on the same workspace are expressed in the same unit.
+_BYTES_PER_MIB = 1024 * 1024
+
 
 def _run_kind(
     job: SandboxJob, workspace_root: Path, source_relpaths: list[str], runner: CommandRunner
 ) -> EdaCapture:
     """Dispatch to the EDA glue for the job kind, honestly failing the rest."""
     timeout_s = job.limits.wall_ms / 1000.0
+    disk_limit_bytes = job.limits.disk_mb * _BYTES_PER_MIB
     if job.kind == "simulate":
-        return simulate(workspace_root, source_relpaths, runner, timeout_s)
+        return simulate(workspace_root, source_relpaths, runner, timeout_s, disk_limit_bytes)
     # Synthesis (Yosys) is a later worker slice; report an honest non-zero
     # capture with no artifact rather than fabricating a result.
-    return EdaCapture(_UNSUPPORTED_KIND_EXIT, "", f"unsupported job kind: {job.kind}")
+    return EdaCapture(
+        _UNSUPPORTED_KIND_EXIT,
+        "",
+        f"unsupported job kind: {job.kind}",
+        stdout_truncated=False,
+        stderr_truncated=False,
+        disk_limit_exceeded=False,
+    )
 
 
 def run_job(job: SandboxJob, workspace_root: Path, runner: CommandRunner) -> WorkerReport:
@@ -44,6 +57,9 @@ def run_job(job: SandboxJob, workspace_root: Path, runner: CommandRunner) -> Wor
         exit_code=capture.exit_code,
         stdout=capture.stdout,
         stderr=capture.stderr,
+        stdout_truncated=capture.stdout_truncated,
+        stderr_truncated=capture.stderr_truncated,
+        disk_limit_exceeded=capture.disk_limit_exceeded,
         artifacts=capture.artifacts,
         denied_operations=materialized.denied,
         resource_usage=usage,

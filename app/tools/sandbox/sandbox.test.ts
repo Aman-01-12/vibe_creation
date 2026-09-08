@@ -46,6 +46,9 @@ function capture(overrides: Partial<RawRunCapture> = {}): RawRunCapture {
     exitCode: 0,
     stdout: '',
     stderr: '',
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    diskLimitExceeded: false,
     artifacts: {},
     deniedOperations: [],
     resourceUsage: { wallMs: 12, maxMemMb: 8, cpuMs: 10 },
@@ -74,6 +77,33 @@ describe('classifyCapture (capture-all-or-error)', () => {
     expect(result.verdict).toBe('error');
   });
 
+  it('given a timed-out run, when classified, then the TIMEOUT CAUSE is carried, not lost', () => {
+    // `error` collapses timeout / infra failure / missing output / truncation, and a wall-clock
+    // kill leaves no exit code, no streams, and zeroed usage behind - so a caller that must tell
+    // a timeout from a crash has nothing to infer from unless the fact travels with the result.
+    const result = classifyCapture(job(['exitCode']), capture({ timedOut: true, exitCode: null }));
+
+    expect(result.verdict).toBe('error');
+    expect(result.timedOut).toBe(true);
+  });
+
+  it('given an INFRA failure, when classified, then it is error but NOT a timeout', () => {
+    // The distinction the flag exists for: both are `error`, and only one is evidence that the
+    // run kept running. Folding them would let a crashed run be read as a behavioural difference.
+    const result = classifyCapture(job(['exitCode']), capture({ infraFailure: true }));
+
+    expect(result.verdict).toBe('error');
+    expect(result.timedOut).toBe(false);
+  });
+
+  it('given a clean completed run, when classified, then timedOut is false', () => {
+    // Stated so `timedOut` can never be read as a verdict: a pass reports it too.
+    const result = classifyCapture(job(['exitCode']), capture({ exitCode: 0 }));
+
+    expect(result.verdict).toBe('pass');
+    expect(result.timedOut).toBe(false);
+  });
+
   it('classifies an infrastructure failure as error', () => {
     const result = classifyCapture(job(['exitCode']), capture({ infraFailure: true }));
     expect(result.verdict).toBe('error');
@@ -99,6 +129,49 @@ describe('classifyCapture (capture-all-or-error)', () => {
     );
     expect(result.verdict).toBe('pass');
     expect(result.artifacts.vcd?.name).toBe('dump.vcd');
+  });
+});
+
+describe('classifyCapture (bounded output must never read as a pass)', () => {
+  it('given a clean exit on truncated stdout when classified then the verdict is error', () => {
+    // The Tool_Runner caps how much output it retains, so a `CHECK ... FAIL` line
+    // may sit in the bytes it dropped. A clean exit on a bounded prefix therefore
+    // establishes nothing, exactly as an unreadable CHECK line does.
+    const result = classifyCapture(
+      job(['stdout', 'exitCode']),
+      capture({ exitCode: 0, stdoutTruncated: true }),
+    );
+    expect(result.verdict).toBe('error');
+  });
+
+  it('given a non-zero exit on truncated stdout when classified then the fail is preserved', () => {
+    // A definite failure outranks the evidence gap: `fail` says strictly more than
+    // `error` and is what self-healing can act on.
+    const result = classifyCapture(
+      job(['stdout', 'exitCode']),
+      capture({ exitCode: 1, stdoutTruncated: true }),
+    );
+    expect(result.verdict).toBe('fail');
+  });
+
+  it('given truncated stderr only when classified then the verdict still reflects the run', () => {
+    // Check signalling is read from stdout, so a bounded stderr costs diagnostics
+    // and nothing else. Over-reporting `error` here would hide real verdicts.
+    const result = classifyCapture(
+      job(['stdout', 'stderr', 'exitCode']),
+      capture({ exitCode: 0, stderrTruncated: true }),
+    );
+    expect(result.verdict).toBe('pass');
+  });
+
+  it('given either stream truncated when classified then the flags reach the result', () => {
+    const result = classifyCapture(
+      job(['exitCode']),
+      capture({ exitCode: 0, stdoutTruncated: true, stderrTruncated: true }),
+    );
+    // The seam must let a caller tell "all of the output" from "some of it".
+    expect(result.stdoutTruncated).toBe(true);
+    expect(result.stderrTruncated).toBe(true);
   });
 });
 
@@ -166,11 +239,24 @@ describe('buildRunscArgs (isolation flags)', () => {
     expect(args.some((flag) => flag.startsWith('--pids-limit='))).toBe(true);
   });
 
-  it('mounts only a size-capped tmpfs workspace and no secrets, env, or host volumes', () => {
+  it('mounts only a size-capped tmpfs workspace and no secrets or host volumes', () => {
     expect(args.some((flag) => flag.startsWith('--tmpfs=/workspace:'))).toBe(true);
-    expect(args.some((flag) => flag.startsWith('--env'))).toBe(false);
     expect(args.some((flag) => flag === '-v' || flag.startsWith('--volume'))).toBe(false);
     expect(args.some((flag) => flag.startsWith('--mount'))).toBe(false);
+  });
+
+  it('injects exactly one env var, the workspace path constant, and nothing else', () => {
+    // The workspace root has to reach the worker somehow, and the environment is the
+    // only channel that is not the untrusted job: a root the CALLER could vary is a
+    // root the disk cap might not be measuring. So the ban on `--env` cannot be
+    // absolute, and the assertion is made precise instead of relaxed - the one
+    // permitted flag is pinned by exact value, so it cannot drift into carrying
+    // anything host-derived, job-derived, or secret, and a SECOND env flag still
+    // fails. The wholesale vectors (`--env-host`, `--env-file`) stay banned outright
+    // in the smoke suite.
+    const envFlags = args.filter((flag) => flag.startsWith('--env'));
+
+    expect(envFlags).toEqual(['--env=TOOL_RUNNER_WORKSPACE=/workspace']);
   });
 });
 

@@ -5,12 +5,15 @@
 // SandboxJob + RawRunCapture pairs, the capture-all-or-error rule the Tool_Runner
 // must never break (Design: Property 8; Req 2.4, 2.5, 2.9):
 //
-//   1. If the run timed out, the runtime failed (infraFailure), OR any required
-//      output is missing, the whole SandboxResult verdict is `error` - never a
-//      partial or functional result.
-//   2. Otherwise (all required outputs present, no timeout, no infra failure) the
-//      verdict reflects the run: `pass` when the process exit code is 0 and
-//      `fail` when it is anything else (including a null exit code).
+//   1. If the run timed out, was KILLED for exceeding its workspace disk cap, the
+//      runtime failed (infraFailure), OR any required output is missing, the whole
+//      SandboxResult verdict is `error` - never a partial or functional result.
+//   2. Otherwise (all required outputs present, no timeout, no disk-cap kill, no
+//      infra failure) the verdict reflects the run: `fail` when the exit code is any
+//      other than 0 (including a null exit code), and for a clean exit `pass` only
+//      when the captured stdout was COMPLETE - a clean exit on stdout the
+//      Tool_Runner had to truncate is `error`, because a bounded prefix cannot
+//      establish that nothing failed in the bytes that were dropped.
 //   3. `missingRequiredOutputs` is exactly the required outputs not present in the
 //      capture, and is empty if and only if every required output was captured.
 //   4. The returned SandboxResult always validates against the language-neutral
@@ -89,6 +92,28 @@ function outputPresent(output: RequiredOutput, capture: RawRunCapture): boolean 
 /** The required outputs the capture did not produce, in the required-list order. */
 function expectedMissing(job: SandboxJob, capture: RawRunCapture): RequiredOutput[] {
   return job.requiredOutputs.filter((output) => !outputPresent(output, capture));
+}
+
+/**
+ * The verdict a fully captured, non-timeout, non-infra, NON-DISK-KILLED run must
+ * receive, computed independently of the implementation.
+ *
+ * A non-zero exit is a functional `fail` and outranks truncation, because a
+ * definite failure is the stronger fact. A clean exit passes only when nothing was
+ * dropped from stdout; truncated output means the run's evidence is incomplete, and
+ * incomplete evidence is `error`, never `pass`.
+ *
+ * PRECONDITION: `capture.diskLimitExceeded === false`. A disk-killed run has no
+ * "exit to reflect" - the exit code it carries is the worker's own kill sentinel -
+ * so reading it here would turn our resource decision into a functional verdict on
+ * the design. Both callers below establish that precondition, one by the
+ * `mustError` guard and one by construction.
+ */
+function expectedCompleteRunVerdict(capture: RawRunCapture): 'pass' | 'fail' | 'error' {
+  if (capture.exitCode !== 0) {
+    return 'fail';
+  }
+  return capture.stdoutTruncated ? 'error' : 'pass';
 }
 
 // -- Generators -------------------------------------------------------------
@@ -172,8 +197,13 @@ function jobArbitrary(): fc.Arbitrary<SandboxJob> {
 
 /**
  * A fully general RawRunCapture: every field is free to be present or missing, so
- * the pair spans complete captures, partial captures, timeouts, and infra
- * failures.
+ * the pair spans complete captures, partial captures, timeouts, disk-cap kills, and
+ * infra failures.
+ *
+ * `diskLimitExceeded` is GENERATED, never pinned: this is the space the
+ * error-classification property quantifies over, so pinning it would leave that
+ * property unable to see the signal and would make it weaker than it was before the
+ * field existed.
  */
 function captureArbitrary(): fc.Arbitrary<RawRunCapture> {
   return fc.record({
@@ -182,6 +212,9 @@ function captureArbitrary(): fc.Arbitrary<RawRunCapture> {
     exitCode: fc.option(fc.integer(), { nil: null }),
     stdout: fc.option(fc.string({ maxLength: 64 }), { nil: null }),
     stderr: fc.option(fc.string({ maxLength: 64 }), { nil: null }),
+    stdoutTruncated: fc.boolean(),
+    stderrTruncated: fc.boolean(),
+    diskLimitExceeded: fc.boolean(),
     artifacts: artifactsArbitrary(),
     deniedOperations: fc.array(deniedOperationArbitrary(), { maxLength: 3 }),
     resourceUsage: resourceUsageArbitrary(),
@@ -194,10 +227,18 @@ function jobAndCaptureArbitrary(): fc.Arbitrary<{ job: SandboxJob; capture: RawR
 }
 
 /**
- * A capture that is complete by construction: not timed out, no infra failure,
- * every stream and exit code present, and both artifact outputs present. Any
- * required-output subset is therefore fully captured, isolating the "reflect the
- * run" branch. The exit code is biased toward 0 so both pass and fail arise.
+ * A capture that is complete by construction AND that ran to its own end: not timed
+ * out, not killed for disk, no infra failure, every stream and exit code present,
+ * and both artifact outputs present. Any required-output subset is therefore fully
+ * captured, isolating the "reflect the run" branch. The exit code is biased toward 0
+ * so both pass and fail arise.
+ *
+ * `diskLimitExceeded` is pinned `false` here for the same reason `timedOut` is, and
+ * not to dodge the new field: this arbitrary exists to isolate the branch where the
+ * verdict REFLECTS THE PROCESS EXIT, and a run the worker killed has no meaningful
+ * exit to reflect (the code it carries is our own sentinel). The disk-killed half of
+ * the space is covered by the fully general `captureArbitrary` above and by the
+ * dedicated facet below, which builds on this same arbitrary with the flag set.
  */
 function completeCaptureArbitrary(): fc.Arbitrary<RawRunCapture> {
   const bothArtifacts = fc
@@ -209,6 +250,12 @@ function completeCaptureArbitrary(): fc.Arbitrary<RawRunCapture> {
     exitCode: fc.oneof(fc.constant(0), fc.integer()),
     stdout: fc.string({ maxLength: 64 }),
     stderr: fc.string({ maxLength: 64 }),
+    // Complete CAPTURE, not necessarily complete OUTPUT: every required output is
+    // present, and truncation is generated freely so the "reflect the run" branch
+    // is asserted for bounded captures too.
+    stdoutTruncated: fc.boolean(),
+    stderrTruncated: fc.boolean(),
+    diskLimitExceeded: fc.constant(false),
     artifacts: bothArtifacts,
     deniedOperations: fc.array(deniedOperationArbitrary(), { maxLength: 2 }),
     resourceUsage: resourceUsageArbitrary(),
@@ -222,21 +269,25 @@ describe(PROPERTY, () => {
     fc.assert(
       fc.property(jobAndCaptureArbitrary(), ({ job, capture }) => {
         const missing = expectedMissing(job, capture);
-        const mustError = capture.timedOut || capture.infraFailure || missing.length > 0;
+        const mustError =
+          capture.timedOut ||
+          capture.diskLimitExceeded ||
+          capture.infraFailure ||
+          missing.length > 0;
 
         const result = classifyCapture(job, capture);
 
         if (mustError) {
           expect(result.verdict).toBe('error');
         } else {
-          expect(result.verdict).toBe(capture.exitCode === 0 ? 'pass' : 'fail');
+          expect(result.verdict).toBe(expectedCompleteRunVerdict(capture));
         }
       }),
       propertyParameters(),
     );
   });
 
-  it('reflects the process exit as pass/fail for a fully captured, non-timeout, non-infra run', () => {
+  it('reflects the process exit for a fully captured, non-timeout, non-infra run', () => {
     fc.assert(
       fc.property(jobArbitrary(), completeCaptureArbitrary(), (job, capture) => {
         // Guard the isolating precondition rather than assuming it.
@@ -244,7 +295,60 @@ describe(PROPERTY, () => {
 
         const result = classifyCapture(job, capture);
 
-        expect(result.verdict).toBe(capture.exitCode === 0 ? 'pass' : 'fail');
+        expect(result.verdict).toBe(expectedCompleteRunVerdict(capture));
+      }),
+      propertyParameters(),
+    );
+  });
+
+  it('never returns pass for a run whose captured stdout was truncated', () => {
+    fc.assert(
+      fc.property(jobArbitrary(), completeCaptureArbitrary(), (job, baseCapture) => {
+        // Every required output is present, so nothing but truncation is at issue.
+        const capture: RawRunCapture = { ...baseCapture, stdoutTruncated: true };
+        expect(missingRequiredOutputs(job.requiredOutputs, capture)).toEqual([]);
+
+        // A bounded prefix cannot rule out a failure among the discarded bytes, so
+        // the run did not establish correctness however clean the prefix looks.
+        expect(classifyCapture(job, capture).verdict).not.toBe('pass');
+      }),
+      propertyParameters(),
+    );
+  });
+
+  it('never returns pass for a run killed for exceeding its workspace disk cap', () => {
+    fc.assert(
+      fc.property(jobArbitrary(), completeCaptureArbitrary(), (job, baseCapture) => {
+        // Every required output is present and nothing was truncated unless the base
+        // capture says so, so the disk-cap kill is the only new fact in play.
+        const capture: RawRunCapture = { ...baseCapture, diskLimitExceeded: true };
+        expect(missingRequiredOutputs(job.requiredOutputs, capture)).toEqual([]);
+
+        // The run was terminated part-way through its stimulus, so nothing it
+        // produced establishes that the design is correct - and the exit code it
+        // carries is the worker's own kill sentinel, not the tool's own verdict, so
+        // it must not read as a functional result either.
+        expect(classifyCapture(job, capture).verdict).toBe('error');
+      }),
+      propertyParameters(),
+    );
+  });
+
+  it('carries the truncation and disk-cap flags through to the result unchanged', () => {
+    fc.assert(
+      fc.property(jobAndCaptureArbitrary(), ({ job, capture }) => {
+        const result = classifyCapture(job, capture);
+
+        // The seam must let a caller tell "all of the output" from "some of it",
+        // so the flags are reported, never absorbed into the verdict alone.
+        expect(result.stdoutTruncated).toBe(capture.stdoutTruncated);
+        expect(result.stderrTruncated).toBe(capture.stderrTruncated);
+        // Same discipline for the disk cap, and load-bearing for one caller in
+        // particular: mutation calibration reads this flag to tell a golden run the
+        // worker KILLED from a mutant that failed to build, and a disk kill leaves
+        // plausible-looking residue (a real sentinel exit code, a real stderr line)
+        // that would otherwise be read as the latter.
+        expect(result.diskLimitExceeded).toBe(capture.diskLimitExceeded);
       }),
       propertyParameters(),
     );
@@ -278,16 +382,21 @@ describe(PROPERTY, () => {
         jobArbitrary(),
         captureArbitrary(),
         (artifact, baseJob, baseCapture) => {
-          // Require only the chosen artifact, and neutralize the other error causes
+          // Require only the chosen artifact, and neutralize every other error cause
           // so the artifact's presence is the sole determinant of the verdict.
           const job: SandboxJob = { ...baseJob, requiredOutputs: [artifact] };
-          const capture: RawRunCapture = { ...baseCapture, timedOut: false, infraFailure: false };
+          const capture: RawRunCapture = {
+            ...baseCapture,
+            timedOut: false,
+            diskLimitExceeded: false,
+            infraFailure: false,
+          };
 
           const present = outputPresent(artifact, capture);
           const result = classifyCapture(job, capture);
 
           if (present) {
-            expect(result.verdict).toBe(capture.exitCode === 0 ? 'pass' : 'fail');
+            expect(result.verdict).toBe(expectedCompleteRunVerdict(capture));
           } else {
             expect(result.verdict).toBe('error');
           }

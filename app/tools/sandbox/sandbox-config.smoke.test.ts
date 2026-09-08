@@ -26,6 +26,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SANDBOX_ISOLATION,
   SANDBOX_WORKER_IMAGE,
+  TOOL_RUNNER_WORKSPACE_ENV,
   buildContainerSpec,
   buildRunscArgs,
 } from './index.js';
@@ -99,12 +100,23 @@ describe('sandbox config smoke: no secrets are ever mounted (Req 2.1)', () => {
     expect(spec.image).toBe(SANDBOX_WORKER_IMAGE);
   });
 
-  it('renders no env-injection or host-volume flag of any spelling', () => {
+  it('renders no env-injection or host-volume flag of any spelling, bar the workspace path', () => {
     const args = buildRunscArgs(buildContainerSpec(jobWith(STUDENT_DEFAULTS)));
     // One exhaustive scan of every forbidden secret/host-reachback vector,
     // covering short and long spellings, rather than a few sampled presence
     // checks. If any of these ever appears, generated code could receive a
     // secret or reach the host filesystem.
+    //
+    // THE ONE ALLOWED VALUE, and why it is not a hole. The worker must be told which
+    // directory is its workspace, or it falls back to a temporary directory that on a
+    // `--read-only` rootfs is either unwritable or sits OUTSIDE the size-capped tmpfs -
+    // so `diskMb` would bound a tree the run does not use. It cannot come from the job,
+    // which is untrusted input. Both halves of the permitted flag are compile-time
+    // constants of ours, so it is checked by exact identity below rather than skipped by
+    // a loosened prefix: nothing host-derived, job-derived, or secret can ride in on it.
+    // `--env-host` and `--env-file` - the flags that pull the ambient environment in
+    // wholesale, which is how a secret would actually arrive - stay banned outright.
+    const allowedEnvFlag = `--env=${TOOL_RUNNER_WORKSPACE_ENV}=${SANDBOX_ISOLATION.workspacePath}`;
     const forbiddenExact = new Set([
       '-e',
       '-v',
@@ -124,11 +136,17 @@ describe('sandbox config smoke: no secrets are ever mounted (Req 2.1)', () => {
       '--secret',
     ];
     for (const arg of args) {
+      if (arg === allowedEnvFlag) {
+        continue;
+      }
       expect(forbiddenExact.has(arg)).toBe(false);
       for (const prefix of forbiddenPrefixes) {
         expect(arg.startsWith(prefix)).toBe(false);
       }
     }
+    // The allowance is not vacuous and is not open-ended: exactly one env flag, and it
+    // is that one.
+    expect(args.filter((arg) => arg.startsWith('--env'))).toEqual([allowedEnvFlag]);
   });
 });
 

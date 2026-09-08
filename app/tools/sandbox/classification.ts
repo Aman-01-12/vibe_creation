@@ -50,7 +50,8 @@ export function missingRequiredOutputs(
 /** Map a raw capture to the core invocation outcome used for verdict classification. */
 function toInvocationOutcome(job: SandboxJob, capture: RawRunCapture): InvocationOutcome {
   const captureComplete = missingRequiredOutputs(job.requiredOutputs, capture).length === 0;
-  const completed = !capture.timedOut && !capture.infraFailure && captureComplete;
+  const completed =
+    !capture.timedOut && !capture.diskLimitExceeded && !capture.infraFailure && captureComplete;
   // A completed run contributes a single coarse process-exit check so the verdict
   // reflects the run; an incomplete run contributes none and classifies as error.
   const checks = completed
@@ -61,24 +62,54 @@ function toInvocationOutcome(job: SandboxJob, capture: RawRunCapture): Invocatio
     toolFailure: capture.infraFailure,
     completed,
     checks,
+    // The coarse process-exit check above is SYNTHESIZED from the capture, never
+    // parsed out of the run's output, so there is no signalling here that could
+    // have been unreadable. Reading the testbench's own per-check signalling (and
+    // counting what it could not read) belongs to the Simulator adapter.
+    unreadableCheckSignals: 0,
+    // A disk-cap kill is stated as its own signal, not left to `completed` above.
+    // It has to be, because the exit code a killed tool reports is OUR sentinel, so
+    // the coarse process-exit check would otherwise turn our own resource decision
+    // into a functional `fail` against the design.
+    diskLimitExceeded: capture.diskLimitExceeded,
+    // Truncation of the captured stdout is carried through even though the coarse
+    // process-exit check above is synthesized rather than read from that stream.
+    // The rule belongs to the core classifier, in one place, and an adapter that
+    // DOES read stdout (the Simulator) must not be the only layer that respects
+    // it: a truncated run reaching `pass` from any entry point is the defect.
+    stdoutTruncated: capture.stdoutTruncated,
   };
 }
 
 /**
  * Classify a raw capture into a `SandboxResult` (capture-all-or-error).
  *
- * `error` when the run timed out, the runtime failed, or a required output is
- * missing; otherwise `pass`/`fail` from the process exit. Stream fields default
- * to empty strings only when they were not required (a required-but-missing
- * stream already forced `error`).
+ * `error` when the run timed out, breached its workspace disk cap, the runtime
+ * failed, a required output is missing, or the captured stdout was truncated;
+ * otherwise `pass`/`fail` from the process exit. Stream fields default to empty
+ * strings only when they were not required (a required-but-missing stream already
+ * forced `error`), and the truncation flags are carried through unchanged so a
+ * caller can tell a complete capture from a bounded prefix.
+ *
+ * `timedOut` and `diskLimitExceeded` are carried through for the same reason as the
+ * truncation flags and with the same discipline: the verdict stays the single owner
+ * of pass/fail/error, and the flags only record WHICH cause produced an `error` a
+ * caller could not otherwise recover. A wall-clock kill leaves no exit code, no
+ * streams, and zeroed usage to infer from; a disk-cap kill leaves the opposite
+ * problem - a plausible-looking exit code and real output that would read as a tool
+ * that failed on its own.
  */
 export function classifyCapture(job: SandboxJob, capture: RawRunCapture): SandboxResult {
   const verdict = classifyVerdict(toInvocationOutcome(job, capture));
   return {
     verdict,
+    timedOut: capture.timedOut,
     exitCode: capture.exitCode,
     stdout: capture.stdout ?? '',
     stderr: capture.stderr ?? '',
+    stdoutTruncated: capture.stdoutTruncated,
+    stderrTruncated: capture.stderrTruncated,
+    diskLimitExceeded: capture.diskLimitExceeded,
     artifacts: capture.artifacts,
     deniedOperations: capture.deniedOperations,
     resourceUsage: capture.resourceUsage,

@@ -169,9 +169,21 @@ const stdoutArbitrary: fc.Arbitrary<string> = fc
 function sandboxResultArbitrary(): fc.Arbitrary<SandboxResult> {
   return fc.record({
     verdict: fc.constantFrom('pass', 'fail', 'error'),
+    // The timeout cause is generated too: it is a residual diagnostic fact, so the
+    // interpretation must be deterministic across it and must not read it as a verdict.
+    timedOut: fc.boolean(),
     exitCode: fc.option(fc.integer(), { nil: null }),
     stdout: stdoutArbitrary,
     stderr: fc.string({ maxLength: 32 }),
+    // Truncation is generated too: determinism must hold on bounded captures
+    // exactly as it does on complete ones.
+    stdoutTruncated: fc.boolean(),
+    stderrTruncated: fc.boolean(),
+    // And the disk-cap kill, for the same reason as the timeout: it is a residual
+    // fact the interpretation must be deterministic ACROSS, and generating it is
+    // what makes that claim cover the field at all. Pinning it would leave the
+    // determinism property blind to a signal the interpretation genuinely reads.
+    diskLimitExceeded: fc.boolean(),
     artifacts: artifactsArbitrary(),
     deniedOperations: fc.array(deniedOperationArbitrary(), { maxLength: 3 }),
     resourceUsage: resourceUsageArbitrary(),
@@ -203,6 +215,13 @@ function simulateCaptureArbitrary(): fc.Arbitrary<RawRunCapture> {
       { arbitrary: fc.constant<string | null>(null), weight: 1 },
     ),
     stderr: fc.option(fc.string({ maxLength: 32 }), { nil: null }),
+    stdoutTruncated: mostlyFalse,
+    stderrTruncated: mostlyFalse,
+    // Generated under the same bias as the other resource-bound signals: a
+    // disk-killed run classifies `error`, so weighting it toward `false` keeps the
+    // pass/fail branch populated while still exercising the kill path. Determinism
+    // must hold on both, which is why it is biased rather than pinned.
+    diskLimitExceeded: mostlyFalse,
     artifacts: artifactsArbitrary(),
     deniedOperations: fc.array(deniedOperationArbitrary(), { maxLength: 3 }),
     resourceUsage: resourceUsageArbitrary(),
