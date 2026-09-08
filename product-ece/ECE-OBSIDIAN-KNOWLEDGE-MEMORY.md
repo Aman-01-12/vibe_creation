@@ -6,7 +6,7 @@ Scrutiny first: the research is clear that the win is not a bigger memory, it is
 
 ## Why an Obsidian vault fits (and the one thing it must not become)
 
-An Obsidian vault is plain markdown + YAML frontmatter + wikilinks + backlinks + tags + a graph. That is the same shape as the OKF knowledge format we already chose (`ECE-KNOWLEDGE-ARCHITECTURE.md`), so the vault can be the authoring surface for our knowledge and an agent-traversable store at once. Karpathy's "LLM wiki" pattern is exactly this: a structured markdown vault an agent continuously turns into an interconnected knowledge base. Rephrased from [Karpathy LLM wiki / Obsidian](https://www.mindstudio.ai/blog/andrej-karpathy-llm-wiki-obsidian-codeex-second-brain).
+An Obsidian vault is plain markdown + YAML frontmatter + wikilinks + backlinks + tags + a graph. That is the same shape as the OKF knowledge format we already chose (`ECE-KNOWLEDGE-ARCHITECTURE.md`), so one format serves both stores: the vault is where we author and where our BUILD-time agents (Kiro and the external CLIs) traverse for continuity, and the notes we promote are copied into the shipped OKF bundle that the product's own retriever reads. Karpathy's "LLM wiki" pattern is exactly this: a structured markdown vault an agent continuously turns into an interconnected knowledge base. Rephrased from [Karpathy LLM wiki / Obsidian](https://www.mindstudio.ai/blog/andrej-karpathy-llm-wiki-obsidian-codeex-second-brain).
 
 What it must NOT become: a giant archive of everything the agent ever saw. Coding agents do not need a bigger memory so much as operational continuity - what already failed, where the last run stopped, which paths were dead ends, whether validation actually ran. A bigger note store or vector dump misses the one fact that mattered. Rephrased from [continuity over memory](https://medium.com/techtrends-digest/maybe-coding-agents-dont-need-a-bigger-memory-maybe-they-need-continuity-156cf4fc2e73).
 
@@ -15,7 +15,9 @@ What it must NOT become: a giant archive of everything the agent ever saw. Codin
 Separate the three things agents need; conflating them is a known failure. Rephrased from [Agent memory vs context engineering](https://www.augmentcode.com/guides/agent-memory-vs-context-engineering).
 
 1. Agent memory (durable learnings across sessions) - decisions, gotchas, dead-ends, verification recipes. This is the NEW role the vault fills.
-2. Authoring surface for the OKF knowledge bundle (product-runtime knowledge) - HDL patterns, toolchain notes, part summaries; the same markdown doubles as the OKF bundle we ship.
+2. Authoring surface for the OKF knowledge bundle (product-runtime knowledge) - HDL patterns, toolchain notes, part summaries.
+The vault and the bundle share one markdown/frontmatter format, but they are separate stores and the flow between them is one-way: a `trusted` vault note is curated and copied into `app/knowledge/okf-bundle/`, which is the only knowledge the shipped product reads.
+The vault itself is never shipped and is never read at product runtime.
 3. Human second brain / engineering journal - where we think, link, and review.
 
 These are distinct from, and must not replace:
@@ -34,7 +36,7 @@ Modeled on the execute/coach/distill/improve flywheel, hardened for our constrai
 - Retrieve: at the start of a task, pull the few relevant notes (traverse via MOC/index links; embeddings only for scale) into context - selected and compressed, never the whole vault.
 - Prune: notes carry validity/expiry; stale ones are invalidated. Multi-session memory degrades accuracy without temporal invalidation. Rephrased from [time-aware memory layers](https://medium.com/@cloud_88239/5-best-time-aware-memory-layers-for-long-term-ai-agents-2026-guide-079e218651db).
 
-## Note taxonomy + frontmatter (OKF-conformant, so the vault doubles as the OKF bundle)
+## Note taxonomy + frontmatter (OKF-conformant, so a promoted vault note can be curated straight into the OKF bundle)
 
 Every note is one concept, one file, with frontmatter (OKF requires a `type`; we add ours):
 ```yaml
@@ -58,7 +60,10 @@ verifiedBy: <eval run id / oracle>  # for trusted notes
 
 ## How agents access the vault
 
-- It is plain markdown, so the simplest path is the `retrieve` tool reading the vault directory (traverse MOCs, follow links) - same mechanism as the OKF cascade.
+Scope note: "agents" here means our BUILD-time agents (Kiro, no-mistakes, gnhf).
+The shipped product's `retrieve` tool is a different component and reads only `app/knowledge/okf-bundle/`; it never opens this vault.
+
+- It is plain markdown, so the simplest path is direct filesystem reads of the vault directory (traverse MOCs, follow links) - the same progressive-disclosure mechanism the product's OKF cascade uses on its own bundle.
 - Optionally add an Obsidian MCP server (read/search/create/update notes) so agents can both consume and write learnings; such servers exist (e.g. an Obsidian second-brain MCP that gives an assistant persistent memory through the vault). Rephrased from [CF-Second-Brain MCP](https://github.com/creativefabrica/CF-Second-Brain).
 - Progressive disclosure: the agent reads the top MOC/index first, then follows only the relevant links - cheap and precise, not a full-vault load.
 - Scale: add embeddings over the vault only when traversal starts missing relevant notes.
@@ -86,7 +91,7 @@ verifiedBy: <eval run id / oracle>  # for trusted notes
 Decisions made:
 - Path: `chipAgent/` inside this repo.
 - Git: versioned WITH the repo (single repo), so a commit pins code + knowledge together (reproducibility for the eval-gate). `chipAgent/_private/` and `chipAgent/.obsidian/workspace.json` are gitignored.
-- Access: read now via Kiro's direct filesystem access (no MCP process needed); controlled write path via a `postTaskExecution` hook ("Capture learning to vault") that writes `candidate` notes into `_inbox/`. An Obsidian MCP stays a future option for richer search / the product runtime.
+- Access: read now via Kiro's direct filesystem access (no MCP process needed); controlled write path via a `postTaskExecution` hook ("Capture learning to vault") that writes `candidate` notes into `_inbox/`. An Obsidian MCP stays a future option for richer BUILD-time search only; it is never a path for the shipped product to reach this vault.
 
 Structure scaffolded (OKF-conformant):
 ```
@@ -106,7 +111,8 @@ chipAgent/
 Steering: `.kiro/steering/engineering-standards.md` (always-on) now tells agents to read `chipAgent/index.md` at task start, pull relevant notes (esp. `gotchas/`), treat only `trusted` notes as authority, and capture learnings as `candidate` notes.
 
 Remaining (when we start building):
-- Wire the `retrieve` tool / knowledge cascade to traverse the vault (Tier-1 OKF), add embeddings only if traversal starts missing notes.
+- Keep the product's `retrieve` tool pointed at the shipped bundle (`app/knowledge/okf-bundle/`) only; it must never traverse this vault.
+Feed Tier-1 by curating trusted vault notes into that bundle, and add embeddings there only if traversal starts missing notes.
 - Establish a lightweight curation cadence (triage `_inbox/`, eval-gate behavior-changing lessons to `trusted`).
 
 ## Sources

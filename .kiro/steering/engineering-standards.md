@@ -31,15 +31,15 @@ fileMatch steering is best-effort and will miss some files. So, regardless of wh
 | touching API/auth/DB/tool-runner/network/perf code | `product-ece/ECE-SECURITY-PERFORMANCE-RESILIENCE.md` (auto-loads on those files) |
 | designing the agent/verification loop | `product-ece/ECE-VERIFICATION-METHODOLOGY.md` |
 | planning knowledge/retrieval/RAG | `product-ece/ECE-KNOWLEDGE-ARCHITECTURE.md` |
+| designing prompts, the agent harness, or the context/retrieval strategy | `product-ece/ECE-CONTEXT-ENGINEERING.md` (auto-loads on agent/prompt/harness files) |
 | doing architecture/spec/feature scope | `product-ece/ECE-PRD-v1.md`, `product-ece/ECE-PHILOSOPHY.md`, `product-ece/ECE-TECH-DECISIONS.md` |
 | reliability/self-heal/idempotency work | `product-ece/ECE-RELIABILITY-SELFHEALING.md` |
 
 ## Knowledge & memory (the chipAgent Obsidian vault)
 
-- The vault at `chipAgent/` is our knowledge base + learning memory (design: `product-ece/ECE-OBSIDIAN-KNOWLEDGE-MEMORY.md`).
-- At the START of a non-trivial task: read `chipAgent/index.md`, follow only the relevant links, and pull the few relevant notes (especially `gotchas/`) into context. Do not load the whole vault.
-- Only `status: trusted` notes may steer generation; `candidate` notes are hints, not authority. The deterministic oracle still decides correctness.
-- New learnings are captured as `candidate` notes in `chipAgent/_inbox/` (a post-task hook does this); never mark a note `trusted` without eval validation. Never write secrets/PII to the vault (use `_private/`).
+Consult `chipAgent/MANIFEST.md` before re-deriving anything about this repo from the codebase; capture new learnings as `candidate` notes in `chipAgent/_inbox/`.
+The full rules (when consulting is mandatory, how to read `candidate` vs `trusted`, capture format, and the build-time-only guardrail) live in the always-on `.kiro/steering/knowledge-memory.md`.
+That file is the single source; do not restate its rules here.
 
 ## Two separate planes (do not conflate)
 

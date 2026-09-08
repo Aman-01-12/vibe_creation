@@ -1,0 +1,123 @@
+name: gVisor runner probe
+
+# THROWAWAY DIAGNOSTIC - delete this file and its branch once the answer is recorded.
+#
+# Question: can a GitHub-hosted ubuntu runner run gVisor (runsc)?
+# Why it matters: the adversarial sandbox containment tests (spec task 3.9,
+# app/tools/sandbox/sandbox-containment.integration.test.ts) currently SKIP because no
+# runsc runtime is registered with docker. If a hosted runner can run runsc, those five
+# tests can gate on every push for free. If it cannot, containment verification needs a
+# self-hosted Linux runner or a dedicated VM.
+#
+# gVisor's default Systrap platform intercepts syscalls via seccomp-bpf and needs no
+# hardware virtualization, so it is expected to work inside a VM. This probe checks that
+# expectation against the actual hosted runner instead of assuming it.
+#
+# Every gVisor step is continue-on-error: the probe REPORTS a capability, it never gates.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['probe/**']
+
+permissions:
+  contents: read
+
+jobs:
+  gvisor-probe:
+    name: Can a hosted ubuntu runner run runsc?
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Host diagnostics
+        run: |
+          echo "--- kernel / os ---"
+          uname -a
+          head -3 /etc/os-release
+          echo "--- resources ---"
+          nproc
+          free -m
+          echo "--- docker ---"
+          docker version --format 'server {{.Server.Version}}' || echo "docker unavailable"
+          echo "--- virtualization (systrap should NOT need /dev/kvm) ---"
+          ls -l /dev/kvm 2>/dev/null || echo "no /dev/kvm present"
+          echo "--- seccomp / userns (what systrap actually depends on) ---"
+          grep -i seccomp /proc/self/status || echo "no seccomp line"
+          sysctl kernel.unprivileged_userns_clone 2>/dev/null || echo "kernel.unprivileged_userns_clone not exposed"
+          cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo "max_user_namespaces unreadable"
+          echo "--- identity ---"
+          id
+
+      - name: Install runsc from the official gVisor release
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
+          wget -q \
+            "${URL}/runsc" "${URL}/runsc.sha512" \
+            "${URL}/containerd-shim-runsc-v1" "${URL}/containerd-shim-runsc-v1.sha512"
+          # Verify before installing: the binary is untrusted until its checksum matches.
+          sha512sum -c runsc.sha512 containerd-shim-runsc-v1.sha512
+          sudo install -m 0755 -t /usr/local/bin runsc containerd-shim-runsc-v1
+          runsc --version
+
+      - name: 'TEST 1: rootless runsc, no network (minimal Systrap check)'
+        id: t1
+        continue-on-error: true
+        run: runsc --rootless --network=none do echo "hello from gVisor"
+
+      - name: 'TEST 2: docker --runtime=runsc'
+        id: t2
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo runsc install
+          sudo systemctl restart docker
+          # Give the daemon a moment to come back before the first client call.
+          for i in $(seq 1 10); do docker info >/dev/null 2>&1 && break || sleep 2; done
+          docker run --rm --runtime=runsc alpine:3.20 uname -a
+
+      - name: 'TEST 3: the sandboxed kernel really is the gVisor Sentry'
+        id: t3
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # Under gVisor this prints "Starting gVisor..."; under runc it is denied or shows
+          # the host kernel ring buffer. This is the check that proves isolation is real
+          # rather than runsc silently falling back.
+          out="$(docker run --rm --runtime=runsc alpine:3.20 dmesg 2>&1 | head -5)"
+          echo "${out}"
+          echo "${out}" | grep -qi "gvisor"
+
+      - name: 'TEST 4: containment smoke (network denied inside the sandbox)'
+        id: t4
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # Mirrors one assertion of task 3.9: with no network, an outbound attempt must
+          # fail. Target is a documentation/blackhole address, never a real host.
+          if docker run --rm --runtime=runsc --network=none alpine:3.20 \
+               timeout 5 wget -q -O- http://192.0.2.1/ 2>&1; then
+            echo "UNEXPECTED: outbound succeeded"
+            exit 1
+          fi
+          echo "outbound correctly denied inside the sandbox"
+
+      - name: Verdict
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "  gVisor-on-hosted-runner probe verdict"
+          echo "=========================================="
+          echo "TEST 1 rootless runsc      : ${{ steps.t1.outcome }}"
+          echo "TEST 2 docker runtime=runsc: ${{ steps.t2.outcome }}"
+          echo "TEST 3 sentry is gVisor    : ${{ steps.t3.outcome }}"
+          echo "TEST 4 network denied      : ${{ steps.t4.outcome }}"
+          echo "------------------------------------------"
+          if [ "${{ steps.t2.outcome }}" = "success" ] && [ "${{ steps.t3.outcome }}" = "success" ]; then
+            echo "RESULT: hosted runners CAN run gVisor."
+            echo "Action: wire task 3.9 containment tests into hosted CI; no VM needed."
+          else
+            echo "RESULT: hosted runners CANNOT run gVisor (see step logs for cause)."
+            echo "Action: containment verification needs a self-hosted Linux runner or a dedicated VM."
+          fi

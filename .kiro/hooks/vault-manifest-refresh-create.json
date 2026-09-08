@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Refresh vault manifest on new note",
+      "trigger": "PostFileCreate",
+      "description": "Regenerates chipAgent/MANIFEST.md when a new vault note is created, so the catalog never goes stale. Matcher targets note directories only, so regenerating the root-level MANIFEST.md cannot retrigger this hook.",
+      "matcher": "chipAgent/(_inbox|gotchas|decisions|patterns|verification|domain|glossary)/.*\\.md$",
+      "action": {
+        "type": "command",
+        "command": "node scripts/vault-manifest.mjs",
+        "timeout": 20
+      }
+    }
+  ]
+}
