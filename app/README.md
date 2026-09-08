@@ -54,6 +54,28 @@ app/
   api/         # API_Gateway + Project_Store
     project-store/
   web/         # Editor, Display_Layer, Waveform_Viewer, Schematic_View, Live_Run
-  eval/        # Eval_Harness + VerilogEval/RTLLM subset fixtures
+  eval/        # Eval_Harness + the eval corpora
+    corpus/    # RTLLM import (pinned fetch) + the independent golden-testbench judge
+    gate/      # the ratcheting pass@k CI gate
   test/        # shared property generators + integration fixtures
 ```
+
+## Eval corpus (RTLLM)
+
+The benchmark corpus is **fetched at a pinned commit, not vendored**.
+Run `npm run corpus:fetch` to materialize it into the gitignored `.eval-corpus/rtllm/`; the step is idempotent and verifies the checkout landed on the pinned commit, failing loudly otherwise.
+The pinned commit is a named constant (`RTLLM_PINNED_COMMIT` in `app/eval/corpus/pinned-source.ts`) so a run manifest can cite it: a corpus that moves silently invalidates every historical pass@k number and the eval-gate baseline.
+
+Two verdicts are recorded per eval sample, and the distinction matters.
+The Verification_Loop's own oracle runs the **agent's** spec-derived testbench, which is what makes repair possible but makes its verdict self-graded.
+RTLLM's `testbench.v` is an **independent** judge we neither wrote nor modify, so it decides the reported pass@k, and the agreement rate between the two is the empirical measure of whether our generated testbenches actually catch bugs.
+Before any of that is trusted, Stage 0 (`app/test/rtllm-corpus-stage0.integration.test.ts`) drives each design's own reference RTL against its own golden testbench through real `iverilog`, because a golden testbench that the reference itself fails is an unusable measuring stick.
+
+### Attribution
+
+The corpus is [RTLLM](https://github.com/hkust-zhiyao/RTLLM), **MIT licensed**, copyright (c) 2024 Nora Lu.
+We redistribute none of it: it is downloaded at build time and only read.
+Per the upstream README, cite:
+
+- Lu, Yao; Liu, Shang; Zhang, Qijun; Xie, Zhiyao. "RTLLM: An Open-Source Benchmark for Design RTL Generation with Large Language Model." 2024 29th Asia and South Pacific Design Automation Conference (ASP-DAC), 2024, pp. 722-727, IEEE.
+- Liu, Shang; Lu, Yao; Fang, Wenji; Li, Mengming; Xie, Zhiyao. "OpenLLM-RTL: Open Dataset and Benchmark for LLM-Aided Design RTL Generation (Invited)." Proceedings of 2024 IEEE/ACM International Conference on Computer-Aided Design (ICCAD), 2024, ACM.

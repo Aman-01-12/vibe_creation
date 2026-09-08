@@ -1,9 +1,11 @@
 name: CI
 
 # Runs on every push and pull request. The lint, type-check, and test jobs are
-# blocking merge gates. The eval-gate job is present but DISARMED (see below):
-# it never blocks a merge until a non-zero pass@k baseline is established at or
-# after M1 and the gate is armed in task 19.5 (Requirement 15.7).
+# blocking merge gates. The eval-gate job runs the REAL ratcheting pass@k decision
+# (task 19.5) but is UNARMED: no verified non-zero baseline exists yet, so it never
+# blocks a merge and the lint/type/test jobs are the merge authority (Requirement
+# 15.7). It arms - and begins blocking on regressions - only once a real baseline is
+# recorded in app/eval/eval-baseline.json (see that file's armingProcedure).
 
 on:
   push:
@@ -40,6 +42,12 @@ jobs:
 
       - name: Prettier format check
         run: npm run format:check
+
+      # The knowledge vault's generated catalog (chipAgent/MANIFEST.md) is how agents
+      # find prior learnings in one read. If it drifts from the notes on disk, notes go
+      # invisible again and work gets re-derived, so staleness is a build failure.
+      - name: Knowledge vault manifest is current
+        run: npm run vault:check
 
       - name: Type-check (tsc -b, project references)
         run: npm run typecheck
@@ -84,19 +92,43 @@ jobs:
           exit "$code"
 
   eval-gate:
-    name: Eval pass@k gate (DISARMED)
+    name: Eval pass@k gate (ratcheting; unarmed until a real baseline exists)
     runs-on: ubuntu-latest
     steps:
-      # DISARMED PLACEHOLDER - do not make this block merges yet.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (emit dist so the gate CLI can resolve @app/* packages)
+        run: npm run build
+
+      # The REAL ratcheting decision now runs here (task 19.5): the gate CLI reads
+      # the version-controlled app/eval/eval-baseline.json, resolves it to an
+      # EvalGate, measures pass@k (through the real oracle when wired), and applies
+      # decideEvalGate. It exits non-zero ONLY when the gate is ARMED and the
+      # decision blocks (Req 15.4, 15.8).
       #
-      # Requirement 15.7: the eval pass@k gate is armed only after a non-zero
-      # baseline is established (at or after M1). Until then the TypeScript and
-      # Python gates above are the merge authority, so bootstrapping merges are
-      # not deadlocked. Task 19.5 replaces the body of this step with the real
-      # ratcheting decision (Eval_Harness pass@k vs. baseline minus tolerance,
-      # plus the absolute floor) and turns this into a blocking gate.
-      - name: Eval gate (disarmed)
-        run: |
-          echo "eval gate disarmed: no non-zero baseline yet (Requirement 15.7)."
-          echo "Armed in task 19.5 once a baseline exists; until then this step never blocks."
-          exit 0
+      # It is UNARMED today because no verified non-zero pass@k baseline exists yet,
+      # and the real EDA toolchain (iverilog/vvp) is absent in CI, so pass@k cannot
+      # be measured here. While unarmed the CLI always exits 0 and the TypeScript +
+      # Python jobs above are the merge authority, so bootstrapping merges are not
+      # deadlocked (Req 15.7). The step still runs the real decision path, ready to
+      # block the day the baseline is armed.
+      #
+      # TO ARM (Req 15.7, 15.4): on a host with iverilog + vvp installed and the
+      # Eval_Harness real loop-runner adapter (task 19.4) wired, run the harness over
+      # the fixed subset with the pinned reproducibility config, record the measured
+      # non-zero pass@k as the baseline in app/eval/eval-baseline.json (with a floor
+      # strictly below it, a noise-only tolerance, provenance, and armed=true), and
+      # commit. See the armingProcedure notes in that file. Never hand-set a baseline
+      # that the real oracle did not measure.
+      - name: Eval pass@k gate (real ratcheting decision; never blocks while unarmed)
+        run: node app/eval/dist/gate/cli.js

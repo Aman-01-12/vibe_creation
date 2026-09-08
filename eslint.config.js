@@ -103,6 +103,20 @@ export default [
   // boundary violation is always an error regardless of the recommended set.
   ...boundaryConfigs,
 
+  // Repo tooling scripts (plain ESM, no TypeScript project). The Node globals are
+  // declared explicitly rather than pulled from a `globals` package, so the set of
+  // ambient values a script may touch stays visible here.
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        URL: 'readonly',
+      },
+    },
+  },
+
   // Disable every ESLint rule that would conflict with Prettier formatting.
   // MUST remain last so it wins over anything above.
   prettier,

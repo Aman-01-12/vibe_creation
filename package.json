@@ -21,11 +21,17 @@
     "build": "tsc -b",
     "typecheck": "tsc -b",
     "clean": "tsc -b --clean",
-    "lint": "eslint app --max-warnings=0",
+    "lint": "eslint app scripts --max-warnings=0",
     "lint:boundaries": "eslint app --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval:gate": "node app/eval/dist/gate/cli.js",
+    "eval:sweep": "node app/eval/dist/sweep/cli.js",
+    "corpus:fetch": "node app/eval/dist/corpus/fetch-cli.js",
+    "vault:manifest": "node scripts/vault-manifest.mjs",
+    "vault:check": "node scripts/vault-manifest.mjs --check",
+    "vault:digest": "node scripts/vault-manifest.mjs --digest"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",

@@ -102,3 +102,22 @@ Non-negotiables for every change (ours and agent-generated code):
 Full docs: `product-ece/ECE-CODE-QUALITY-STANDARDS.md`, `product-ece/ECE-SECURITY-PERFORMANCE-RESILIENCE.md`, `product-ece/ECE-VERIFICATION-METHODOLOGY.md`, `product-ece/ECE-PRD-v1.md`. Read the relevant one before coding in its area.
 
 Note: this is build-time guidance. The shipped product enforces the same rules on its own generated code through its runtime system prompt + OKF knowledge + CI/SAST, not through this file.
+
+## Knowledge memory (all agents, including external CLIs)
+
+`chipAgent/` is the build-time knowledge vault: what past sessions already tried, learned, and ruled out.
+Read `chipAgent/MANIFEST.md` before non-trivial work - it is a generated flat catalog of every note, so it is one read, not a tree walk.
+Scan it for your area, open only the two or three notes that match, and never load the whole vault.
+Consulting it is mandatory before debugging a lint/`tsc`/test failure, writing a fake or property test, or touching the verification loop, oracle, sandbox, model router, eval gate, or trust/display layer.
+
+Do not navigate by the `index.md` section maps alone; they lag, and most notes still sit in `_inbox/` unlinked.
+
+`status: trusted` means eval-gated and safe to treat as a correctness claim.
+`status: candidate` is not eval-gated but is still authoritative as a record of what happened - what was attempted, what the oracle said, what failed and why.
+Use candidates to avoid repeating a dead end; never use them to declare something correct.
+
+Capture new learnings as ONE short `status: candidate` note in `chipAgent/_inbox/` using a `chipAgent/templates/` file and the frontmatter in `chipAgent/_SCHEMA.md`, then run `npm run vault:manifest`.
+Never self-promote a note to `trusted` (that needs the eval harness). Secrets/PII go only in `chipAgent/_private/` (gitignored).
+The vault is BUILD-time only: it is never shipped, and the product's runtime `retrieve` reads only `app/knowledge/okf-bundle/`.
+
+Kiro's equivalent always-on rule is `.kiro/steering/knowledge-memory.md`; design rationale is `product-ece/ECE-OBSIDIAN-KNOWLEDGE-MEMORY.md`.
