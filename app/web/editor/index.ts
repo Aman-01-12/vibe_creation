@@ -34,3 +34,22 @@ export {
   type EditorView,
   type RunSampleOptions,
 } from './editor.js';
+export {
+  cancellationSignalReason,
+  decideCancellationUi,
+  defaultTimeoutScheduler,
+  readCancellationReason,
+  RunCancellation,
+  TIMEOUT_TOAST_MESSAGE,
+  type CancellationReason,
+  type CancellationUiDecision,
+  type RunCancellationOptions,
+  type TimeoutScheduler,
+  type TimerHandle,
+} from './cancellation.js';
+export {
+  startEditorRun,
+  type EditorRunHandle,
+  type EditorRunOutcome,
+  type ToastSink,
+} from './run-controller.js';

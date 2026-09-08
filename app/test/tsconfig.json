@@ -12,6 +12,8 @@
     { "path": "../knowledge" },
     { "path": "../tools" },
     { "path": "../agent" },
-    { "path": "../api" }
+    { "path": "../api" },
+    { "path": "../web" },
+    { "path": "../eval" }
   ]
 }

@@ -12,3 +12,4 @@ export * from './injection-filter.js';
 export * from './validation.js';
 export * from './authorize-object.js';
 export * from './pipeline.js';
+export * from './cancellation.js';

@@ -9,6 +9,7 @@
 import { CORE_LAYER } from '@app/core';
 
 export * from './generators/index.js';
+export * from './model-router-fixtures.js';
 export * from './property.js';
 
 /** Layer identifier, proving the shared test package resolves inner layers. */
