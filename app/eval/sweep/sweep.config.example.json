@@ -1,0 +1,171 @@
+{
+  "_README": [
+    "Example eval sweep (model bake-off) campaign. Copy, edit, and run:",
+    "  npm run eval:sweep -- --config app/eval/sweep/sweep.config.example.json",
+    "",
+    "THE CREDENTIAL DOES NOT BELONG IN THIS FILE, EVER.",
+    "AWS_BEARER_TOKEN_BEDROCK comes from the environment (see .env.example) and is read",
+    "only by app/agent/model-router/env-secret-manager.ts. There is no config field that",
+    "can hold it, and a config file gets committed, pasted, and attached to reports.",
+    "",
+    "COST: this runs real paid model calls. arms x problems x sampleCount sessions. With",
+    "the settings below that is 2 arms x 46 problems x 5 samples = 460 sessions. Start with",
+    "a problems.ids selection of two or three designs and sampleCount 1 to smoke it, then",
+    "scale up. Cost is recorded, not limited, on purpose (see kill-switch.ts).",
+    "",
+    "POSITIVE CONTROL: after each sample, the testbench our agent wrote is run against",
+    "RTLLM's own reference design. If the known-good design FAILS our testbench, that",
+    "testbench is not a measuring stick, so the sample is excluded from the pass@k",
+    "denominator and reported as instrument-invalid instead of as a model failure. It is a",
+    "deterministic toolchain run: no model call, no tokens, no session budget, no extra",
+    "sample or iteration, so it cannot move a measured number. It DOES cost wall clock -",
+    "one extra compile plus one simulation per sample, on the order of a second each on a",
+    "provisioned host, against tens of seconds of model time - so budget for it in",
+    "killSwitch.maxWallClockMs. It cannot be turned off: a pass@k whose instrument was",
+    "never validated is exactly the number this campaign exists to stop producing.",
+    "",
+    "RESUME: re-running with the SAME config skips samples already in results.jsonl. Change",
+    "any field that can move a measured number and the config hash changes, so nothing is",
+    "reused - which is correct, because it is then a different experiment. The one exception",
+    "is captureArtifacts (see below): it writes diagnostic files and measures nothing, so it",
+    "is excluded from the hash and toggling it never invalidates a recorded sample."
+  ],
+
+  "schemaVersion": 1,
+  "runName": "bakeoff-v1",
+
+  "_arms": [
+    "Each arm is one point in the bake-off. Use \"model\" for one id across every role, or",
+    "\"roleModels\" to permute per role (generation, repair, orchestration, teaching,",
+    "hard-planning). Model ids are NOT validated against a catalog - the upstream catalog",
+    "moves - so a typo shows up as that arm failing, which is visible in the summary.",
+    "Reachable ids on this host are listed in app/eval/sweep/model-catalog.ts."
+  ],
+  "arms": [
+    { "name": "kimi-k2_5", "model": "moonshotai.kimi-k2.5" },
+    { "name": "glm-5", "model": "zai.glm-5" },
+    {
+      "name": "glm5-gen-qwen30b-repair",
+      "roleModels": {
+        "generation": "zai.glm-5",
+        "repair": "qwen.qwen3-coder-30b-a3b-instruct",
+        "orchestration": "zai.glm-5",
+        "teaching": "zai.glm-5",
+        "hard-planning": "zai.glm-5"
+      }
+    }
+  ],
+
+  "_problems": [
+    "{ \"kind\": \"all\" } runs the 46 scored RTLLM designs (50 imported, 48 build, 46 pass",
+    "their own golden testbench under Icarus). Or select a shard:",
+    "  { \"kind\": \"ids\", \"ids\": [\"rtllm/arithmetic/adder_8bit\"] }",
+    "  { \"kind\": \"categories\", \"categories\": [\"Arithmetic\", \"Control\"] }"
+  ],
+  "problems": { "kind": "all" },
+
+  "_sampling": [
+    "sampleCount is the n in pass@k; ks are the k values reported. seed makes the run as",
+    "repeatable as a hosted provider allows - it is a hint to the endpoint, not a guarantee,",
+    "which is exactly why k samples are drawn instead of one."
+  ],
+  "sampleCount": 5,
+  "ks": [1, 5],
+  "seed": 20240601,
+  "temperature": 0,
+
+  "_caps": [
+    "The SAME student-session caps a real student gets. Every sample runs under these; the",
+    "sweep never widens them. maxIterations bounds the repair loop, so a never-passing",
+    "sample terminates instead of burning the night."
+  ],
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+
+  "_limits": [
+    "Sandbox resource limits for every iverilog/vvp run, including the golden judge and the",
+    "positive control."
+  ],
+  "limits": { "cpu": 1, "memMb": 512, "procs": 128, "diskMb": 128, "wallMs": 30000 },
+
+  "_costEnvelopeCents": [
+    "The pennies-per-session envelope the harness asserts for every sample. A breach is",
+    "reported, not silently accepted."
+  ],
+  "costEnvelopeCents": 25,
+
+  "modelHost": {
+    "region": "us-east-1",
+    "maxOutputTokens": 6000,
+    "requestTimeoutMs": 240000
+  },
+
+  "_prices": [
+    "OPTIONAL, and it buys exactly one thing: the DOLLAR restatement of what was already",
+    "measured. The primary efficiency figures - tokens per verified artifact and wall clock",
+    "per verified artifact - are reported for every campaign whether this table is empty or",
+    "not, because the endpoint returns usage.prompt_tokens / usage.completion_tokens and the",
+    "runner observes the clock. No endpoint returns money, so cents only exist once you",
+    "supply a rate card here.",
+    "A model with no entry has an UNKNOWN price - not a free one - so its arm reports the",
+    "dollar cost UNKNOWN and no dollar cost per verified artifact, rather than a misleading 0.",
+    "Left EMPTY on purpose: a vendor rate card goes stale and a stale number cited as measured",
+    "spend is worse than no number. Rates are cents per MILLION tokens; fill them from the",
+    "provider's current price list, and only if you intend to cite dollars."
+  ],
+  "prices": {},
+
+  "_outputDir": [
+    "Relative to the repository root. Holds manifest.json, results.jsonl (append-only),",
+    "summary.txt, and (when captureArtifacts is on) artifacts/. Gitignored: results are run",
+    "artifacts, not source."
+  ],
+  "outputDir": ".eval-runs/bakeoff-v1",
+
+  "_captureArtifacts": [
+    "Writes each sample's evidence to artifacts/<arm>/<problem>/sample-<n>/: the candidate",
+    "RTL, OUR generated testbench, the per-check verdicts, the simulator output, the failing",
+    "case, and the golden judge's verdict. ON by default, because the record alone cannot say",
+    "WHY our testbench and the independent judge disagreed - and without that, prompt and",
+    "model tuning is guesswork. Every field is capped, so a runaway model costs a truncated",
+    "file (marked as such) and never the run. Excluded from the config hash: it measures",
+    "nothing, so toggling it must not invalidate samples already paid for."
+  ],
+  "captureArtifacts": true,
+
+  "_concurrency": [
+    "Samples in flight at once, across all arms. Conservative by default because the host",
+    "rate-limits before it refuses. Raise it if 429s stay rare; the backoff and the breaker",
+    "handle the rest."
+  ],
+  "concurrency": 2,
+
+  "_transportRetry": [
+    "TRANSPORT-level retry only: the same HTTP bytes resent when the wire or the provider",
+    "failed to answer (429 / 5xx / socket error). It is NEVER a second sampling attempt -",
+    "that would inflate pass@k. See app/eval/sweep/transport-retry.ts. The breaker turns a",
+    "sustained outage into a clean stop instead of a matrix full of failures."
+  ],
+  "transportRetry": {
+    "maxAttempts": 4,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "jitterRatio": 0.5,
+    "breakerFailureThreshold": 8,
+    "breakerCooldownMs": 60000,
+    "breakerMaxTrips": 3
+  },
+
+  "_killSwitch": [
+    "Stops DISPATCH at a sample boundary, so in-flight samples finish and everything already",
+    "completed stays on disk and resumable. Cost is deliberately not a limiter."
+  ],
+  "killSwitch": {
+    "maxWallClockMs": 28800000,
+    "maxSamples": 10000
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "armed": false,
+  "k": 1,
+  "baseline": null,
+  "tolerance": 0.05,
+  "floor": null,
+  "notes": "UNARMED. No verified non-zero pass@k baseline has been measured yet. Per Requirement 15.7 the eval pass@k gate is armed ONLY after a non-zero baseline is established (at or after M1) by the REAL Simulator oracle (iverilog + vvp). The prime directive forbids fabricating a baseline: a gate may be armed against a non-zero baseline only if that baseline was measured by the deterministic oracle, never guessed. While unarmed, the TypeScript and Python lint/type/unit/property jobs are the merge authority (Req 15.7) and this gate never blocks. The gate entry still runs the REAL ratcheting decision path (app/eval gate CLI -> decideEvalGate) so it is ready to block the moment a real baseline is recorded here.",
+  "armingProcedure": [
+    "1. Provision a host with the real EDA toolchain installed (iverilog + vvp) and a Python interpreter that can import tool_runner_worker.",
+    "2. Wire the real Eval_Harness loop-runner adapter (task 19.4) so the harness drives the fixed VerilogEval/RTLLM subset through the Verification_Loop and the real oracle under student-session caps.",
+    "3. Run the harness over the fixed subset with the pinned reproducibility config (fixed seed, temperature, sampleCount) and read aggregatePassAtK[k] for the k below (Req 15.10).",
+    "4. Record that measured non-zero pass@k as \"baseline\" (0, 1], set \"floor\" strictly below it as the absolute catastrophic-failure floor (Req 15.8), keep \"tolerance\" sized to absorb only residual measurement noise (Req 15.11), set \"armed\": true, and fill \"provenance\" with the tool versions, host, commit, seed, and sampleCount that produced the number.",
+    "5. Commit this file. The gate is now armed and will block a merge when the measured pass@k drops strictly below baseline - tolerance, or is at/below the floor (Req 15.4, 15.8). The baseline only ratchets up thereafter, except by an explicit reviewed lowering (Req 15.9)."
+  ],
+  "provenance": {
+    "measuredBy": null,
+    "measuredAt": null,
+    "host": null,
+    "commit": null,
+    "seed": null,
+    "sampleCount": null
+  }
+}

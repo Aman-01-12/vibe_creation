@@ -1,0 +1,66 @@
+{
+  "_README": [
+    "SMOKE config: proves the whole chain works end to end for a few real sessions before",
+    "you commit to a full campaign. One arm, three designs, one sample each = 3 sessions.",
+    "",
+    "  node --env-file=.env app/eval/dist/sweep/cli.js --config app/eval/sweep/sweep.config.smoke.json",
+    "",
+    "The credential NEVER goes in this file. It comes from the environment (.env).",
+    "Once this passes, scale up with sweep.config.example.json.",
+    "",
+    "ARTIFACTS: on by default, written to .eval-runs/smoke-v1/artifacts/. Note that samples",
+    "already in results.jsonl are SKIPPED on a re-run (that is what stops a resume re-paying),",
+    "so a sample recorded before artifacts existed will not grow them retroactively. To",
+    "capture evidence for those, run into a fresh outputDir/runName."
+  ],
+
+  "schemaVersion": 1,
+  "runName": "smoke-v1",
+
+  "arms": [{ "name": "kimi-k2_5", "model": "moonshotai.kimi-k2.5" }],
+
+  "_problems": [
+    "Three designs picked to span easy-to-hard: a combinational shifter, an FSM, and a",
+    "pipelined multiplier. All three are in the 46 scored designs (they pass their own",
+    "golden testbench under Icarus)."
+  ],
+  "problems": {
+    "kind": "ids",
+    "ids": ["rtllm/memory/right_shifter", "rtllm/control/fsm", "rtllm/arithmetic/multi_pipe_8bit"]
+  },
+
+  "sampleCount": 1,
+  "ks": [1],
+  "seed": 20240601,
+  "temperature": 0,
+
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+
+  "limits": { "cpu": 1, "memMb": 512, "procs": 128, "diskMb": 128, "wallMs": 30000 },
+
+  "costEnvelopeCents": 25,
+
+  "modelHost": { "region": "us-east-1", "maxOutputTokens": 6000, "requestTimeoutMs": 240000 },
+
+  "prices": {},
+
+  "outputDir": ".eval-runs/smoke-v1",
+  "concurrency": 1,
+
+  "transportRetry": {
+    "maxAttempts": 4,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "jitterRatio": 0.5,
+    "breakerFailureThreshold": 8,
+    "breakerCooldownMs": 60000,
+    "breakerMaxTrips": 3
+  },
+
+  "killSwitch": { "maxWallClockMs": 1800000, "maxSamples": 10 }
+}
