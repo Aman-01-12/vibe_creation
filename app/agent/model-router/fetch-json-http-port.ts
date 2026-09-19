@@ -27,6 +27,17 @@
 //   rejection to its redacted `unreachable` outcome, which every transport already
 //   classifies as a non-pass, so an over-cap reply can never become a verified result.
 //
+// EXACTLY ONE REPLY HEADER TRAVELS UPWARD
+//   A throttling host's `Retry-After` is the one reply header the layers above can act
+//   on, so it is read here - through an accessor that can only ask for a value BY NAME,
+//   never enumerate one - and parsed into a bounded number of milliseconds before it
+//   leaves this module. Handing a header MAP upward instead is the defect this shape
+//   prevents: it would carry credential-adjacent and fingerprintable material past a
+//   boundary built to let nothing about the call escape, and it would leave untrusted
+//   text for every caller above to re-parse in its own way. The parsed value is also
+//   clamped, because it is a remote host's instruction about how long we sit idle: an
+//   untrusted `Retry-After: 86400` must not be able to park an overnight campaign.
+//
 // NOTHING ABOUT THE CALL ESCAPES IN A FAILURE
 //   `request.headers` carries the `Authorization` credential. It is forwarded to
 //   `fetch` and referenced nowhere else: never copied, logged, stored, or echoed. The
@@ -45,6 +56,7 @@ import {
   type JsonHttpResponse,
   type ScheduleTimeout,
 } from './json-http-port.js';
+import { parseRetryAfterMs } from './retry-after.js';
 
 /** The only HTTP method this port speaks; the seam is POST-JSON by contract. */
 const HTTP_METHOD_POST = 'POST';
@@ -68,8 +80,19 @@ const REDIRECT_MODE = 'error';
 /** The DOM event a real `AbortSignal` fires when it is aborted. */
 const ABORT_EVENT = 'abort';
 
+/**
+ * The one reply header this port reads, in its RFC 7231 spelling.
+ *
+ * A real `Headers.get` matches case-insensitively, so the spelling is for the reader
+ * rather than for the lookup.
+ */
+const RETRY_AFTER_HEADER = 'Retry-After';
+
 /** One mebibyte, named so the cap below is not a bare literal. */
 const BYTES_PER_MIB = 1_048_576;
+
+/** One minute in milliseconds, named so the ceiling below is not a bare literal. */
+const MS_PER_MINUTE = 60_000;
 
 /**
  * Default cap on the bytes read into `JsonHttpResponse.body`.
@@ -81,6 +104,27 @@ const BYTES_PER_MIB = 1_048_576;
  * explicitly through `FetchJsonHttpPortDeps.maxReplyBytes`.
  */
 export const DEFAULT_MAX_REPLY_BYTES = BYTES_PER_MIB;
+
+/**
+ * The longest `Retry-After` wait this port will ever report, in milliseconds.
+ *
+ * Obeying the header without a ceiling is a denial of service we would deliver to
+ * ourselves: a misconfigured or hostile host answering `Retry-After: 86400` parks an
+ * overnight campaign for a day, and nothing about that wait looks like a failure to
+ * anyone watching it.
+ *
+ * A build constant rather than a config field or a value threaded down from the retry
+ * policy, for two reasons. The policy that owns the backoff ceiling lives ABOVE this
+ * layer, so reading it from here would invert the dependency direction this port
+ * exists to hold. And the caller applies this delay as a FLOOR beneath its own clamped
+ * backoff, so a ceiling taken from that same policy could never raise the delay past
+ * it and the floor would be dead code.
+ *
+ * One minute is the anchor: longer than any legitimate per-attempt throttle
+ * instruction, and the same order as the cooldown we already accept for an unhealthy
+ * endpoint. Past that, ending the run is the circuit breaker's job, not a header's.
+ */
+export const MAX_HONOURED_RETRY_AFTER_MS = MS_PER_MINUTE;
 
 /** Why one exchange could not produce a reply. Stable, and safe to surface. */
 export type JsonHttpPortFailureCode =
@@ -124,10 +168,24 @@ export interface HostByteStream {
   getReader(): HostByteReader;
 }
 
+/**
+ * A by-name reader over the reply headers, and deliberately NOT a header map.
+ *
+ * Narrowed to `get` alone so this module is structurally unable to enumerate, copy, or
+ * forward the headers even though the real object it is handed - a standard `Headers` -
+ * can do all three. The containment is therefore enforced by the type rather than by a
+ * reviewer noticing that nobody iterated it.
+ */
+export interface HostHeaderReader {
+  get(name: string): string | null;
+}
+
 /** The subset of a `fetch` response this port reads. */
 export interface HostFetchResponse {
   readonly status: number;
   readonly body: HostByteStream | null;
+  /** Optional: an implementation with no header access simply reports no instruction. */
+  readonly headers?: HostHeaderReader;
 }
 
 /**
@@ -165,6 +223,12 @@ export interface FetchJsonHttpPortDeps {
   readonly fetch?: HostFetch;
   /** Deadline timer; defaults to the host timer. */
   readonly scheduleTimeout?: ScheduleTimeout;
+  /**
+   * The clock the `Retry-After` HTTP-date form is measured against; defaults to the
+   * host clock. Injected because that form's result is a function of wall-clock time,
+   * and a test cannot pin the parsed delay against a clock it does not control.
+   */
+  readonly now?: () => number;
 }
 
 /** Dependencies after validation and defaulting. */
@@ -173,6 +237,7 @@ interface ResolvedDeps {
   /** Null means "take the host `fetch` at call time", so a late polyfill still works. */
   readonly fetch: HostFetch | null;
   readonly scheduleTimeout: ScheduleTimeout;
+  readonly now: () => number;
 }
 
 /** A function that does nothing, for the paths where nothing was ever registered. */
@@ -211,12 +276,18 @@ function resolveMaxReplyBytes(configured: number | undefined): number {
   return configured;
 }
 
+/** The default clock; `Date` needs no host typings, unlike `fetch` and `TextDecoder`. */
+function hostNowMs(): number {
+  return Date.now();
+}
+
 /** Default every optional collaborator exactly once, so no call site re-decides. */
 function resolveDeps(deps: FetchJsonHttpPortDeps): ResolvedDeps {
   return {
     maxReplyBytes: resolveMaxReplyBytes(deps.maxReplyBytes),
     fetch: deps.fetch ?? null,
     scheduleTimeout: deps.scheduleTimeout ?? hostScheduleTimeout,
+    now: deps.now ?? hostNowMs,
   };
 }
 
@@ -324,6 +395,23 @@ async function readBoundedText(
 }
 
 /**
+ * The host's `Retry-After` instruction as a bounded delay, or null when it gave none.
+ *
+ * One header, asked for by name, parsed at once. A failing lookup reports no
+ * instruction rather than propagating, and that is the defect it prevents: `headers` is
+ * host-supplied code, and letting an ADVISORY hint throw would convert a reply we
+ * successfully read - a paid model call - into a transport failure and a pointless
+ * retry. The parser itself is total, so the guard covers only the host's own accessor.
+ */
+function retryAfterMsFrom(headers: HostHeaderReader | undefined, nowMs: number): number | null {
+  try {
+    return parseRetryAfterMs(headers?.get(RETRY_AFTER_HEADER), nowMs, MAX_HONOURED_RETRY_AFTER_MS);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The redacted failure for a call that did not produce a bounded reply.
  *
  * Our own classification is preserved; anything else is replaced, because a client or
@@ -360,7 +448,11 @@ async function exchange(deps: ResolvedDeps, request: JsonHttpRequest): Promise<J
   try {
     const response = await send(request.url, buildInit(request, controller?.signal));
     const body = await readBoundedText(response.body, deps.maxReplyBytes, decoder);
-    return { status: response.status, body };
+    const retryAfterMs = retryAfterMsFrom(response.headers, deps.now());
+    // Omitted rather than reported as null when there is no instruction, so the reply
+    // this port builds stays identical to the one a header-less port builds - absence
+    // and null already mean the same thing to every caller.
+    return { status: response.status, body, ...(retryAfterMs === null ? {} : { retryAfterMs }) };
   } catch (cause) {
     throw portFailure(cause, deadlineExceeded);
   } finally {

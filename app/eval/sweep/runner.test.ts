@@ -12,6 +12,7 @@
 //   6. Each sample is driven with the seed the harness derives for its OWN index, which is
 //      what makes one-sample scheduling equivalent to running the whole problem.
 
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import type { SetupFailureCause, VerificationOutcome, VerificationSetupFailed } from '@app/agent';
@@ -44,6 +45,7 @@ import {
   type SweepSampleRecord,
 } from './results-log.js';
 import { SweepRunner } from './runner.js';
+import { THROTTLE_GOVERNOR_LIMITS, ThrottleGovernor } from './throttle-governor.js';
 
 /** Build a fixture `Port` through the validating constructor, failing loudly on a bad width. */
 function port(name: string, direction: PortDirection, width: number): Port {
@@ -187,9 +189,17 @@ function setupFailedOutcome(
   return { status: 'setup-failed', reason: 'generation-unavailable', detail, cause };
 }
 
-/** Records every request it saw, and answers per a supplied policy. */
+/**
+ * Records every request it saw, and answers per a supplied policy.
+ *
+ * `inFlightHistory` is the full sequence of in-flight counts observed at every entry and
+ * exit, not just the running max: Property 12 needs to check the admission bound at every
+ * instant a worker started or finished holding a unit, and the max alone cannot tell a
+ * momentary breach from a sustained one.
+ */
 class SpyLoopRunner implements EvalLoopRunner {
   readonly seen: EvalSampleRequest[] = [];
+  readonly inFlightHistory: number[] = [];
   #inFlight = 0;
   maxInFlight = 0;
 
@@ -201,10 +211,12 @@ class SpyLoopRunner implements EvalLoopRunner {
     this.seen.push(request);
     this.#inFlight += 1;
     this.maxInFlight = Math.max(this.maxInFlight, this.#inFlight);
+    this.inFlightHistory.push(this.#inFlight);
     try {
       return await this.answer(request);
     } finally {
       this.#inFlight -= 1;
+      this.inFlightHistory.push(this.#inFlight);
     }
   }
 }
@@ -247,6 +259,8 @@ function buildRunner(parts: {
   readonly clock?: () => number;
   readonly artifactSinkFor?: (arm: { readonly name: string }) => EvalArtifactSink;
   readonly instrumentControl?: InstrumentControl;
+  readonly governor?: ThrottleGovernor;
+  readonly waitMs?: (ms: number) => Promise<void>;
 }): { readonly runner: SweepRunner; readonly progress: string[] } {
   const progress: string[] = [];
   const clock = parts.clock ?? (() => 0);
@@ -265,6 +279,14 @@ function buildRunner(parts: {
       clock,
     ),
     outage: parts.outage ?? ((): boolean => false),
+    // Quiet by construction: a governor built from the configured concurrency with no
+    // recorded throttle observation always recommends exactly that ceiling (see
+    // `ThrottleGovernor.recommendedConcurrency`), so the existing bounded-concurrency
+    // tests see no admission gating unless a test opts into a governor of its own.
+    governor: parts.governor ?? new ThrottleGovernor(parts.config.concurrency, clock),
+    // No real timer in tests: a withheld worker's wait resolves immediately unless a test
+    // needs to observe it, matching how `sleep` is faked in transport-retry.test.ts.
+    waitMs: parts.waitMs ?? ((): Promise<void> => Promise.resolve()),
     now: clock,
     onProgress: (line) => progress.push(line),
   });
@@ -842,6 +864,203 @@ describe('SweepRunner - bounded concurrency', () => {
     });
     await runner.run();
     expect(loopRunner.maxInFlight).toBe(1);
+  });
+});
+
+describe('SweepRunner - throttled admission', () => {
+  // Feature: eval-campaign-readiness, Property 12: Admission never exceeds either bound
+  // and never starves.
+  //
+  // Validates: Requirements 7.4, 7.5, 7.6, 7.7, 7.8, 7.9
+  //
+  // The governor here is a REAL `ThrottleGovernor` over a fake clock, not a structural
+  // fake: the class keeps its observation list in a private field, so nothing outside it
+  // can report a recommendation the class itself did not derive. Each sample's answer
+  // records zero or more throttle observations and advances the clock before resolving,
+  // which is what lets one run's recommendation legitimately fall and later recover
+  // without a real timer - the same technique `throttle-governor.test.ts` uses, applied
+  // here to drive the runner rather than the governor directly.
+
+  /** A mutable clock closure; nothing here waits on a real timer. */
+  function fakeClock(startMs = 0): { readonly now: () => number; advance: (ms: number) => void } {
+    let clock = startMs;
+    return {
+      now: () => clock,
+      advance: (ms: number) => {
+        clock += ms;
+      },
+    };
+  }
+
+  it('never holds more than the lesser of the configured and recommended concurrency, except the never-starve floor, and drops no unit', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.integer({ min: 1, max: 5 }),
+        fc.integer({ min: 1, max: 10 }),
+        // Per-sample throttle observations, one entry per unit of work; padded/truncated
+        // to the actual unit count once it is known below.
+        fc.array(fc.integer({ min: 0, max: 6 }), { minLength: 1, maxLength: 10 }),
+        async (configuredConcurrency, problemCount, throttlesPerSample) => {
+          const clock = fakeClock();
+          const governor = new ThrottleGovernor(configuredConcurrency, clock.now);
+          const problems = Array.from({ length: problemCount }, (_, index) => problem(`p${index}`));
+          const checkpoints: { readonly holding: number; readonly recommended: number }[] = [];
+          let holding = 0;
+          let unitIndex = 0;
+          const loopRunner = new SpyLoopRunner(() => {
+            holding += 1;
+            checkpoints.push({ holding, recommended: governor.recommendedConcurrency() });
+            const throttles = throttlesPerSample[unitIndex % throttlesPerSample.length] ?? 0;
+            unitIndex += 1;
+            for (let i = 0; i < throttles; i += 1) {
+              governor.recordThrottle();
+            }
+            clock.advance(1);
+            const outcome = verifiedOutcome(1, 'module m endmodule');
+            holding -= 1;
+            checkpoints.push({ holding, recommended: governor.recommendedConcurrency() });
+            return Promise.resolve(outcome);
+          });
+          const log = new MemoryResultsLog();
+          const { runner } = buildRunner({
+            config: config({ concurrency: configuredConcurrency, sampleCount: 1, ks: [1] }),
+            problems,
+            loopRunner,
+            log,
+            governor,
+            clock: clock.now,
+          });
+
+          const result = await runner.run();
+
+          // Property 12, admission bound: at every checkpoint, holding never exceeds the
+          // lesser of the two ceilings, EXCEPT the floor case - `holding === 1` is always
+          // allowed, because Requirement 7.5 forbids zero admitted workers while work
+          // remains, so the floor concedes exactly one worker past a recommendation that
+          // would otherwise withhold every worker and deadlock the run.
+          for (const checkpoint of checkpoints) {
+            const ceiling = Math.max(1, Math.min(configuredConcurrency, checkpoint.recommended));
+            expect(checkpoint.holding).toBeLessThanOrEqual(ceiling);
+          }
+
+          // Property 12, never-starves: every planned unit was dispatched and recorded -
+          // the pool never sat with nothing admitted while units remained.
+          expect(result.plannedSamples).toBe(problemCount);
+          expect(result.dispatchedSamples).toBe(problemCount);
+          expect(result.recordedSamples).toBe(problemCount);
+          expect(result.stopReason).toBe('completed');
+        },
+      ),
+      { numRuns: 50 },
+    );
+  });
+
+  // Feature: eval-campaign-readiness, Property 13: A reduced recommendation loses no
+  // unit of work.
+  //
+  // Validates: Requirements 7.7, 7.8
+
+  it('dispatches and records every unit exactly once regardless of how the recommendation moves', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.integer({ min: 1, max: 4 }),
+        fc.integer({ min: 2, max: 8 }),
+        fc.array(fc.boolean(), { minLength: 1, maxLength: 12 }),
+        async (configuredConcurrency, problemCount, throttleAtSample) => {
+          const clock = fakeClock();
+          const governor = new ThrottleGovernor(configuredConcurrency, clock.now);
+          const problems = Array.from({ length: problemCount }, (_, index) => problem(`p${index}`));
+          const seenProblemIds: string[] = [];
+          let sampleIndex = 0;
+          const loopRunner = new SpyLoopRunner((request) => {
+            seenProblemIds.push(request.problem.id);
+            const shouldThrottle = throttleAtSample[sampleIndex % throttleAtSample.length] ?? false;
+            sampleIndex += 1;
+            if (shouldThrottle) {
+              governor.recordThrottle();
+            }
+            return Promise.resolve(verifiedOutcome(1, `module ${request.problem.id} endmodule`));
+          });
+          const log = new MemoryResultsLog();
+          const { runner } = buildRunner({
+            config: config({ concurrency: configuredConcurrency, sampleCount: 1, ks: [1] }),
+            problems,
+            loopRunner,
+            log,
+            governor,
+            clock: clock.now,
+          });
+
+          const result = await runner.run();
+
+          // No unit silently skipped: the set of problems the loop runner actually saw is
+          // exactly the planned set, with no duplicate and no omission, and every one of
+          // them made it to disk.
+          expect(seenProblemIds.slice().sort()).toEqual(
+            problems
+              .map((p) => p.id)
+              .slice()
+              .sort(),
+          );
+          expect(result.dispatchedSamples).toBe(problemCount);
+          expect(result.recordedSamples).toBe(problemCount);
+          expect(log.records()).toHaveLength(problemCount);
+          // A reduced recommendation is never itself a failure (Requirement 7.8): nothing
+          // here throttled the SAMPLE, only the governor's bookkeeping, so every record is
+          // a pass.
+          expect(log.records().every((record) => record.passed)).toBe(true);
+        },
+      ),
+      { numRuns: 50 },
+    );
+  });
+
+  it('completes every unit one at a time when the recommendation is pinned at 1 throughout, and the progress line names the reduced recommendation', async () => {
+    // Deterministic by design, not a property: forcing every random run to land on the
+    // tightest possible pin - recommendation stuck at 1 under a configured concurrency
+    // greater than 1 - for the whole run is exactly the edge case a generator would only
+    // reach by chance. This proves it directly instead.
+    const clock = fakeClock();
+    const configuredConcurrency = 3;
+    const governor = new ThrottleGovernor(configuredConcurrency, clock.now);
+    // Saturate the window once, up front, and never let it age out: every sample's
+    // answer re-records enough throttles to keep the recommendation floored at 1 for the
+    // whole run, which is what "pinned" means here.
+    const saturating =
+      THROTTLE_GOVERNOR_LIMITS.observationsPerStep * THROTTLE_GOVERNOR_LIMITS.maxMultiplier;
+    for (let i = 0; i < saturating; i += 1) {
+      governor.recordThrottle();
+    }
+    expect(governor.recommendedConcurrency()).toBe(1);
+
+    const problems = [problem('p1'), problem('p2'), problem('p3'), problem('p4')];
+    const loopRunner = new SpyLoopRunner(() => {
+      // Re-record on every sample so the pin survives however far the clock moves.
+      for (let i = 0; i < saturating; i += 1) {
+        governor.recordThrottle();
+      }
+      return Promise.resolve(verifiedOutcome(1, 'module m endmodule'));
+    });
+    const log = new MemoryResultsLog();
+    const { runner, progress } = buildRunner({
+      config: config({ concurrency: configuredConcurrency, sampleCount: 1, ks: [1] }),
+      problems,
+      loopRunner,
+      log,
+      governor,
+      clock: clock.now,
+    });
+
+    const result = await runner.run();
+
+    expect(result.stopReason).toBe('completed');
+    expect(result.dispatchedSamples).toBe(4);
+    expect(result.recordedSamples).toBe(4);
+    expect(loopRunner.maxInFlight).toBe(1);
+    expect(log.records()).toHaveLength(4);
+    expect(log.records().every((record) => record.passed)).toBe(true);
+    // The operator sees the reduced recommendation as it happens, not only in the summary.
+    expect(progress.some((line) => line.includes('recommended concurrency 1'))).toBe(true);
   });
 });
 

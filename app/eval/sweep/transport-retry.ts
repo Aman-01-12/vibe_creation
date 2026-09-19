@@ -53,6 +53,8 @@
 
 import type { JsonHttpPort, JsonHttpRequest, JsonHttpResponse } from '@app/agent';
 
+import type { ThrottleGovernor } from './throttle-governor.js';
+
 /** Lowest HTTP status treated as a successful reply by the retry decision. */
 const HTTP_OK = 200;
 
@@ -263,6 +265,13 @@ export interface TransportRetryDeps {
   readonly policy: TransportRetryPolicy;
   /** The breaker shared by every call in the run, so an outage is seen run-wide. */
   readonly breaker: TransportCircuitBreaker;
+  /**
+   * The throttler shared by every call in the run, so a burst seen on one arm slows
+   * every other arm sharing this port too. Sibling of `breaker`, not a layer above or
+   * below it (see the module header of ./throttle-governor.ts): it only ever lengthens
+   * the wait between attempts, and it never influences the breaker's own state.
+   */
+  readonly governor: ThrottleGovernor;
   /** Resolves after the given delay; injected so no test waits on a real timer. */
   readonly sleep: (ms: number) => Promise<void>;
   /** Uniform [0, 1) source for jitter; injected so backoff bounds are testable. */
@@ -275,13 +284,27 @@ type AttemptOutcome =
   | { readonly kind: 'retryable-status'; readonly response: JsonHttpResponse }
   | { readonly kind: 'rejected'; readonly cause: unknown };
 
-/** Perform one attempt and classify it, turning a rejection into a value. */
-async function attemptOnce(port: JsonHttpPort, request: JsonHttpRequest): Promise<AttemptOutcome> {
+/**
+ * Perform one attempt and classify it, turning a rejection into a value.
+ *
+ * A 429 specifically - not any 5xx - also feeds the governor: 429 is the host's own
+ * word that WE are asking for too much, which is what the governor exists to slow
+ * down. A 5xx says the host is unwell, which is the breaker's concern instead.
+ */
+async function attemptOnce(
+  port: JsonHttpPort,
+  request: JsonHttpRequest,
+  governor: ThrottleGovernor,
+): Promise<AttemptOutcome> {
   try {
     const response = await port(request);
-    return classifyStatus(response.status) === 'retryable'
-      ? { kind: 'retryable-status', response }
-      : { kind: 'answered', response };
+    if (classifyStatus(response.status) !== 'retryable') {
+      return { kind: 'answered', response };
+    }
+    if (response.status === HTTP_TOO_MANY_REQUESTS) {
+      governor.recordThrottle();
+    }
+    return { kind: 'retryable-status', response };
   } catch (cause) {
     // The inner port has already redacted this; it is PRESERVED rather than replaced
     // so that, on exhaustion, the transport above sees the same classification it
@@ -304,7 +327,7 @@ export function createRetryingHttpPort(
   deps: TransportRetryDeps,
 ): JsonHttpPort {
   return async (request: JsonHttpRequest): Promise<JsonHttpResponse> => {
-    const { policy, breaker } = deps;
+    const { policy, breaker, governor } = deps;
     // Seeded with the breaker error so a request refused BEFORE its first attempt fails
     // fast with that classification and nothing else.
     let last: AttemptOutcome = { kind: 'rejected', cause: new TransportCircuitOpenError() };
@@ -315,14 +338,23 @@ export function createRetryingHttpPort(
         // than "the breaker is open", and the transport above classifies both the same way.
         break;
       }
-      last = await attemptOnce(inner, request);
+      last = await attemptOnce(inner, request, governor);
       if (last.kind === 'answered') {
         breaker.recordSuccess();
         return last.response;
       }
       breaker.recordFailure();
       if (attempt < policy.maxAttempts) {
-        await deps.sleep(backoffDelayMs(policy, attempt, deps.random));
+        // The governor's multiplier lengthens our own adaptive backoff, then that product
+        // is clamped to our ceiling - our growth never escapes `maxDelayMs`. The host's
+        // own Retry-After is applied as a FLOOR after that clamp, not before it, so a host
+        // asking for longer than our ceiling is still obeyed while our own adaptive growth
+        // stays bounded by it.
+        const computed =
+          backoffDelayMs(policy, attempt, deps.random) * governor.backoffMultiplier();
+        const clamped = Math.min(policy.maxDelayMs, computed);
+        const retryAfterMs = last.kind === 'retryable-status' ? last.response.retryAfterMs : null;
+        await deps.sleep(Math.max(clamped, retryAfterMs ?? 0));
       }
     }
     if (last.kind === 'retryable-status') {

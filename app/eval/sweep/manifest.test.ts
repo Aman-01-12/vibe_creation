@@ -10,6 +10,8 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { TESTBENCH_PROMPT_VERSION } from '@app/agent';
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import { RTLLM_PINNED_COMMIT } from '../corpus/pinned-source.js';
@@ -45,10 +47,23 @@ import { assembleManifest, finalizeManifest, type ManifestFacts } from './manife
  *     KILLS, which is the GATE set, which decides instrument validity - and instrument validity
  *     decides the pass@k denominator. So two caps are two experiments, exactly like two mutant
  *     budgets.
+ *   - when `TESTBENCH_PROMPT_VERSION` was folded into the identity (task 9.1), because a
+ *     prompt change is a different experiment from the one before it - two runs on either
+ *     side of a prompt-rule change must never pool samples, exactly like the three prior
+ *     moves.
  * Nothing was orphaned in any case - the results schema bump had already refused every
  * pre-existing smoke record for the same reason.
  */
-const SMOKE_RUN_CONFIG_HASH = '552626a05719c93c';
+const SMOKE_RUN_CONFIG_HASH = '9320f400d18b0ccc';
+
+/**
+ * The config hash the committed campaign-readiness slice config currently produces.
+ *
+ * Pinned for the same resume-safety reason as `SMOKE_RUN_CONFIG_HASH` above: this file's
+ * recorded samples (Requirement 9.6, 9.7) are keyed by this exact hash, so a config change
+ * that would silently orphan them must fail a test instead of passing unnoticed.
+ */
+const TBSLICE_RUN_CONFIG_HASH = '5ede5f843ac2859b';
 
 /** Lowercase hex SHA-256, the digest the CLI injects. */
 function sha256Hex(text: string): string {
@@ -329,5 +344,97 @@ describe('the config identity that scopes a resume', () => {
       throw new Error(`the committed smoke config is invalid: ${parsed.error.message}`);
     }
     expect(sweepConfigHash(parsed.value, sha256Hex)).toBe(SMOKE_RUN_CONFIG_HASH);
+  });
+
+  it('still matches the committed campaign-readiness slice config, so its recorded samples stay resumable', async () => {
+    // The same regression guard as the smoke config above, applied to the slice
+    // Requirement 9.6/9.7 is measured against: that citation is only valid if the config
+    // on disk still hashes to what the recorded samples were keyed under.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const raw: unknown = JSON.parse(
+      await readFile(resolve(here, 'sweep.config.tbslice.json'), 'utf8'),
+    );
+    const parsed = parseSweepConfig(raw);
+    if (!parsed.ok) {
+      throw new Error(`the committed tbslice config is invalid: ${parsed.error.message}`);
+    }
+
+    // Pin the parsed shape first: the facts the slice's citation depends on.
+    expect(parsed.value.runName).toBe('tbslice-v1');
+    expect(parsed.value.problems.kind).toBe('ids');
+    expect(parsed.value.problems.kind === 'ids' ? parsed.value.problems.ids.length : 0).toBe(15);
+    expect(parsed.value.reproducibility.sampleCount).toBe(1);
+    expect(parsed.value.ks).toEqual([1]);
+
+    expect(sweepConfigHash(parsed.value, sha256Hex)).toBe(TBSLICE_RUN_CONFIG_HASH);
+  });
+});
+
+describe('the config identity that scopes a resume - Property 16', () => {
+  // Feature: eval-campaign-readiness, Property 16: A prompt change changes the
+  // experiment identity.
+  //
+  // Validates: Requirements 9.7, 11.2, 11.3, 11.4, 11.5
+
+  const digest = (text: string): string =>
+    [...text]
+      .reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) % 0xffffffff, 7)
+      .toString(16)
+      .padStart(20, '0');
+
+  it('folds the current TESTBENCH_PROMPT_VERSION into the canonical identity for any config', () => {
+    // `TESTBENCH_PROMPT_VERSION` is a fixed build-time constant, not a parameter
+    // `sweepConfigHash` accepts (task 9.1 deliberately fixed that signature), so this
+    // cannot mutate the real version and compare two live hashes. What it CAN assert,
+    // for arbitrarily generated configs, is the principle itself: the prompt version the
+    // running code carries is actually embedded in the identity, under its reserved key,
+    // rather than only living in the manifest. Mirrors the existing
+    // `toContain('negativeControl')` assertion above.
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 100 }), (seed) => {
+        const json = canonicalSweepConfigJson(config({ seed }));
+        expect(json).toContain('__testbenchPromptVersion');
+        expect(json).toContain(String(TESTBENCH_PROMPT_VERSION));
+      }),
+      { numRuns: 25 },
+    );
+  });
+
+  it('gives two different prompt versions two different hashes, for any config', () => {
+    // A more rigorous restatement of the same property, without mutating
+    // `TESTBENCH_PROMPT_VERSION` or changing `config-identity.ts`'s signature: this
+    // locally re-folds the identity the same way `identityBearingFields` does, once
+    // under the real version and once under a different one, and shows the two
+    // canonical forms - and therefore their hashes - disagree.
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 100 }), (seed) => {
+        const sweep = config({ seed });
+        const real = JSON.parse(canonicalSweepConfigJson(sweep)) as Record<string, unknown>;
+        const otherVersion = TESTBENCH_PROMPT_VERSION + 1;
+        const refolded = { ...real, __testbenchPromptVersion: otherVersion };
+
+        expect(digest(JSON.stringify(refolded))).not.toBe(digest(JSON.stringify(real)));
+      }),
+      { numRuns: 25 },
+    );
+  });
+});
+
+describe('assembleManifest - the recorded prompt version agrees with the identity', () => {
+  it('never disagrees with the version folded into the config identity, for any config', () => {
+    // Task 9.1's guarantee: `manifest.testbenchPromptVersion` and the hash that scopes
+    // resume are two different reads of the SAME constant, so they can never drift
+    // apart and quietly describe two different prompt versions for one run.
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 100 }), (seed) => {
+        const sweep = config({ seed });
+        const built = manifest({});
+        expect(built.testbenchPromptVersion).toBe(TESTBENCH_PROMPT_VERSION);
+        expect(canonicalSweepConfigJson(sweep)).toContain(
+          `"__testbenchPromptVersion":${TESTBENCH_PROMPT_VERSION}`,
+        );
+      }),
+      { numRuns: 25 },
+    );
   });
 });

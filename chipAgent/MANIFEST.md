@@ -20,9 +20,9 @@ Reading `status`: `trusted` = eval-gated, may steer generation. `candidate` = no
 still authoritative as a record of what happened (what was tried, what the oracle said, what
 failed), but not as a correctness claim.
 
-Notes catalogued: 55.
+Notes catalogued: 61.
 
-## Gotchas and dead-ends - read these before debugging anything in their area (31)
+## Gotchas and dead-ends - read these before debugging anything in their area (34)
 
 - candidate: Display_Layer fail-closed invariants differ from the Trust_Labeler's [display-layer, trust, fail-closed, property-based, app-web, testing] -> `chipAgent/_inbox/display-layer-fail-closed-invariants.md`
 - candidate: The eval gate's "equal-to-baseline never blocks" needs a structural floor < baseline invariant [typescript, domain-modelling, invariants, eval-gate, ci, core] -> `chipAgent/_inbox/eval-gate-floor-below-baseline-invariant.md`
@@ -37,13 +37,16 @@ Notes catalogued: 55.
 - candidate: A generated testbench can assume a reset the interface never declared, and then fail the reference design -> `chipAgent/_inbox/gotcha-generated-testbench-assumes-a-reset-that-does-not-exist.md`
 - candidate: Legacy .kiro.hook files never fire, and an empty MOC makes the whole vault invisible [kiro, hooks, steering, knowledge-vault, retrieval, tooling] -> `chipAgent/_inbox/gotcha-legacy-kiro-hook-format-never-fires.md`
 - candidate: Oracle check reader FIXED - trailing diagnostics are read, unreadable CHECK lines force non-pass, and the loop now refuses a pass on incomplete evidence -> `chipAgent/_inbox/gotcha-oracle-check-reader-fixed-unreadable-signals-now-force-non-pass.md`
+- candidate: An orchestrator prompt that hands a subagent a "pre-verified" fact list must still be independently checked by the subagent [orchestrator, subagent, verification, rtllm, corpus, spec-workflow, dead-end] -> `chipAgent/_inbox/gotcha-orchestrator-must-not-hand-subagent-unverified-facts-as-fact.md`
 - candidate: A per-sample collaborator given to EvalHarness must be scoped to the scheduled slot, or the sweep persists evidence for slots that never ran [eval, eval-harness, sweep, sample-scheduler, artifacts, observability, honesty] -> `chipAgent/_inbox/gotcha-per-sample-sink-must-be-scoped-to-scheduled-slot.md`
 - candidate: Probability generators that derive a child value by multiplication break on sub-normal doubles [fast-check, property-testing, floating-point, generators, test-correctness] -> `chipAgent/_inbox/gotcha-probability-generators-subnormal-double-underflow.md`
 - candidate: A Testbench_Agent prompt change does not change the config identity, so a resumed campaign pools two experiments -> `chipAgent/_inbox/gotcha-prompt-version-absent-from-experiment-identity.md`
+- candidate: readiness-slice ran BEFORE the hardening commits were dated - prove code version by schemaVersion 9 fields, not by git dates [eval, measurement, provenance, integrity, git, readiness-slice] -> `chipAgent/_inbox/gotcha-readiness-slice-predates-commit-dates-prove-by-schema.md`
 - candidate: SandboxResult collapses timeout/infra/missing-output into one 'error' verdict [tools, sandbox, eda-adapter, error-handling] -> `chipAgent/_inbox/gotcha-sandbox-result-collapses-error-causes.md`
 - candidate: The sandbox worker buffered a child's ENTIRE stdout in memory - a runaway $display loop cost 654 MB per run, and truncating it now forces a non-pass -> `chipAgent/_inbox/gotcha-sandbox-worker-unbounded-output-capture-oom.md`
 - candidate: SimulationVerdict collapses timeout / tool-crash / compile-error into one 'error'; self-healing must re-derive the cause [self-healing, verdict, oracle, error-handling, classification] -> `chipAgent/_inbox/gotcha-simulation-verdict-collapses-error-causes.md`
 - candidate: Three Testbench_Agent defect classes that fail the reference design - precomputed literals, assumed timing, and an unjustified known-answer block -> `chipAgent/_inbox/gotcha-three-testbench-defect-classes-that-fail-the-reference-design.md`
+- candidate: A test that a date parser refuses a zone-less date is vacuous on half the world's machines [testing, non-vacuous, timezone, date-parsing, untrusted-input, model-router, retry-after] -> `chipAgent/_inbox/gotcha-timezone-guard-test-is-vacuous-on-half-the-machines.md`
 - candidate: tsc -b app/test is package-wide and fails on unrelated in-progress sibling test files [typescript, testing, monorepo, parallel-waves, verification] -> `chipAgent/_inbox/gotcha-tsc-b-app-test-fails-on-incomplete-siblings.md`
 - candidate: Widening a union breaks total Record fakes loudly, but turns hand-rolled aggregate assertions vacuous silently [typescript, testing, fakes, property-testing, model-router] -> `chipAgent/_inbox/gotcha-union-widening-breaks-total-record-fakes.md`
 - candidate: Loop VerifiedModule.oracleSpanId vs LabeledArtifact.oracleSpanRef, and projecting Trace evidence for the Display_Layer [verification-loop, trust-labeler, display-layer, provenance, integration, testing] -> `chipAgent/_inbox/gotcha-verified-outcome-vs-label-provenance-field.md`
@@ -56,7 +59,7 @@ Notes catalogued: 55.
 - trusted: aceternity-mcp postinstall fork-bombed the process table [mcp, tooling, setup, supply-chain] -> `chipAgent/gotchas/mcp-fork-bomb-aceternity.md`
 - candidate: Model-access and pricing traps (providers, credits, rate limits) [models, pricing, credits, rate-limits, deepseek, gemini, bedrock, digitalocean, bai] (expires 2026-10-15T00:00:00Z) -> `chipAgent/gotchas/model-access-and-pricing-traps.md`
 
-## Decisions - why the codebase is shaped this way (11)
+## Decisions - why the codebase is shaped this way (13)
 
 - candidate: A per-role model bake-off routes with NO fallback, because a silent fallback misattributes a verified artifact [eval, model-router, routing, bake-off, pass-at-k, cpva, attribution, honesty] -> `chipAgent/_inbox/decision-bakeoff-routing-has-no-cross-model-fallback.md`
 - candidate: Cost per verified artifact is denominated in TOKENS and WALL CLOCK, because dollars are not measured -> `chipAgent/_inbox/decision-cost-per-verified-artifact-is-denominated-in-tokens-not-dollars.md`
@@ -67,10 +70,12 @@ Notes catalogued: 55.
 - candidate: A sample whose testbench fails the reference design is instrument-invalid and LEAVES the pass@k denominator [eval, pass-at-k, instrument-validity, positive-control, honesty, schema-version, denominator] -> `chipAgent/_inbox/decision-instrument-invalid-samples-leave-the-pass-at-k-denominator.md`
 - candidate: The negative control gates on ZERO coverage-gap survivors, because a kill-rate bar failed a measurably good testbench -> `chipAgent/_inbox/decision-instrument-validity-gate-is-zero-coverage-gaps-not-a-kill-rate.md`
 - candidate: The mutation kill-rate denominator is every VALID mutant, because a golden pass is not proof of equivalence [eval, negative-control, mutation-testing, equivalent-mutant, denominator, instrument-validity, honesty, schema-version] -> `chipAgent/_inbox/decision-mutant-denominator-is-valid-mutants-not-golden-detectable.md`
+- candidate: No agent framework (LangGraph / LangChain / ADK / CrewAI) - argued from the measured defect distribution [architecture, orchestration, agent-framework, langgraph, adr, interview] -> `chipAgent/_inbox/decision-no-agent-framework-hand-rolled-orchestration.md`
+- candidate: The port's Retry-After ceiling is a build constant, not the eval retry policy's maxDelayMs [model-router, http, untrusted-input, layering, throttling, retry-after, dos, eval-sweep] -> `chipAgent/_inbox/decision-retry-after-ceiling-is-a-port-build-constant.md`
 - candidate: Verification_Loop threads ONE router-port SessionBudgetHandle through generation, testbench, and its own simulate accounting [agent, orchestrator, session-budget, verification-loop, termination, budget-reconciliation] -> `chipAgent/_inbox/verification-loop-single-budget-handle-reconciliation.md`
 - candidate: Model routing, model bake-off (CPVA), and provider/credit routing for eval + v1 [models, eval, cost, bedrock, deepseek, claude, gemini, context-engineering] (expires 2026-10-15T00:00:00Z) -> `chipAgent/decisions/model-and-eval-routing.md`
 
-## Patterns - reusable shapes already proven in this repo (11)
+## Patterns - reusable shapes already proven in this repo (12)
 
 - candidate: Carry cancellation reason on signal.reason as a branded marker; keep reason -> UI a pure function [cancellation, abortcontroller, sse, streaming, ui, purity, security] -> `chipAgent/_inbox/cancellation-reason-branded-signal-pure-ui-decision.md`
 - candidate: Encode "provenance iff Verified" as a discriminated union, not an optional field [typescript, domain-modelling, invariants, trust-labeling, core] -> `chipAgent/_inbox/discriminated-union-invariants-over-optional-flags.md`
@@ -79,6 +84,7 @@ Notes catalogued: 55.
 - candidate: Fail-closed Display_Layer with an injected discrepancy port (app/web) [web, trust, fail-closed, layering, ports] -> `chipAgent/_inbox/pattern-display-layer-fail-closed-port.md`
 - candidate: Eval_Harness measures the loop through an EvalLoopRunner port + a MeteredSessionBudget, not by importing the loop directly [eval, eval-harness, pass-at-k, session-budget, reproducibility, ports, cost-envelope] -> `chipAgent/_inbox/pattern-eval-harness-loop-runner-port-metered-budget.md`
 - candidate: Faithful fake derives its output from its input to detect stale-input defects (spec-consistent re-verification) [testing, property-based, fast-check, agent, iteration, anti-circular] -> `chipAgent/_inbox/pattern-faithful-fake-detects-stale-input-defect.md`
+- candidate: Digest a string in a no-ambient-Node-types project via structural-cast host globals (crypto.subtle, TextEncoder) [typescript, tsconfig, node-types, hashing, model-router, testbench, pattern-reuse] -> `chipAgent/_inbox/pattern-host-crypto-digest-structural-cast-no-node-types.md`
 - candidate: Iteration re-verification via role-local ports (no orchestrator import cycle); demotion by absence of provenance [agent, roles, iteration, trust-labeler, verification-loop, dependency-direction] -> `chipAgent/_inbox/pattern-iteration-role-local-ports-avoid-orchestrator-cycle.md`
 - candidate: Teach_Mode grounds each claim by its TYPE, with a literal-typed non-omittable limit [typescript, domain-modelling, invariants, trust-labeling, teach-mode, agent] -> `chipAgent/_inbox/pattern-teach-mode-per-claim-grounding-by-type.md`
 - candidate: Real-oracle integration tests - shared skip harness + dual real/fake trajectory [integration-tests, oracle, iverilog, skip, non-vacuous, verification-loop, test-harness] -> `chipAgent/_inbox/real-oracle-integration-dual-trajectory-pattern.md`

@@ -99,8 +99,8 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
 
 ## Tasks
 
-- [ ] 1. Track A - the golden outcome vocabulary and the independent-judge boundary
-  - [ ] 1.1 Widen the recorded golden verdict and add the golden denominator predicate
+- [x] 1. Track A - the golden outcome vocabulary and the independent-judge boundary
+  - [x] 1.1 Widen the recorded golden verdict and add the golden denominator predicate
     - In `app/eval/golden-judge.ts`, add `RecordedGoldenKind` as a closed five-member union and retype `RecordedGoldenVerdict.kind`
     - Add `countsInGoldenPassAtK` and `summarizeGoldenPassAtK` with a `GoldenPassAtKReport` whose fields partition the arm
     - Build the exclusion tally from a total `Record<RecordedGoldenKind, ...>` so a sixth kind is a compile error
@@ -108,7 +108,7 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 4.6_
 
-  - [ ]* 1.2 Property tests for the golden denominator
+  - [x]* 1.2 Property tests for the golden denominator
     - In `app/eval/golden-judge.test.ts`
     - **Property 1: The golden denominator excludes every sample the judge did not judge**
     - **Property 2: The golden report partitions the arm**
@@ -116,41 +116,41 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx vitest run app/eval/golden-judge.test.ts` then the full gate
     - _Requirements: 2.2, 2.3, 2.4, 2.5, 2.6, 2.9_
 
-  - [ ] 1.3 Classify the no-verdict cause at the RTLLM judge boundary
+  - [x] 1.3 Classify the no-verdict cause at the RTLLM judge boundary
     - In `app/eval/corpus/rtllm-golden-judge.ts`, map `GoldenScore` to `RecordedGoldenKind` in this order: resource bound, `failed`, `passed`, then the existing non-pass cause classifier
     - Delegate the `did-not-build` / `no-output` split to `app/eval/corpus/nonpass-cause.ts` so that rule keeps one owner across Stage 0, the positive control, and the judge
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 3.2, 3.3, 3.4, 3.5_
 
-  - [ ]* 1.4 Classification tests at the judge boundary
+  - [x]* 1.4 Classification tests at the judge boundary
     - New file `app/eval/corpus/rtllm-golden-judge.test.ts`
     - Unit: a run that both exceeded a resource bound and printed no diagnostics classifies `timed-out`, not `no-output` - the ordering trap
     - Differential property: the build-failure split agrees with `classifyNonPass` on every generated diagnostics text, including whitespace-only
     - Verify: `npx vitest run app/eval/corpus/rtllm-golden-judge.test.ts` then the full gate
     - _Requirements: 3.2, 3.3, 3.4, 3.5_
 
-  - [ ] 1.5 Widen the persisted golden kinds and bump the results schema
+  - [x] 1.5 Widen the persisted golden kinds and bump the results schema
     - In `app/eval/sweep/results-log.ts`, widen `GOLDEN_KINDS` to the five recorded kinds and retype `SweepSampleRecord.goldenVerdict`
     - Bump `RESULTS_SCHEMA_VERSION` 7 -> 8 as a refusal, and extend `STALE_SCHEMA_ADVICE` to state that the golden outcome vocabulary widened and a fresh output directory is required
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 3.6, 3.7, 3.8_
 
-  - [ ]* 1.6 Decoder and refusal tests
+  - [x]* 1.6 Decoder and refusal tests
     - In `app/eval/sweep/results-log.test.ts`
     - **Property 6: A widened golden kind is accepted and anything else is refused**
     - Unit: a v7 line refuses the whole file and aggregates nothing; the advice text names the golden vocabulary change
     - Verify: `npx vitest run app/eval/sweep/results-log.test.ts` then the full gate
     - _Requirements: 3.1, 3.6, 3.7, 3.8_
 
-- [ ] 2. Track A - the two labelled pass@k metrics
-  - [ ] 2.1 Aggregate the golden denominator into the arm summary
+- [x] 2. Track A - the two labelled pass@k metrics
+  - [x] 2.1 Aggregate the golden denominator into the arm summary
     - In `app/eval/sweep/summary.ts`, give `armPassAtK` a numerator predicate parameter so one implementation serves both numerators
     - Build a second eligible list from `countsInGoldenPassAtK` and add `goldenPassAtK` plus the golden report to `ArmSummary`
     - Leave the instrument-gated eligible list, the efficiency population, and every existing number exactly as they are
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 1.1, 1.2, 1.7, 2.6, 4.4, 4.5_
 
-  - [ ] 2.2 Render the golden block and relabel the self-graded line
+  - [x] 2.2 Render the golden block and relabel the self-graded line
     - In `app/eval/sweep/summary.ts`, render the golden block FIRST, carrying the token `GOLDEN`, its denominator size, and the full exclusion tally inside the same block
     - Relabel the existing line as self-graded and instrument-gated, keeping its denominator wording
     - Render `NOT MEASURED` for an empty golden denominator, reusing the existing convention rather than printing a zero
@@ -158,14 +158,14 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 1.3, 1.4, 1.5, 1.6, 2.7, 2.8_
 
-  - [ ] 2.3 Bump the artifact document schema and export the predicate
+  - [x] 2.3 Bump the artifact document schema and export the predicate
     - In `app/eval/sweep/artifact-layout.ts`, bump `ARTIFACT_DOCUMENT_SCHEMA_VERSION` 6 -> 7 with the reason recorded beside the previous bumps
     - Update the version assertion in `app/eval/sweep/artifact-layout.test.ts` in the same task, since that file has no other writer in this plan
     - Export `countsInGoldenPassAtK` and the golden report type from `app/eval/index.ts`
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 3.1_
 
-  - [ ]* 2.4 Summary property and rendering tests
+  - [x]* 2.4 Summary property and rendering tests
     - In `app/eval/sweep/summary.test.ts`
     - **Property 3: The golden metric never moves the instrument-gated denominator** - metamorphic: vary only a sample's golden kind and assert `countsInPassAtK`, the instrument-gated pass@k, and both efficiency figures are unchanged. This is the guard that the added metric relaxes nothing
     - **Property 4: Both pass@k values come from one estimator** - model-based against `passAtK` recomputed from the same records
@@ -174,12 +174,12 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx vitest run app/eval/sweep/summary.test.ts` then the full gate
     - _Requirements: 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 2.7, 2.8, 4.2, 4.3, 4.4, 4.5_
 
-- [ ] 3. Checkpoint - Track A
+- [x] 3. Checkpoint - Track A
   - Ensure all tests pass, ask the user if questions arise.
   - Confirm `npx vitest run` reports >= 1531 passed and exactly 6 skipped.
 
-- [ ] 4. Track B - the Retry-After instruction at the transport boundary
-  - [ ] 4.1 Add the Retry-After reader
+- [x] 4. Track B - the Retry-After instruction at the transport boundary
+  - [x] 4.1 Add the Retry-After reader
     - New file `app/agent/model-router/retry-after.ts` with `parseRetryAfterMs(value, nowMs, maxDelayMs)`
     - Handle both header forms - an integer count of seconds, and an HTTP-date measured against the injected clock
     - Return no delay for an absent, non-integer, negative, or unparseable value; clamp a parsed delay to `maxDelayMs`, because the header is untrusted input and must not be able to park a campaign
@@ -187,7 +187,7 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.7_
 
-  - [ ]* 4.2 Retry-After parser property tests
+  - [x]* 4.2 Retry-After parser property tests
     - New file `app/agent/model-router/retry-after.test.ts`
     - **Property 7: Retry-After round-trips from delta-seconds**
     - **Property 8: Retry-After rejects what it cannot read and clamps what it can**
@@ -195,28 +195,28 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx vitest run app/agent/model-router/retry-after.test.ts` then the full gate
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.7_
 
-  - [ ] 4.3 Carry the parsed delay on the JSON reply
+  - [x] 4.3 Carry the parsed delay on the JSON reply
     - In `app/agent/model-router/json-http-port.ts`, add `retryAfterMs?: number | null` to `JsonHttpResponse` and document that it is the ONLY reply header field that travels upward, and that it travels as a bounded number rather than as text
     - In `app/agent/model-router/fetch-json-http-port.ts`, read exactly one header from the host reply through a narrow accessor - never a header map - and hand it to `parseRetryAfterMs`
     - Export the reader from `app/agent/model-router/index.ts`
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 5.6_
 
-  - [ ]* 4.4 Fetch-port header tests
+  - [x]* 4.4 Fetch-port header tests
     - In `app/agent/model-router/fetch-json-http-port.test.ts`
     - Unit: a reply carrying `Retry-After` surfaces the parsed delay; a reply without it surfaces no delay; the returned object exposes no other header
     - Verify: `npx vitest run app/agent/model-router/fetch-json-http-port.test.ts` then the full gate
     - _Requirements: 5.6_
 
-- [ ] 5. Track B - adaptive backoff and adaptive concurrency
-  - [ ] 5.1 Add the throttle governor
+- [x] 5. Track B - adaptive backoff and adaptive concurrency
+  - [x] 5.1 Add the throttle governor
     - New file `app/eval/sweep/throttle-governor.ts` with `THROTTLE_GOVERNOR_LIMITS` as build constants and a `ThrottleGovernor` class shaped like the existing `TransportCircuitBreaker`
     - Sole owner of its observation list; `backoffMultiplier()` and `recommendedConcurrency()` are DERIVED from the observations still inside the window, so recovery needs no separate timer and the two can never disagree
     - Floor the recommendation at 1 and cap it at the configured concurrency, so the governor only ever moves downward from the configured ceiling
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.6, 7.1, 7.2, 7.3, 8.2_
 
-  - [ ]* 5.2 Governor property tests
+  - [x]* 5.2 Governor property tests
     - New file `app/eval/sweep/throttle-governor.test.ts`
     - **Property 10: The backoff multiplier is monotone in observed throttling and bounded**
     - **Property 11: The recommended concurrency is monotone, bounded, and recovers**
@@ -224,21 +224,21 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx vitest run app/eval/sweep/throttle-governor.test.ts` then the full gate
     - _Requirements: 6.2, 6.3, 6.4, 6.6, 7.1, 7.2, 7.3_
 
-  - [ ] 5.3 Compose the floor, the multiplier, and the clamp in the retrying port
+  - [x] 5.3 Compose the floor, the multiplier, and the clamp in the retrying port
     - In `app/eval/sweep/transport-retry.ts`, apply the governor's multiplier to the computed backoff, clamp the product to `policy.maxDelayMs`, then raise the result to the reply's Retry-After delay - the floor after the clamp, so a host asking for longer than our ceiling is still obeyed
     - Record a throttle observation for a retryable outcome whose status is 429, which is the one status meaning "you are asking for too much"
     - Leave the circuit breaker's contract untouched: the governor slows the run, the breaker ends it
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 5.5, 6.1, 6.5, 6.7_
 
-  - [ ]* 5.4 Applied-delay property test
+  - [x]* 5.4 Applied-delay property test
     - In `app/eval/sweep/transport-retry.test.ts`
     - **Property 9: The applied delay is never below the host's instruction**
     - Include the case where the parsed Retry-After delay is exactly 0, which is why the floor is a maximum rather than an override
     - Verify: `npx vitest run app/eval/sweep/transport-retry.test.ts` then the full gate
     - _Requirements: 5.5, 6.5, 6.7_
 
-  - [ ] 5.5 Gate worker admission on the recommended concurrency
+  - [x] 5.5 Gate worker admission on the recommended concurrency
     - In `app/eval/sweep/runner.ts`, change `#drain` from a fixed pool to an admission-gated pool: a worker asks for admission before taking a unit and waits and re-asks when the count of workers holding a unit has reached the recommendation
     - Keep the initial worker count at `min(configured, units.length)` so the configured ceiling and the existing bounded-concurrency test hold unchanged
     - Keep at least one worker admitted while units remain, so a reduction is a slowdown and never a deadlock
@@ -247,7 +247,7 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 7.4, 7.5, 7.6, 7.7, 7.8, 7.9_
 
-  - [ ]* 5.6 Admission and conservation property tests
+  - [x]* 5.6 Admission and conservation property tests
     - In `app/eval/sweep/runner.test.ts`
     - **Property 12: Admission never exceeds either bound and never starves**
     - **Property 13: A reduced recommendation loses no unit of work**
@@ -256,25 +256,25 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx vitest run app/eval/sweep/runner.test.ts` then the full gate
     - _Requirements: 7.4, 7.5, 7.6, 7.7, 7.8, 7.9_
 
-  - [ ] 5.7 Wire the governor at the composition root
+  - [x] 5.7 Wire the governor at the composition root
     - In `app/eval/sweep/cli.ts`, construct the governor beside the existing breaker and pass it to the HTTP port builder and to the runner, following the shape the breaker already uses
     - Export the governor from `app/eval/sweep/index.ts`
     - Add no sweep-config field: a throttle knob would enter the experiment identity and orphan every paid sample, and throttle response is a safety property rather than a tunable experiment parameter
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 8.1, 8.2_
 
-  - [ ]* 5.8 Config-surface test
+  - [x]* 5.8 Config-surface test
     - In `app/eval/sweep/config-parse.test.ts`
     - Unit: a config carrying a throttling key is rejected as `UNKNOWN_FIELD`, so a config written by someone who believes they are setting a bar that does not exist fails before the first paid model call
     - Verify: `npx vitest run app/eval/sweep/config-parse.test.ts` then the full gate
     - _Requirements: 8.1, 8.3_
 
-- [ ] 6. Checkpoint - Track B
+- [x] 6. Checkpoint - Track B
   - Ensure all tests pass, ask the user if questions arise.
   - Confirm the pinned `SMOKE_RUN_CONFIG_HASH` in `app/eval/sweep/manifest.test.ts` still passes at its current value, which is Requirement 8.1.
 
-- [ ] 7. Track C - input-window alignment in the Testbench_Agent prompt
-  - [ ] 7.1 Add the input-window rule
+- [x] 7. Track C - input-window alignment in the Testbench_Agent prompt
+  - [x] 7.1 Add the input-window rule
     - In `app/agent/roles/testbench/prompt.ts`, add `inputQualifierNames` and `describeInputWindow`, conditioned on the DECLARED interface exactly as `describeStateAnchoring` and `describeTiming` already are
     - State that the Spec is the only source of the edge on which a data input is sampled
     - Offer exactly ONE derivation where an input qualifier is declared: form the expected value from the inputs the testbench itself drove under an asserted qualifier, never from a cycle count and never from a window boundary the testbench chose
@@ -283,22 +283,22 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
 
-  - [ ]* 7.2 Prompt property test for the input-window rule
+  - [x]* 7.2 Prompt property test for the input-window rule
     - In `app/test/testbench-agent.test.ts`
     - **Property 14: The testbench prompt offers exactly one input-window derivation**
     - Assert exactly one derivation is present WITHOUT re-deriving which, so the branch stays owned by the prompt, and assert every qualifier name stated is a declared port of the generated interface
     - Verify: `npx vitest run app/test/testbench-agent.test.ts` then the full gate
     - _Requirements: 9.1, 9.2, 9.3, 9.4_
 
-  - [ ]* 7.3 Extend the RTL-isolation property
+  - [x]* 7.3 Extend the RTL-isolation property
     - In `app/test/testbench-rtl-isolation.property.test.ts`
     - **Property 15: The input-window rule is assembled without RTL**
     - Extend the existing anti-circular property rather than adding a second owner of that guarantee
     - Verify: `npx vitest run app/test/testbench-rtl-isolation.property.test.ts` then the full gate
     - _Requirements: 9.5_
 
-- [ ] 8. Track C - coverage-gap closure
-  - [ ] 8.1 Add the stimulus-adequacy rule
+- [x] 8. Track C - coverage-gap closure
+  - [x] 8.1 Add the stimulus-adequacy rule
     - In `app/agent/roles/testbench/prompt.ts`, state a stimulus-adequacy rule derived from the declared interface and the Spec's acceptance criteria, requiring stimulus that distinguishes a boundary shifted by one, a negated condition, an altered constant, an inverted arithmetic sign, and a relaxed equality
     - Address the six operators in descending measured frequency: `CONDITION_NEGATED` (3), `CONST_INCREMENTED` (3), `CONST_ZERO_TO_ONE` (3), `ARITH_PLUS_TO_MINUS` (2), `INDEX_OFF_BY_ONE` (2), `EQUALITY_TO_INEQUALITY` (1)
     - State the rule at the altitude of "make the check able to distinguish" and do NOT name mutation operators in the prompt - naming them teaches the instrument the shape of the exam, which is the circularity the whole method exists to avoid
@@ -306,7 +306,7 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 10.1, 10.2, 10.5, 10.6_
 
-  - [ ]* 8.2 Coverage-gap fixture pair on the real toolchain
+  - [x]* 8.2 Coverage-gap fixture pair on the real toolchain
     - In `app/test/eval-negative-control.integration.test.ts`, add a committed fixture pair driven through real Icarus, needing no model call
     - Assert the discriminating fixture produces ZERO coverage-gap survivors for all six named operators
     - Assert the known-weak fixture still produces at least one, which is what makes the claim non-vacuous
@@ -315,8 +315,8 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx vitest run app/test/eval-negative-control.integration.test.ts` then the full gate
     - _Requirements: 10.3, 10.4_
 
-- [ ] 9. Track C - experiment identity for a prompt change
-  - [ ] 9.1 Add the prompt version and fold it into the identity and the manifest
+- [x] 9. Track C - experiment identity for a prompt change
+  - [x] 9.1 Add the prompt version and fold it into the identity and the manifest
     - New file `app/agent/roles/testbench/prompt-version.ts` exporting `TESTBENCH_PROMPT_VERSION = 2`, set to 2 because the prompt has already changed twice since the calibration run and version 1 would claim those samples were measured under the current prompt
     - Export it from `app/agent/roles/testbench/index.ts`
     - In `app/eval/sweep/config-identity.ts`, fold it into the canonical JSON under a reserved key, reading the constant directly so `sweepConfigHash`'s signature and every call site stay unchanged
@@ -324,19 +324,19 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
 
-  - [ ]* 9.2 Pinned prompt digest test
+  - [x]* 9.2 Pinned prompt digest test
     - New file `app/agent/roles/testbench/prompt-version.test.ts`
     - Unit: digest the prompt assembled for a canonical fixture Spec and compare against a value pinned beside the version constant, so changing a rule without bumping the version fails loudly
     - Verify: `npx vitest run app/agent/roles/testbench/prompt-version.test.ts` then the full gate
     - _Requirements: 11.6_
 
-  - [ ] 9.3 Commit the campaign-readiness slice config
+  - [x] 9.3 Commit the campaign-readiness slice config
     - New file `app/eval/sweep/sweep.config.tbslice.json` selecting at least 12 RTLLM problems spanning arithmetic, control, and memory, one arm, `sampleCount` 1
     - The slice is the artifact Requirement 9.6 is measured and cited against; it must not be `accu` plus two neighbours
     - Verify: `npx tsc -b && npx eslint app --max-warnings=0 && npx prettier --check . && npx vitest run`
     - _Requirements: 9.7_
 
-  - [ ]* 9.4 Identity and slice pinning tests
+  - [x]* 9.4 Identity and slice pinning tests
     - In `app/eval/sweep/manifest.test.ts`
     - **Property 16: A prompt change changes the experiment identity**
     - Unit: the manifest's recorded prompt version and the identity's embedded version agree for any config
@@ -344,7 +344,7 @@ npx vitest run     # >= 1531 passed, exactly 6 skipped, no new skips
     - Verify: `npx vitest run app/eval/sweep/manifest.test.ts` then the full gate
     - _Requirements: 9.7, 11.2, 11.3, 11.4, 11.5_
 
-- [ ] 10. Final checkpoint - all three tracks merged
+- [x] 10. Final checkpoint - all three tracks merged
   - Ensure all tests pass, ask the user if questions arise.
   - Confirm `npx tsc -b`, `npx eslint app --max-warnings=0`, `npx prettier --check .` are clean and `npx vitest run` reports >= 1531 passed with exactly 6 skipped.
   - Only after this checkpoint may the campaign be run, because Track C moved the config hash and a campaign started earlier cannot pool with one started later.

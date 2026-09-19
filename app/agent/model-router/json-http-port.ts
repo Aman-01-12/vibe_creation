@@ -7,7 +7,10 @@
 //
 // The port speaks in raw strings, never parsed objects, for two reasons: the reply
 // is UNTRUSTED and must be validated by its own boundary module before any field is
-// read, and a port that never parses cannot leak a half-validated shape upward.
+// read, and a port that never parses cannot leak a half-validated shape upward. The
+// one exception is `retryAfterMs`, and it is an exception that proves the rule: a
+// throttling host's instruction is worthless to a caller as text, so it crosses the
+// boundary already reduced to a bounded number by its own parser, never as a header.
 //
 // This module also owns the deadline: `exchangeJson` bounds every call with a timer
 // and never rejects, so a transport can classify `timeout` itself instead of
@@ -52,6 +55,21 @@ export interface JsonHttpRequest {
 export interface JsonHttpResponse {
   readonly status: number;
   readonly body: string;
+  /**
+   * The host's parsed `Retry-After` instruction in milliseconds, or null when it gave
+   * none.
+   *
+   * This is the ONLY reply header field that travels upward, and it travels as a
+   * bounded number rather than as text. A header MAP would carry credential-adjacent
+   * and fingerprintable material (`Set-Cookie`, `WWW-Authenticate`, request ids, host
+   * identifiers) past a boundary whose whole job is to let nothing about the call
+   * escape, and it would hand untrusted text to every future caller to re-parse.
+   *
+   * Optional deliberately: a port that cannot read headers - an SDK-backed
+   * implementation, a test fake - has nothing to report, and absence and `null` mean
+   * the same thing here, which is that the host gave no instruction we can obey.
+   */
+  readonly retryAfterMs?: number | null;
 }
 
 /**

@@ -267,6 +267,26 @@ describe('parseSweepConfig - a typo must never take a default silently', () => {
   it('rejects a misspelled retry knob', () => {
     expect(parseErr(baseConfig({ transportRetry: { maxAttempt: 2 } })).code).toBe('UNKNOWN_FIELD');
   });
+
+  it('rejects a throttling key, since throttle response is a build constant and never a config field', () => {
+    // The throttle governor (`app/eval/sweep/throttle-governor.ts`) is deliberately NOT
+    // surfaced here: its bounds are build constants, because throttle response is a safety
+    // property rather than an experiment parameter, and a config field for it would enter
+    // the identity and orphan every paid sample. An operator who has read the governor's own
+    // name and reaches for it here must fail loudly rather than have the key silently ignored.
+    const error = parseErr(baseConfig({ throttleGovernor: { enabled: true } }));
+    expect(error.code).toBe('UNKNOWN_FIELD');
+    expect(error.field).toBe('throttleGovernor');
+  });
+
+  it('rejects a governor knob nested under transportRetry, the block it actually composes with', () => {
+    // transportRetry is the block a throttling guess is most likely to land in, since the
+    // governor's multiplier is applied directly to the backoff `transportRetry` computes (see
+    // `createRetryingHttpPort`). It is still a build constant, so the guess must fail here too.
+    const error = parseErr(baseConfig({ transportRetry: { governorEnabled: false } }));
+    expect(error.code).toBe('UNKNOWN_FIELD');
+    expect(error.field).toBe('transportRetry.governorEnabled');
+  });
 });
 
 describe('parseSweepConfig - structural refusals', () => {

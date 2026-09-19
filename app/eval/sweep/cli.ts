@@ -110,6 +110,7 @@ import { parseResultsLog, CompletedSampleIndex } from './results-log.js';
 import { ensureDirectory, FileResultsLog, resultsLogPath } from './results-log-node.js';
 import { SweepRunner, type SweepRunResult } from './runner.js';
 import { renderSummary, summarizeRecords, SUMMARY_FILENAME } from './summary.js';
+import { ThrottleGovernor } from './throttle-governor.js';
 import {
   createRetryingHttpPort,
   TransportCircuitBreaker,
@@ -231,10 +232,12 @@ function isFailure(value: SweepConfig | PreflightFailure): value is PreflightFai
 function buildHttpPort(
   policy: TransportRetryPolicy,
   breaker: TransportCircuitBreaker,
+  governor: ThrottleGovernor,
 ): JsonHttpPort {
   return createRetryingHttpPort(createFetchJsonHttpPort(), {
     policy,
     breaker,
+    governor,
     sleep: (ms: number) => new Promise<void>((done) => setTimeout(done, ms)),
     random: Math.random,
   });
@@ -244,6 +247,7 @@ function buildHttpPort(
 interface SharedStack {
   readonly http: JsonHttpPort;
   readonly breaker: TransportCircuitBreaker;
+  readonly governor: ThrottleGovernor;
   readonly sandboxRuntime: LocalWorkerRuntime;
   readonly retriever: OkfFirstKnowledgeRetriever;
   readonly secretManager: SecretManagerPort;
@@ -389,10 +393,12 @@ async function prepare(
   }
   const sandboxRuntime = new LocalWorkerRuntime(pythonBin);
   const breaker = new TransportCircuitBreaker(config.transportRetry, Date.now);
+  const governor = new ThrottleGovernor(config.concurrency, Date.now);
   const negativeControl = buildNegativeControl(config, corpus, sandboxRuntime);
   const shared: SharedStack = {
-    http: buildHttpPort(config.transportRetry, breaker),
+    http: buildHttpPort(config.transportRetry, breaker, governor),
     breaker,
+    governor,
     sandboxRuntime,
     retriever: new OkfFirstKnowledgeRetriever({
       okfReader: new FileSystemOkfBundleReader(join(repositoryRoot(), OKF_BUNDLE_RELATIVE)),
@@ -512,6 +518,8 @@ async function execute(prepared: PreparedRun): Promise<SweepCliResult> {
     completed: CompletedSampleIndex.fromRecords(history.records, configHash),
     killSwitch: new SweepKillSwitch(config.killSwitch, Date.now),
     outage: () => shared.breaker.outage(),
+    governor: shared.governor,
+    waitMs: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: Date.now,
     onProgress: report,
   });

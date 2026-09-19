@@ -1,0 +1,100 @@
+{
+  "_README": [
+    "TBSLICE config: the campaign-readiness slice Requirement 9.6 is measured and cited",
+    "against. It exists to prove the Testbench_Agent's input-window alignment rule (and the",
+    "coverage-gap closure) on real RTLLM problems, not just on the one problem",
+    "(rtllm/arithmetic/accu) that motivated the rule. One arm, 15 designs spanning",
+    "arithmetic, control, memory, and miscellaneous, one sample each = 15 sessions.",
+    "",
+    "  node --env-file=.env app/eval/dist/sweep/cli.js --config app/eval/sweep/sweep.config.tbslice.json",
+    "",
+    "HOW THIS SLICE IS CITED (Requirement 9.6, 9.7): run this exact config, take the",
+    "instrument-valid sample count from the summary, then diff it against the count from an",
+    "earlier run of this SAME file before the input-alignment rule (task 7.1) landed. The two",
+    "runs are directly comparable only because this file's Config_Identity hash is unchanged",
+    "by that prompt change - what moves the hash instead is TESTBENCH_PROMPT_VERSION",
+    "(app/agent/roles/testbench/prompt-version.ts), which config-identity.ts folds into the",
+    "canonical JSON directly from the running code, not from any field in this file. So a",
+    "result produced under one prompt version can never silently pool with one produced",
+    "under another.",
+    "",
+    "The credential NEVER goes in this file. It comes from the environment (.env).",
+    "",
+    "ARTIFACTS: on by default, written to .eval-runs/tbslice-v1/artifacts/. Note that samples",
+    "already in results.jsonl are SKIPPED on a re-run, so a sample recorded before artifacts",
+    "existed will not grow them retroactively. To capture evidence for those, run into a",
+    "fresh outputDir/runName."
+  ],
+
+  "schemaVersion": 1,
+  "runName": "tbslice-v1",
+
+  "arms": [{ "name": "kimi-k2_5", "model": "moonshotai.kimi-k2.5" }],
+
+  "_problems": [
+    "15 real, spelling-verified RTLLM designs (checked against the pinned checkout on disk",
+    "and against .eval-corpus/rtllm/File_list.md), spanning all three categories named by",
+    "Requirement 9.7 plus miscellaneous: 7 arithmetic (adder_8bit, adder_16bit,",
+    "adder_pipe_64bit, multi_16bit, multi_pipe_8bit, multi_booth_8bit, div_16bit), 3 control",
+    "(fsm, counter_12, JC_counter), 2 memory (right_shifter, asyn_fifo), 3 miscellaneous",
+    "(signal_generator, calendar, traffic_light). None is rtllm/arithmetic/accu or a",
+    "neighbour of it, and none is one of the four Stage 0 quarantined designs",
+    "(rtllm/arithmetic/radix2_div, rtllm/control/ring_counter,",
+    "rtllm/miscellaneous/freq_divbyeven, rtllm/miscellaneous/clkgenerator)."
+  ],
+  "problems": {
+    "kind": "ids",
+    "ids": [
+      "rtllm/arithmetic/adder_8bit",
+      "rtllm/arithmetic/adder_16bit",
+      "rtllm/arithmetic/adder_pipe_64bit",
+      "rtllm/arithmetic/multi_16bit",
+      "rtllm/arithmetic/multi_pipe_8bit",
+      "rtllm/arithmetic/multi_booth_8bit",
+      "rtllm/arithmetic/div_16bit",
+      "rtllm/control/fsm",
+      "rtllm/control/counter_12",
+      "rtllm/control/JC_counter",
+      "rtllm/memory/right_shifter",
+      "rtllm/memory/asyn_fifo",
+      "rtllm/miscellaneous/signal_generator",
+      "rtllm/miscellaneous/calendar",
+      "rtllm/miscellaneous/traffic_light"
+    ]
+  },
+
+  "sampleCount": 1,
+  "ks": [1],
+  "seed": 20240601,
+  "temperature": 0,
+
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+
+  "limits": { "cpu": 1, "memMb": 512, "procs": 128, "diskMb": 128, "wallMs": 30000 },
+
+  "costEnvelopeCents": 25,
+
+  "modelHost": { "region": "us-east-1", "maxOutputTokens": 6000, "requestTimeoutMs": 240000 },
+
+  "prices": {},
+
+  "outputDir": ".eval-runs/tbslice-v1",
+  "concurrency": 1,
+
+  "transportRetry": {
+    "maxAttempts": 4,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "jitterRatio": 0.5,
+    "breakerFailureThreshold": 8,
+    "breakerCooldownMs": 60000,
+    "breakerMaxTrips": 3
+  },
+
+  "killSwitch": { "maxWallClockMs": 1800000, "maxSamples": 20 }
+}

@@ -1,0 +1,70 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "9.3 Commit the campaign-readiness slice config": [
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789822666975
+      },
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789823342780
+      },
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789823788088
+      }
+    ],
+    "10. Final checkpoint - all three tracks merged": [
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789822667022
+      },
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789824153181
+      },
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789824232710
+      }
+    ],
+    "9.2 Pinned prompt digest test": [
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789822682700
+      },
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789823229495
+      }
+    ],
+    "9. Track C - experiment identity for a prompt change": [
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789823788133
+      }
+    ],
+    "9.4 Identity and slice pinning tests": [
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789823828832
+      },
+      {
+        "executionId": "a266fbb6-3bdf-4064-9274-08c3da9fdaea",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789824114748
+      }
+    ]
+  }
+}

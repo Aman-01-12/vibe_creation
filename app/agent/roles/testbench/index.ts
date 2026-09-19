@@ -17,6 +17,9 @@
 //     `CHECK_KEYWORD`): the `CHECK <name> PASS|FAIL` emission matching the oracle parser.
 //   - Known-answer references (`detectStandardBlocks`, `StandardBlockReference`) and
 //     the untrusted-output boundary (`parseTestbenchDraft`, `buildTestbenchModelInput`).
+//   - `TESTBENCH_PROMPT_VERSION` (Req 11.1-11.5; task 9.1): the assembled prompt's
+//     identity, folded into the eval sweep's config identity and manifest so a prompt
+//     change cannot pool samples with the version it changed from.
 
 export * from './types.js';
 export { requiredChecks, simulationCriteria, coveredCriterionIds } from './coverage.js';
@@ -29,4 +32,5 @@ export {
 export { detectStandardBlocks, type StandardBlockReference } from './standard-blocks.js';
 export { parseTestbenchDraft, type TestbenchParseError } from './parse.js';
 export { buildTestbenchModelInput } from './prompt.js';
+export { TESTBENCH_PROMPT_VERSION } from './prompt-version.js';
 export { TestbenchAgent, type TestbenchAgentDeps } from './testbench-agent.js';

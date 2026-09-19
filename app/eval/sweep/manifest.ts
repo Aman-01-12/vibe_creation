@@ -23,13 +23,20 @@
 //   probe that could not read a version records `null`, which reads as "unknown" and
 //   not as "some default".
 //
+// THE PROMPT VERSION IS PINNED THE SAME WAY THE CORPUS COMMIT IS
+//   `testbenchPromptVersion` is read directly from `TESTBENCH_PROMPT_VERSION`, exactly
+//   like `corpus.pinnedCommit` is read directly from the pinned corpus constant, rather
+//   than being threaded in through `ManifestFacts` or accepted as a parameter. A prompt
+//   change is a different experiment from the one before it, and a manifest that could be
+//   handed a version number would let a run claim a prompt it never ran.
+//
 // WHAT IS DELIBERATELY ABSENT
 //   No credential, obviously - but also no hostname and no absolute paths. A machine
 //   name identifies a person's laptop and answers nothing about reproducibility, which
 //   the platform, architecture, and runtime version already do. This module is pure:
 //   every fact is injected, so manifest assembly is unit-tested with no host at all.
 
-import { MODEL_TASKS, type ModelTask } from '@app/agent';
+import { MODEL_TASKS, TESTBENCH_PROMPT_VERSION, type ModelTask } from '@app/agent';
 
 import { RTLLM_PINNED_COMMIT } from '../corpus/pinned-source.js';
 import {
@@ -125,6 +132,14 @@ export interface SweepManifest {
   readonly config: SweepConfig;
   readonly arms: readonly ManifestArm[];
   readonly corpus: ManifestCorpus;
+  /**
+   * The Testbench_Agent prompt version that generated every sample in this run.
+   *
+   * Read directly from `TESTBENCH_PROMPT_VERSION`, the same way `corpus.pinnedCommit` is
+   * read directly from the pinned corpus constant rather than threaded through `facts`: a
+   * manifest must not be able to claim a prompt version the run did not actually use.
+   */
+  readonly testbenchPromptVersion: number;
   readonly reproducibility: ReproducibilityConfig;
   readonly toolchain: ManifestToolchain;
   readonly host: ManifestHost;
@@ -183,6 +198,7 @@ export function assembleManifest(input: ManifestInput): SweepManifest {
       selectedProblemIds: input.selectedProblemIds,
       quarantined: STAGE0_QUARANTINE.map(toExclusion),
     },
+    testbenchPromptVersion: TESTBENCH_PROMPT_VERSION,
     reproducibility: config.reproducibility,
     toolchain: facts.toolchain,
     host: facts.host,
