@@ -9,10 +9,12 @@
 // No test here opens a socket, waits on a real timer, or consumes real entropy: the clock,
 // the sleep, and the randomness are all injected.
 
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import type { JsonHttpPort, JsonHttpRequest, JsonHttpResponse } from '@app/agent';
 
+import { ThrottleGovernor } from './throttle-governor.js';
 import {
   backoffDelayMs,
   classifyStatus,
@@ -58,11 +60,13 @@ function fakeDeps(
   policy: TransportRetryPolicy,
   breaker: TransportCircuitBreaker,
   random = 0,
+  governor: ThrottleGovernor = new ThrottleGovernor(Number.POSITIVE_INFINITY, () => 0),
 ): TransportRetryDeps & { readonly sleeps: number[] } {
   const sleeps: number[] = [];
   return {
     policy,
     breaker,
+    governor,
     sleep: (ms: number) => {
       sleeps.push(ms);
       return Promise.resolve();
@@ -72,15 +76,30 @@ function fakeDeps(
   };
 }
 
-/** A port that answers from a scripted list of statuses, recording each body it saw. */
-function scriptedPort(statuses: readonly number[]): JsonHttpPort & { readonly bodies: string[] } {
+/**
+ * A port that answers from a scripted list of statuses, recording each body it saw.
+ *
+ * `retryAfterMs` is per-reply and optional, matching the shape `JsonHttpResponse`
+ * itself allows, so a test can assert the host's own instruction is honoured without
+ * the port pretending every reply carries one.
+ */
+function scriptedPort(
+  statuses: readonly number[],
+  retryAfterMs: ReadonlyMap<number, number> = new Map(),
+): JsonHttpPort & { readonly bodies: string[] } {
   const bodies: string[] = [];
   let call = 0;
   const port = (request: JsonHttpRequest): Promise<JsonHttpResponse> => {
     bodies.push(request.body);
-    const status = statuses[Math.min(call, statuses.length - 1)] ?? 200;
+    const index = Math.min(call, statuses.length - 1);
+    const status = statuses[index] ?? 200;
     call += 1;
-    return Promise.resolve({ status, body: '{}' });
+    const hint = retryAfterMs.get(index);
+    return Promise.resolve({
+      status,
+      body: '{}',
+      ...(hint === undefined ? {} : { retryAfterMs: hint }),
+    });
   };
   return Object.assign(port, { bodies });
 }
@@ -182,6 +201,64 @@ describe('the retrying port - a retry is the SAME question, never a second sampl
       fakeDeps(POLICY, breaker),
     )(REQUEST);
     expect(response.status).toBe(503);
+  });
+
+  // Feature: eval-campaign-readiness, Property 9: The applied delay is never below the
+  // host's instruction.
+  //
+  // Validates: Requirements 5.5, 6.5, 6.7
+  //
+  // The composition under test, from transport-retry.ts, is:
+  //   const clamped = Math.min(policy.maxDelayMs, computed);
+  //   await deps.sleep(Math.max(clamped, retryAfterMs ?? 0));
+  //
+  // `Math.max` makes the host's instruction a FLOOR under our own backoff, never a
+  // replacement for it: whichever of the two numbers is larger is what we wait. An
+  // `Math.min` in its place would let a large host instruction be discarded in favour
+  // of a smaller computed backoff - obeying the host LESS than it asked, which is the
+  // one thing this module must never do to a rate-limited host. Asserting the applied
+  // delay against BOTH `retryAfterMs` and `clamped` on every case, rather than only
+  // the larger of the two, is what makes a future `Math.min` swap fail here: `Math.min`
+  // would still satisfy "delay >= retryAfterMs" whenever retryAfterMs is the smaller
+  // operand, but it would violate "delay >= clamped" on that very same case.
+  it('applies the host-supplied Retry-After as a floor under the computed backoff, never a replacement for it', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        // The random draw behind our own exponential backoff.
+        fc.double({ min: 0, max: 0.999, noNaN: true }),
+        // The host's instruction, generated across both sides of `clamped`: a zero (a
+        // real, valid "retry now"), a small value likely below `clamped`, and a value
+        // large enough to exceed even `policy.maxDelayMs` and so exceed `clamped` too.
+        fc.oneof(
+          fc.constant(0),
+          fc.integer({ min: 1, max: POLICY.maxDelayMs }),
+          fc.integer({ min: POLICY.maxDelayMs, max: POLICY.maxDelayMs * 4 }),
+        ),
+        async (random, retryAfterMs) => {
+          const clamped = Math.min(
+            POLICY.maxDelayMs,
+            backoffDelayMs(POLICY, 1, () => random),
+          );
+          const breaker = new TransportCircuitBreaker(POLICY, () => 0);
+          const deps = fakeDeps(POLICY, breaker, random);
+          const port = scriptedPort([429, 200], new Map([[0, retryAfterMs]]));
+
+          await createRetryingHttpPort(port, deps)(REQUEST);
+
+          expect(deps.sleeps).toHaveLength(1);
+          const applied = deps.sleeps[0];
+          // The floor: the host's own instruction is never shorted, however small our
+          // own backoff would otherwise have been.
+          expect(applied).toBeGreaterThanOrEqual(retryAfterMs);
+          // Never a ceiling: our own backoff is never shorted either. A zero-valued
+          // instruction is a real "retry now", not an absent one - it must not read as
+          // `retryAfterMs ?? 0` collapsing to the same 0 an absent header would produce
+          // and accidentally overriding `clamped` downward.
+          expect(applied).toBeGreaterThanOrEqual(clamped);
+        },
+      ),
+      { numRuns: 200 },
+    );
   });
 
   it('re-throws the inner port error on exhaustion, preserving its redaction', async () => {

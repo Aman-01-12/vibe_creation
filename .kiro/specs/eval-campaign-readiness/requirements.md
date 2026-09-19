@@ -128,10 +128,11 @@ The gap has four parts, each measured on `.eval-runs/instrument-calibration` (1 
 1. WHEN a `Retry-After` value expressed in delta-seconds is read, THE Retry_After_Reader SHALL report that value converted to milliseconds.
 2. WHEN a `Retry-After` value expressed as an HTTP-date is read, THE Retry_After_Reader SHALL report the milliseconds remaining between the injected clock and that instant.
 3. IF a `Retry-After` value is absent, unparseable, or resolves to a negative duration, THEN THE Retry_After_Reader SHALL report no delay.
-4. THE Retry_After_Reader SHALL report a delay no greater than the retry policy's maximum delay.
+4. THE Retry_After_Reader SHALL report a delay no greater than the Json_Http_Port's honoured Retry-After ceiling, which is a build constant of 60 seconds.
 5. WHEN an attempt is classified retryable AND the reply carried a Retry-After delay, THE Transport_Retry SHALL wait at least the greater of that delay and its own jittered backoff, because a Retry-After value can legitimately resolve to zero while the host is still refusing.
 6. THE Json_Http_Port reply SHALL carry the parsed Retry-After delay and SHALL carry no other reply header field.
 7. THE Retry_After_Reader SHALL derive every reported value from the header text and an injected clock.
+8. WHEN a reply carried a Retry-After delay greater than the retry policy's maximum delay, THE Transport_Retry SHALL wait that delay up to the Json_Http_Port's honoured Retry-After ceiling, because the host's instruction is honoured as a floor applied after the policy clamp.
 
 ### Requirement 6: Backoff adapts to observed throttling rather than following a fixed schedule
 

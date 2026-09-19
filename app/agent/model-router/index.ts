@@ -89,13 +89,20 @@ export type {
   HostFetch,
   HostFetchInit,
   HostFetchResponse,
+  HostHeaderReader,
   JsonHttpPortFailureCode,
 } from './fetch-json-http-port.js';
 export {
   DEFAULT_MAX_REPLY_BYTES,
+  MAX_HONOURED_RETRY_AFTER_MS,
   JsonHttpPortError,
   createFetchJsonHttpPort,
 } from './fetch-json-http-port.js';
+
+// The boundary parser for the one reply header that travels upward: untrusted text in,
+// a bounded delay in milliseconds out. Exported because the retrying transport above
+// this layer honours that delay as a floor under its own backoff.
+export { parseRetryAfterMs } from './retry-after.js';
 export type {
   BedrockMantleTransportConfig,
   BedrockMantleTransportDeps,

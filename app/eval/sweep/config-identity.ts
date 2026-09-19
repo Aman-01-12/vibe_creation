@@ -22,10 +22,22 @@
 //   because it is the obvious stable choice and the digest is injected, so this module
 //   stays pure and testable.
 
+import { TESTBENCH_PROMPT_VERSION } from '@app/agent';
+
 import type { SweepConfig } from './config.js';
 
 /** How many hex characters of the digest the short form keeps (still 64 bits). */
 const SHORT_HASH_LENGTH = 16;
+
+/**
+ * The canonical JSON key `TESTBENCH_PROMPT_VERSION` is folded in under.
+ *
+ * Reserved rather than a `SweepConfig` field: the prompt version is not something a
+ * campaign author sets in a config file, it is a property of the code that ran. Prefixed
+ * so it cannot collide with a present or future `SweepConfig` field name, the same way
+ * `identityBearingFields` already reads `config`'s own keys verbatim.
+ */
+const TESTBENCH_PROMPT_VERSION_KEY = '__testbenchPromptVersion';
 
 /**
  * The config fields DELIBERATELY excluded from the experiment's identity.
@@ -47,10 +59,21 @@ const SHORT_HASH_LENGTH = 16;
  */
 const IDENTITY_EXCLUDED_FIELDS: readonly (keyof SweepConfig)[] = ['captureArtifacts'];
 
-/** The config's identity-bearing fields: everything except the excluded ones. */
+/**
+ * The config's identity-bearing fields: everything except the excluded ones, plus the
+ * prompt version the running code carries.
+ *
+ * `TESTBENCH_PROMPT_VERSION` is read directly from the import rather than taken as a
+ * parameter, so `sweepConfigHash`'s signature - and every call site - stays unchanged: a
+ * manifest or a resume check can never pass a stale or fabricated version, only the one
+ * the code that is actually running was built with.
+ */
 function identityBearingFields(config: SweepConfig): Record<string, unknown> {
   const excluded = new Set<string>(IDENTITY_EXCLUDED_FIELDS);
-  return Object.fromEntries(Object.entries(config).filter(([field]) => !excluded.has(field)));
+  const fields = Object.fromEntries(
+    Object.entries(config).filter(([field]) => !excluded.has(field)),
+  );
+  return { ...fields, [TESTBENCH_PROMPT_VERSION_KEY]: TESTBENCH_PROMPT_VERSION };
 }
 
 /** Canonical JSON of an arbitrary value: object keys sorted at every depth (pure). */

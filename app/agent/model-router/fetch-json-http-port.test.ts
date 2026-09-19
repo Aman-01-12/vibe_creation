@@ -12,20 +12,23 @@
 // body is bounded by a real streamed byte cap and an over-cap reply REJECTS rather than
 // arriving truncated; a caller abort and the port's own deadline both tear the
 // in-flight call down; a host with no `fetch` fails through the seam's documented
-// rejection channel; and no failure value carries the credential, the URL, the host, or
-// the provider's body.
+// rejection channel; a throttling host's `Retry-After` arrives as a bounded number of
+// milliseconds while every other reply header stays behind; and no failure value carries
+// the credential, the URL, the host, or the provider's body.
 
 import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_MAX_REPLY_BYTES,
   JsonHttpPortError,
+  MAX_HONOURED_RETRY_AFTER_MS,
   createFetchJsonHttpPort,
   type HostByteReader,
   type HostByteStream,
   type HostFetch,
   type HostFetchInit,
   type HostFetchResponse,
+  type HostHeaderReader,
 } from './fetch-json-http-port.js';
 import {
   newHostAbortController,
@@ -73,6 +76,42 @@ const FORBIDDEN_IN_FAILURE: readonly string[] = [
 
 /** Byte cap used by the bounding examples, small enough to reach with two chunks. */
 const SMALL_CAP_BYTES = 16;
+
+/** A `Retry-After` in the delta-seconds form, and the delay it must become. */
+const RETRY_AFTER_SECONDS = '30';
+const RETRY_AFTER_SECONDS_MS = 30_000;
+
+/**
+ * The RFC 7231 HTTP-date example, with its instant hardcoded.
+ *
+ * Hardcoded rather than derived with `Date.parse`, so the expected delay is a fixture
+ * rather than a second copy of the behaviour under test.
+ */
+const RETRY_AFTER_DATE = 'Sun, 06 Nov 1994 08:49:37 GMT';
+const RETRY_AFTER_DATE_MS = 784_111_777_000;
+
+/** The same date with its time zone stripped, which is not a legal HTTP-date. */
+const RETRY_AFTER_DATE_NO_ZONE = 'Sun, 06 Nov 1994 08:49:37';
+
+/** Where the injected clock sits in the accepted HTTP-date example, and so the delay. */
+const BEFORE_DATE_MS = 45_000;
+
+/** A day, as the header would ask for it and as milliseconds; far beyond the ceiling. */
+const A_DAY_SECONDS = 86_400;
+const A_DAY_MS = A_DAY_SECONDS * 1_000;
+
+/**
+ * The headers a throttling reply really carries.
+ *
+ * Deliberately credential-adjacent and fingerprintable beyond the one hint we act on:
+ * the containment example asserts that none of the rest travels upward.
+ */
+const THROTTLED_HEADERS: Readonly<Record<string, string>> = {
+  'Retry-After': RETRY_AFTER_SECONDS,
+  'Set-Cookie': `session=${SYNTHETIC_CREDENTIAL}`,
+  'WWW-Authenticate': 'Bearer realm="api.aws"',
+  'x-amzn-RequestId': '7f9c2b21-0b3e-4a11-9a3f-2f1d0c5e8a44',
+};
 
 /** ASCII bytes of a fixture body; every fixture string here is ASCII by construction. */
 function asciiBytes(text: string): Uint8Array {
@@ -146,6 +185,43 @@ class FakeStream implements HostByteStream {
   }
 }
 
+/**
+ * A by-name reader over a fixed header set, recording every name it was asked for.
+ *
+ * Case-insensitive, like the real `Headers` it stands in for, so an example pins the
+ * port's containment rather than its choice of spelling. The recorded names are the
+ * evidence that the port asks for ONE header instead of enumerating the set - a shape
+ * assertion on the reply alone cannot show what was read.
+ */
+class FakeHeaders implements HostHeaderReader {
+  /** Every name the port asked for, in order. */
+  readonly asked: string[] = [];
+  readonly #values: ReadonlyMap<string, string>;
+
+  constructor(values: Readonly<Record<string, string>>) {
+    this.#values = new Map(
+      Object.entries(values).map(([name, value]) => [name.toLowerCase(), value]),
+    );
+  }
+
+  get(name: string): string | null {
+    this.asked.push(name);
+    return this.#values.get(name.toLowerCase()) ?? null;
+  }
+}
+
+/**
+ * A header accessor that throws, as host-supplied code may.
+ *
+ * The `Retry-After` hint is advisory, so this must cost the caller the hint and nothing
+ * else: a reply the port already read is a paid model call.
+ */
+const THROWING_HEADERS: HostHeaderReader = {
+  get: () => {
+    throw new Error(HOST_DETAIL);
+  },
+};
+
 /** A fake `fetch`: records every call and answers from a script. Performs no I/O. */
 class FakeFetch {
   readonly calls: RecordedCall[] = [];
@@ -155,14 +231,25 @@ class FakeFetch {
     this.#reply = reply;
   }
 
-  /** A client that answers with the given status and body stream. */
-  static streaming(status: number, stream: HostByteStream | null): FakeFetch {
-    return new FakeFetch(() => Promise.resolve({ status, body: stream }));
+  /**
+   * A client that answers with the given status and body stream.
+   *
+   * `headers` is omitted rather than passed as undefined when absent, so the reply is
+   * indistinguishable from one built by a client that cannot read headers at all.
+   */
+  static streaming(
+    status: number,
+    stream: HostByteStream | null,
+    headers?: HostHeaderReader,
+  ): FakeFetch {
+    return new FakeFetch(() =>
+      Promise.resolve({ status, body: stream, ...(headers === undefined ? {} : { headers }) }),
+    );
   }
 
   /** A client that answers with the given status and a single-chunk body. */
-  static replying(status: number, body: string): FakeFetch {
-    return FakeFetch.streaming(status, new FakeStream([asciiBytes(body)]));
+  static replying(status: number, body: string, headers?: HostHeaderReader): FakeFetch {
+    return FakeFetch.streaming(status, new FakeStream([asciiBytes(body)]), headers);
   }
 
   /** A client that rejects with a host-naming error, as a real network failure does. */
@@ -228,6 +315,22 @@ function portOver(
     fetch: http.fetch,
     scheduleTimeout: deadline.schedule,
     ...(maxReplyBytes === undefined ? {} : { maxReplyBytes }),
+  });
+}
+
+/**
+ * Build the port over a fake client and a FIXED clock.
+ *
+ * The `Retry-After` HTTP-date form resolves against `deps.now`, so an example that
+ * measures one must own the instant; against the real clock the expected delay would be
+ * a function of when the suite happened to run. The deadline is still hand-fired, so no
+ * real timer is armed here either.
+ */
+function portWithClockAt(http: FakeFetch, nowMs: number): JsonHttpPort {
+  return createFetchJsonHttpPort({
+    fetch: http.fetch,
+    scheduleTimeout: new ManualDeadline().schedule,
+    now: () => nowMs,
   });
 }
 
@@ -433,5 +536,101 @@ describe('fetch json http port - fails safe and redacted', () => {
       expect(error.code).toBe('host-unsupported');
       expectRedacted(error);
     });
+  });
+});
+
+// -- The one reply header that travels upward ------------------------------
+
+describe('fetch json http port - the Retry-After instruction', () => {
+  it('surfaces a delta-seconds value as a delay in milliseconds', async () => {
+    const headers = new FakeHeaders({ 'Retry-After': RETRY_AFTER_SECONDS });
+    const http = FakeFetch.replying(429, REPLY_BODY, headers);
+    const response = await portWithClockAt(http, RETRY_AFTER_DATE_MS)(requestTo());
+
+    expect(response).toEqual({
+      status: 429,
+      body: REPLY_BODY,
+      retryAfterMs: RETRY_AFTER_SECONDS_MS,
+    });
+  });
+
+  it('measures an HTTP-date against the injected clock rather than the real one', async () => {
+    const headers = new FakeHeaders({ 'Retry-After': RETRY_AFTER_DATE });
+    const http = FakeFetch.replying(429, REPLY_BODY, headers);
+    const response = await portWithClockAt(http, RETRY_AFTER_DATE_MS - BEFORE_DATE_MS)(requestTo());
+
+    // The remaining duration, in milliseconds and positive: a subtraction the wrong way
+    // round would surface a negative here rather than somewhere in a later backoff.
+    expect(response.retryAfterMs).toBe(BEFORE_DATE_MS);
+  });
+
+  it('refuses an HTTP-date with no time zone, whose instant would vary by host', async () => {
+    // The clock sits a full day before the date, further than any zone offset, so the
+    // zone-less reading is in the FUTURE on every host. A port that accepted it would
+    // therefore report a delay HERE, rather than only on machines whose local offset
+    // happens to push the instant forward - which is what made this a real defect.
+    const headers = new FakeHeaders({ 'Retry-After': RETRY_AFTER_DATE_NO_ZONE });
+    const http = FakeFetch.replying(429, REPLY_BODY, headers);
+    const response = await portWithClockAt(http, RETRY_AFTER_DATE_MS - A_DAY_MS)(requestTo());
+
+    expect(response).not.toHaveProperty('retryAfterMs');
+  });
+
+  it('clamps a host asking for longer than the honoured ceiling', async () => {
+    const headers = new FakeHeaders({ 'Retry-After': String(A_DAY_SECONDS) });
+    const http = FakeFetch.replying(429, REPLY_BODY, headers);
+    const response = await portWithClockAt(http, RETRY_AFTER_DATE_MS)(requestTo());
+
+    // The ceiling is the denial-of-service guard: an obedient port with no clamp would
+    // park an overnight campaign for a day on one untrusted header.
+    expect(MAX_HONOURED_RETRY_AFTER_MS).toBeLessThan(A_DAY_MS);
+    expect(response.retryAfterMs).toBe(MAX_HONOURED_RETRY_AFTER_MS);
+  });
+
+  it('omits the delay when the reply carries no Retry-After', async () => {
+    const headers = new FakeHeaders({ 'Content-Type': 'application/json' });
+    const http = FakeFetch.replying(200, REPLY_BODY, headers);
+    const response = await portWithClockAt(http, RETRY_AFTER_DATE_MS)(requestTo());
+
+    // OMITTED, not reported as null: absence and null already mean the same thing to a
+    // caller, and a reply built by a header-reading port must stay identical to one
+    // built by a port that cannot read headers.
+    expect(response).toEqual({ status: 200, body: REPLY_BODY });
+    expect(response).not.toHaveProperty('retryAfterMs');
+  });
+
+  it('omits the delay when the reply exposes no headers at all', async () => {
+    const http = FakeFetch.replying(200, REPLY_BODY);
+    const response = await portWithClockAt(http, RETRY_AFTER_DATE_MS)(requestTo());
+
+    expect(response).toEqual({ status: 200, body: REPLY_BODY });
+    expect(response).not.toHaveProperty('retryAfterMs');
+  });
+
+  it('reports no instruction when the host accessor throws, keeping the reply it read', async () => {
+    const http = FakeFetch.replying(200, REPLY_BODY, THROWING_HEADERS);
+    const response = await portWithClockAt(http, RETRY_AFTER_DATE_MS)(requestTo());
+
+    // Resolves with the body. The hint is advisory, so a throw out of host code must not
+    // convert a reply we already read - a paid model call - into a transport failure and
+    // a pointless retry.
+    expect(response).toEqual({ status: 200, body: REPLY_BODY });
+  });
+
+  it('carries the parsed delay and no other reply header', async () => {
+    const headers = new FakeHeaders(THROTTLED_HEADERS);
+    const http = FakeFetch.replying(429, REPLY_BODY, headers);
+    const response = await portWithClockAt(http, RETRY_AFTER_DATE_MS)(requestTo());
+
+    // The FULL shape, so a field later added to `JsonHttpResponse` fails here instead of
+    // quietly carrying a `Set-Cookie`, a `WWW-Authenticate`, or a request id past a
+    // boundary built to let nothing about the call escape.
+    expect(response).toEqual({
+      status: 429,
+      body: REPLY_BODY,
+      retryAfterMs: RETRY_AFTER_SECONDS_MS,
+    });
+    // Asked for by name, exactly once: the port cannot have enumerated the set.
+    expect(headers.asked).toEqual(['Retry-After']);
   });
 });

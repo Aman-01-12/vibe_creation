@@ -105,6 +105,9 @@ export {
   type TransportRetryPolicy,
 } from './transport-retry.js';
 
+// The run-wide throttle observer: a slowdown, never a stop (see the breaker above for that).
+export { THROTTLE_GOVERNOR_LIMITS, ThrottleGovernor } from './throttle-governor.js';
+
 // The bounds that stop a run cleanly.
 export {
   DEFAULT_KILL_SWITCH_BOUNDS,

@@ -241,7 +241,11 @@ export function parseRetryAfterMs(
 
 Total, pure, and clock-injected. Both header forms are handled: an integer count of seconds, and an HTTP-date whose remaining milliseconds are measured against `nowMs`.
 Anything else - a float, a negative, a non-numeric string, an unparseable date, an absent header - returns `null`, which means "the host gave no instruction".
-A parsed delay is clamped to `maxDelayMs`, because the header is untrusted input and a hostile or misconfigured host must not be able to park a campaign for hours.
+A parsed delay is clamped, because the header is untrusted input and a hostile or misconfigured host must not be able to park a campaign for hours.
+The ceiling is whatever the caller passes, and the caller that decides the shipped behaviour is the port, which passes `MAX_HONOURED_RETRY_AFTER_MS` - a build constant of 60 seconds (`MS_PER_MINUTE`) declared in `app/agent/model-router/fetch-json-http-port.ts`.
+That ceiling is deliberately not the retry policy's maximum delay, for two reasons.
+`app/eval` imports `@app/agent` and never the reverse, so a port reaching upward for the eval layer's policy would invert the dependency direction the port exists to hold.
+And because `Transport_Retry` applies this delay as a floor AFTER its own clamp, a ceiling taken from that same policy could never raise the delay past that clamp, which would leave the floor as dead code.
 
 **`app/agent/model-router/json-http-port.ts`** widens the reply:
 
@@ -305,6 +309,7 @@ const delay = Math.max(clamped, retryAfterMs ?? 0);
 ```
 
 The Retry-After floor is applied AFTER the clamp, so a host asking for longer than our own ceiling is still obeyed, while our own adaptive growth stays inside the ceiling.
+The applied delay may therefore exceed `policy.maxDelayMs`, up to the port's `MAX_HONOURED_RETRY_AFTER_MS`, and that is the point rather than a leak: the policy ceiling bounds what WE choose to wait, while the port ceiling bounds what a host can ask us to wait.
 `createRetryingHttpPort` calls `governor.recordThrottle()` on a `retryable-status` outcome whose status is 429, which is the one signal that means "you are asking for too much" rather than "the server is unwell".
 
 **`app/eval/sweep/runner.ts`** changes `#drain` from a fixed pool to an **admission-gated** pool.
@@ -482,7 +487,10 @@ Properties serve as the bridge between human-readable specifications and machine
 
 ### Property 8: Retry-After rejects what it cannot read and clamps what it can
 
-*For any* header text, the parsed delay is either `null` or a number in the range `[0, maxDelayMs]`.
+*For any* header text, the parsed delay is either `null` or a number in the range `[0, MAX_HONOURED_RETRY_AFTER_MS]`.
+
+Pinned to the constant rather than left relative to the reader's `maxDelayMs` parameter, because the parameter is only ever as trustworthy as its caller, and what this property has to guarantee is a bound on the delay the system actually applies.
+The reader's contract is unchanged and still clamps to whatever ceiling it is handed; the constant is the ceiling the port hands it.
 
 **Validates: Requirements 5.3, 5.4**
 

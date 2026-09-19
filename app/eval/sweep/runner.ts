@@ -56,6 +56,19 @@ import {
   type SweepSampleRecord,
 } from './results-log.js';
 import { captureOneSample, scheduleOneSample } from './sample-scheduler.js';
+import type { ThrottleGovernor } from './throttle-governor.js';
+
+/**
+ * How often a withheld worker re-asks for admission, in milliseconds.
+ *
+ * A build constant, not a config field, for the same reason the governor's own bounds are
+ * build constants (see `./throttle-governor.ts`): it is throttle machinery, not an
+ * experiment parameter, and a config field here would enter the Config_Identity and orphan
+ * paid samples over a value that cannot move a measured number. Small enough that a
+ * recovering recommendation is picked up promptly against the governor's 60-second window,
+ * large enough that polling costs nothing measurable next to a model call.
+ */
+const ADMISSION_POLL_MS = 500;
 
 /**
  * Outcome statuses that mean the sample produced NO oracle verdict at all.
@@ -140,6 +153,22 @@ export interface SweepRunnerDeps {
   readonly killSwitch: SweepKillSwitch;
   /** Reports a sustained provider outage; the shared transport circuit breaker. */
   readonly outage: () => boolean;
+  /**
+   * The shared run-wide throttle observer; reports how many workers may hold a unit right
+   * now. Injected rather than built here for the same reason the kill switch and breaker
+   * are: it is shared with the transport layer that actually observes the throttle
+   * replies, and this run must react to the SAME observations rather than a second,
+   * disagreeing count.
+   */
+  readonly governor: ThrottleGovernor;
+  /**
+   * Delay used by a withheld worker before it re-asks for admission.
+   *
+   * Injected the way `now` is injected, so a test can advance admission without a real
+   * timer. Production passes a real `setTimeout`-backed delay; a test passes one that
+   * resolves immediately (or that observes the wait) and controls `governor` instead.
+   */
+  readonly waitMs: (ms: number) => Promise<void>;
   /** Wall clock for record timestamps and durations. */
   readonly now: () => number;
   /** Sanitized progress sink: the CLI prints these, a test collects them. */
@@ -290,7 +319,12 @@ function mutationProgress(mutation: MutationSampleCounts): string {
   );
 }
 
-function progressLine(unit: SampleUnit, record: SweepSampleRecord, position: string): string {
+function progressLine(
+  unit: SampleUnit,
+  record: SweepSampleRecord,
+  position: string,
+  recommendationSuffix: string,
+): string {
   const golden = record.goldenVerdict === null ? 'unjudged' : `golden=${record.goldenVerdict}`;
   const why = record.failureNote === null ? '' : ` (${record.failureNote})`;
   // An invalid instrument is the loudest thing in the line, because it means this sample's
@@ -306,7 +340,8 @@ function progressLine(unit: SampleUnit, record: SweepSampleRecord, position: str
   const mutation = record.mutation === null ? '' : mutationProgress(record.mutation);
   return (
     `${position} arm=${unit.armName} ${unit.problem.id} #${unit.sampleIndex} -> ` +
-    `${record.outcomeStatus} iters=${record.iterations} ${golden}${instrument}${mutation}${why}`
+    `${record.outcomeStatus} iters=${record.iterations} ${golden}${instrument}${mutation}${why}` +
+    recommendationSuffix
   );
 }
 
@@ -316,7 +351,31 @@ interface RunState {
   recorded: number;
   failed: number;
   stop: SweepStopReason | null;
+  /**
+   * Workers currently HOLDING a unit (mid-flight, between admission and persistence).
+   *
+   * This, not the number of `#worker` loops, is what admission is gated on: the loop
+   * count is the fixed ceiling started by `Promise.all`, while this count rises and falls
+   * as the governor's recommendation moves, which is what lets a withheld worker resume
+   * later instead of exiting for good.
+   */
+  holding: number;
 }
+
+/**
+ * What one admission request resolves to.
+ *
+ * A worker whose request resolves to `'exhausted'` is done for good - the plan has
+ * nothing left for it and it may safely return. A request that resolves to `'withheld'`
+ * means work remains but the recommendation has no room right now: the worker must wait
+ * and re-ask, never exit, or a unit at the tail of a reduced run would never be picked up
+ * once the recommendation recovers. Only an admitted request consumes a unit from the
+ * plan, so a withheld worker never holds a unit it then has to discard.
+ */
+type AdmissionResult =
+  | { readonly kind: 'admitted'; readonly unit: SampleUnit }
+  | { readonly kind: 'withheld' }
+  | { readonly kind: 'exhausted' };
 
 /**
  * The sweep runner.
@@ -350,9 +409,10 @@ export class SweepRunner {
     const skipped = planned.length - outstanding.length;
     this.#deps.onProgress(
       `planned ${planned.length} samples; ${skipped} already recorded for this config; ` +
-        `${outstanding.length} to run at concurrency ${this.#deps.config.concurrency}`,
+        `${outstanding.length} to run at concurrency ${this.#deps.config.concurrency}` +
+        this.#recommendationSuffix(),
     );
-    const state: RunState = { dispatched: 0, recorded: 0, failed: 0, stop: null };
+    const state: RunState = { dispatched: 0, recorded: 0, failed: 0, stop: null, holding: 0 };
     await this.#drain(outstanding, state);
     return {
       stopReason: state.stop ?? 'completed',
@@ -367,48 +427,91 @@ export class SweepRunner {
   /** Run the outstanding units through a fixed-size worker pool. */
   async #drain(units: readonly SampleUnit[], state: RunState): Promise<void> {
     let nextIndex = 0;
-    const takeNext = (): SampleUnit | null => {
+    // Consumes a unit from the plan ONLY when admission is granted (see `AdmissionResult`),
+    // so a withheld worker never holds a unit it would then have to leave unrecorded.
+    const requestAdmission = (): AdmissionResult => {
       const stop = this.#deps.killSwitch.shouldStop({
         dispatchedSamples: state.dispatched,
         providerOutage: this.#deps.outage(),
       });
       if (stop !== null) {
         state.stop = state.stop ?? stop;
-        return null;
+        return { kind: 'exhausted' };
       }
       if (state.stop !== null || nextIndex >= units.length) {
-        return null;
+        return { kind: 'exhausted' };
+      }
+      // The floor: admitting anyway when nothing is currently holding is what makes a
+      // reduction a slowdown rather than a deadlock, per Requirement 7.5 - zero active
+      // workers while work remains is the one state the recommendation may never produce.
+      const recommended = this.#deps.governor.recommendedConcurrency();
+      if (state.holding >= recommended && state.holding > 0) {
+        return { kind: 'withheld' };
       }
       const unit = units[nextIndex];
       nextIndex += 1;
-      return unit ?? null;
+      if (unit === undefined) {
+        return { kind: 'exhausted' };
+      }
+      return { kind: 'admitted', unit };
     };
     const workerCount = Math.max(1, Math.min(this.#deps.config.concurrency, units.length));
     await Promise.all(
-      Array.from({ length: workerCount }, () => this.#worker(takeNext, units.length, state)),
+      Array.from({ length: workerCount }, () =>
+        this.#worker(requestAdmission, units.length, state),
+      ),
     );
   }
 
-  /** One pool worker: take units until the plan is exhausted or a bound stops it. */
-  async #worker(takeNext: () => SampleUnit | null, total: number, state: RunState): Promise<void> {
+  /**
+   * One pool worker: hold at most one unit at a time, waiting and re-asking when the
+   * recommendation currently has no room, and exiting only once the plan is exhausted.
+   */
+  async #worker(
+    requestAdmission: () => AdmissionResult,
+    total: number,
+    state: RunState,
+  ): Promise<void> {
     for (;;) {
-      const unit = takeNext();
-      if (unit === null) {
+      const admission = requestAdmission();
+      if (admission.kind === 'exhausted') {
         return;
       }
-      state.dispatched += 1;
-      const position = `[${state.dispatched}/${total}]`;
-      const record = await this.#runUnit(unit);
-      if (NO_VERDICT_STATUSES.includes(record.outcomeStatus)) {
-        state.failed += 1;
+      if (admission.kind === 'withheld') {
+        await this.#deps.waitMs(ADMISSION_POLL_MS);
+        continue;
       }
-      const persisted = await this.#persist(record, state);
-      if (!persisted) {
-        return;
+      const unit = admission.unit;
+      state.holding += 1;
+      try {
+        state.dispatched += 1;
+        const position = `[${state.dispatched}/${total}]`;
+        const record = await this.#runUnit(unit);
+        if (NO_VERDICT_STATUSES.includes(record.outcomeStatus)) {
+          state.failed += 1;
+        }
+        const persisted = await this.#persist(record, state);
+        if (!persisted) {
+          return;
+        }
+        state.recorded += 1;
+        this.#deps.onProgress(progressLine(unit, record, position, this.#recommendationSuffix()));
+      } finally {
+        // Released whether the sample succeeded, failed, or the log write failed: a
+        // worker that is about to return must not leave a phantom holder behind, or the
+        // remaining workers would compute admission against a count nothing will ever
+        // decrement.
+        state.holding -= 1;
       }
-      state.recorded += 1;
-      this.#deps.onProgress(progressLine(unit, record, position));
     }
+  }
+
+  /** The `" (recommended concurrency N)"` suffix, or empty when there is nothing to report. */
+  #recommendationSuffix(): string {
+    const recommended = this.#deps.governor.recommendedConcurrency();
+    return recommended === this.#deps.config.concurrency
+      ? ''
+      : ` (recommended concurrency ${recommended})`;
   }
 
   /**

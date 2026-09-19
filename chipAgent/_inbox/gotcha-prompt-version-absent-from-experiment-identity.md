@@ -58,3 +58,38 @@ The measured precedent that a prompt change moves a measured number is already r
 - [[decision-diagnostic-only-config-fields-are-excluded-from-configHash]]
 - [[decision-instrument-invalid-samples-leave-the-pass-at-k-denominator]]
 - product-ece/ECE-CONTEXT-ENGINEERING.md (section 7, the certified configuration)
+
+# Closed (tasks 9.1-9.4, eval-campaign-readiness Track C)
+
+The fix landed exactly as scoped above, with no deviation:
+
+- `app/agent/roles/testbench/prompt-version.ts` added, exporting `TESTBENCH_PROMPT_VERSION = 2`
+  (2, not 1, because the prompt had already changed twice since the calibration run).
+- `config-identity.ts` reads it DIRECTLY under the reserved key `__testbenchPromptVersion`
+  (double-underscore prefix, no collision with any `SweepConfig` field); `sweepConfigHash`'s
+  signature is unchanged, so `cli.ts` needed no edit - confirming the read-it-directly choice
+  above was right.
+- `manifest.ts` reads it the same way for `testbenchPromptVersion`, mirroring
+  `corpus.pinnedCommit`.
+- Pinned with `app/agent/roles/testbench/prompt-version.test.ts` (task 9.2): a SHA-256 digest
+  of the prompt assembled for one fixed canonical fixture Spec (a 4-bit up-counter with reset),
+  compared against a LITERAL pinned constant - not a self-recomputation, so it actually fails if
+  a prompt rule changes without a version bump. Digest computed via a structural-cast
+  `crypto.subtle`/`TextEncoder` idiom (see `pattern-host-crypto-digest-structural-cast-no-node-types.md`),
+  because `app/agent`'s tsconfig has no ambient Node types and widening it collided with
+  `fetch-json-http-port.ts`'s existing global casts.
+- Trap 1 (predicted above) materialized exactly as expected: folding the version in moved
+  `SMOKE_RUN_CONFIG_HASH` from `552626a05719c93c` to `9320f400d18b0ccc` in
+  `app/eval/sweep/manifest.test.ts`. This was NOT a surprise - task 9.1 was explicitly scoped
+  to cause it and task 9.4 was explicitly scoped to fix the pin, with the reason recorded as a
+  4th bullet in that constant's history comment. Confirmed independently by observation (running
+  the test), not by trusting a pre-computed number.
+- Task 9.3 committed `app/eval/sweep/sweep.config.tbslice.json` - 15 real RTLLM problems
+  spanning arithmetic/control/memory/miscellaneous, deliberately not `accu` (the design that
+  motivated the whole Track C prompt fix) plus neighbours, so the rule is validated broadly
+  rather than overfit to the one problem that surfaced it. Its hash is separately pinned as
+  `TBSLICE_RUN_CONFIG_HASH = 5ede5f843ac2859b`.
+- Property 16 (a prompt-version fold-in changes the identity) and the manifest/identity
+  agreement property are both in `manifest.test.ts` now, fast-check based.
+- Full gate after task 9.4: `1613 passed | 6 skipped | 0 failed` - zero failures, closing out
+  the one expected carried-forward failure from task 9.1.
