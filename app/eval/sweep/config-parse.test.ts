@@ -9,6 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { MODEL_TASKS } from '@app/agent';
 import { describe, expect, it } from 'vitest';
 
 import { parseSweepConfig } from './config-parse.js';
@@ -79,7 +80,7 @@ describe('parseSweepConfig - a valid campaign', () => {
     const arm = config.arms[0];
     expect(arm?.name).toBe('glm-5');
     expect(arm === undefined ? [] : Object.values(arm.roleModels)).toEqual(
-      Array.from({ length: 5 }, () => 'zai.glm-5'),
+      Array.from({ length: MODEL_TASKS.length }, () => 'zai.glm-5'),
     );
     expect(arm === undefined ? false : isSingleModel(arm)).toBe(true);
   });
@@ -92,6 +93,7 @@ describe('parseSweepConfig - a valid campaign', () => {
             name: 'mixed',
             roleModels: {
               generation: 'zai.glm-5',
+              testbench: 'zai.glm-5',
               repair: 'qwen.qwen3-coder-30b-a3b-instruct',
               orchestration: 'zai.glm-5',
               teaching: 'zai.glm-5',
@@ -317,7 +319,10 @@ describe('parseSweepConfig - structural refusals', () => {
 });
 
 describe('arm cost knowledge', () => {
-  const tasks = ['generation', 'repair', 'orchestration', 'teaching', 'hard-planning'] as const;
+  // The real role order, imported rather than re-listed: a role added to `MODEL_TASKS`
+  // must widen this coverage automatically, or these tests would keep passing while
+  // silently ignoring the new role's model.
+  const tasks = MODEL_TASKS;
 
   it('is known only when every model the arm uses has a price', () => {
     const config = parseOk(
@@ -327,6 +332,7 @@ describe('arm cost knowledge', () => {
             name: 'mixed',
             roleModels: {
               generation: 'zai.glm-5',
+              testbench: 'zai.glm-5',
               repair: 'deepseek.v3.2',
               orchestration: 'zai.glm-5',
               teaching: 'zai.glm-5',

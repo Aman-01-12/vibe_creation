@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TESTBENCH_PROMPT_VERSION } from '@app/agent';
+import { INSTRUMENT_POLICY_VERSION, TESTBENCH_PROMPT_VERSION } from '@app/agent';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
@@ -30,7 +30,7 @@ import { assembleManifest, finalizeManifest, type ManifestFacts } from './manife
  * Pinned so a config change that would orphan already-paid-for samples fails a test instead of
  * quietly re-running them.
  *
- * It has MOVED three times, deliberately every time, because `negativeControl` can change
+ * It has MOVED four times, deliberately every time, because `negativeControl` can change
  * instrument validity and instrument validity decides the pass@k denominator - so two settings of
  * it are two experiments and must not pool samples:
  *   - when the mutation-based negative control shipped, adding the block at all;
@@ -51,10 +51,37 @@ import { assembleManifest, finalizeManifest, type ManifestFacts } from './manife
  *     prompt change is a different experiment from the one before it - two runs on either
  *     side of a prompt-rule change must never pool samples, exactly like the three prior
  *     moves.
+ *   - when `INSTRUMENT_POLICY_VERSION` was folded into the identity (task 10.1 of
+ *     instrument-precheck-and-attribution), because a change to the Verification_Loop's
+ *     instrument-admission behaviour is a different experiment from the one before it -
+ *     a run before the precheck/admission gate existed and a run after it answer a
+ *     different question about the same testbench, so their samples must never pool,
+ *     exactly like every prior move.
+ *   - when testbench generation became its OWN routable `ModelTask` rather than a case of
+ *     `generation`. Every arm's canonical role map gained a `testbench` entry - including
+ *     single-`model` arms, whose one id is filled into every role - so the experiment
+ *     identity changed. That is correct: a run that served testbench generation from the
+ *     `generation` model is a different experiment from one that served it from a
+ *     separately chosen model, and their samples must never pool.
+ *   - when `TESTBENCH_PROMPT_VERSION` went 2 -> 3, adding the Verilog-2001 DIALECT rule
+ *     and the RTL CONCURRENCY rule to the Testbench_Agent prompt. Both were derived from
+ *     the 495-sample stage1-screen-v2 campaign, where ~25% of instrument-invalid samples
+ *     never compiled and ~60% compiled and then rejected the reference design. A run
+ *     whose testbenches were written under the old prompt and one written under the new
+ *     prompt answer different questions about instrument validity, and instrument
+ *     validity decides the pass@k denominator - so their samples must never pool, for
+ *     exactly the reason the first prompt-version move above records.
+ *   - when `TESTBENCH_REPAIR_POLICY_VERSION` was folded into the identity (task 10.6 of
+ *     testbench-repair-loop), because a change to whether the Verification_Loop's
+ *     precheck-path repair and the Eval_Harness's positive-control-path repair are active
+ *     is a different experiment from the one before it - a run before the repair
+ *     capability existed and a run after it answer a different question about the same
+ *     testbench-generation failure, so their samples must never pool, exactly like every
+ *     prior move.
  * Nothing was orphaned in any case - the results schema bump had already refused every
  * pre-existing smoke record for the same reason.
  */
-const SMOKE_RUN_CONFIG_HASH = '9320f400d18b0ccc';
+const SMOKE_RUN_CONFIG_HASH = '0e45a8995706a637';
 
 /**
  * The config hash the committed campaign-readiness slice config currently produces.
@@ -62,8 +89,31 @@ const SMOKE_RUN_CONFIG_HASH = '9320f400d18b0ccc';
  * Pinned for the same resume-safety reason as `SMOKE_RUN_CONFIG_HASH` above: this file's
  * recorded samples (Requirement 9.6, 9.7) are keyed by this exact hash, so a config change
  * that would silently orphan them must fail a test instead of passing unnoticed.
+ *
+ * It has MOVED three times so far:
+ *   - when `INSTRUMENT_POLICY_VERSION` was folded into the identity (task 10.1 of
+ *     instrument-precheck-and-attribution) - the identical reason recorded in
+ *     `SMOKE_RUN_CONFIG_HASH`'s history above.
+ *   - when testbench generation became its OWN routable `ModelTask` rather than a case of
+ *     `generation`. This config's arm names one `model` for every role, so its canonical
+ *     role map still gained a `testbench` entry and the identity changed with it - for the
+ *     same reason recorded in `SMOKE_RUN_CONFIG_HASH`'s history: a run that served
+ *     testbench generation from the `generation` model is a different experiment from one
+ *     that served it from a separately chosen model.
+ *   - when `TESTBENCH_PROMPT_VERSION` went 2 -> 3, adding the Verilog-2001 DIALECT rule and
+ *     the RTL CONCURRENCY rule to the Testbench_Agent prompt - the identical reason
+ *     recorded in `SMOKE_RUN_CONFIG_HASH`'s history above. This slice exists to measure the
+ *     Testbench_Agent, so a prompt-rule change is the most consequential identity move it
+ *     can take: pooling samples across it would average the instrument after a fix with the
+ *     instrument before it.
+ *   - when `TESTBENCH_REPAIR_POLICY_VERSION` was folded into the identity (task 10.6 of
+ *     testbench-repair-loop) - the identical reason recorded in `SMOKE_RUN_CONFIG_HASH`'s
+ *     history above: a change to whether the Verification_Loop's precheck-path repair and
+ *     the Eval_Harness's positive-control-path repair are active is a different experiment
+ *     from the one before it, and a run before the repair capability existed must never
+ *     pool with a run after it.
  */
-const TBSLICE_RUN_CONFIG_HASH = '5ede5f843ac2859b';
+const TBSLICE_RUN_CONFIG_HASH = 'd098398e36cd3095';
 
 /** Lowercase hex SHA-256, the digest the CLI injects. */
 function sha256Hex(text: string): string {
@@ -81,6 +131,7 @@ function config(overrides: Record<string, unknown> = {}): SweepConfig {
         name: 'mixed',
         roleModels: {
           generation: 'zai.glm-5',
+          testbench: 'zai.glm-5',
           repair: 'deepseek.v3.2',
           orchestration: 'zai.glm-5',
           teaching: 'zai.glm-5',
@@ -432,6 +483,95 @@ describe('assembleManifest - the recorded prompt version agrees with the identit
         expect(built.testbenchPromptVersion).toBe(TESTBENCH_PROMPT_VERSION);
         expect(canonicalSweepConfigJson(sweep)).toContain(
           `"__testbenchPromptVersion":${TESTBENCH_PROMPT_VERSION}`,
+        );
+      }),
+      { numRuns: 25 },
+    );
+  });
+});
+
+describe('the config identity that scopes a resume - Property 13', () => {
+  // instrument-precheck-and-attribution, Property 13: The policy version changes the
+  // experiment identity.
+  //
+  // Validates: Requirements 7.5, 7.6, 7.7, 7.8
+  //
+  // Mirrors Property 16 above exactly, one constant over: `INSTRUMENT_POLICY_VERSION`
+  // is a fixed build-time constant, not a parameter `sweepConfigHash` accepts (task
+  // 10.1 deliberately left that signature unchanged per Requirement 7.7), so this
+  // cannot mutate the real constant and compare two live hashes. What it CAN assert,
+  // for arbitrarily generated configs, is the principle itself: the policy version the
+  // running code carries is embedded in the identity under its own reserved key
+  // (Requirement 7.5), and folding in a different value changes the hash (Requirement
+  // 7.6).
+
+  const digest = (text: string): string =>
+    [...text]
+      .reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) % 0xffffffff, 7)
+      .toString(16)
+      .padStart(20, '0');
+
+  it('folds the current INSTRUMENT_POLICY_VERSION into the canonical identity for any config', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 100 }), (seed) => {
+        const json = canonicalSweepConfigJson(config({ seed }));
+        expect(json).toContain('__instrumentPolicyVersion');
+        expect(json).toContain(String(INSTRUMENT_POLICY_VERSION));
+      }),
+      { numRuns: 25 },
+    );
+  });
+
+  it('gives two different policy versions two different hashes, for any config', () => {
+    // A more rigorous restatement of the same property, without mutating
+    // `INSTRUMENT_POLICY_VERSION` or changing `config-identity.ts`'s signature: this
+    // locally re-folds the identity the same way `identityBearingFields` does, once
+    // under the real version and once under a different one, and shows the two
+    // canonical forms - and therefore their hashes - disagree. That disagreement is
+    // exactly Requirement 7.6: an otherwise-identical config must not resume into
+    // records written under a different instrument-admission policy.
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 100 }), (seed) => {
+        const sweep = config({ seed });
+        const real = JSON.parse(canonicalSweepConfigJson(sweep)) as Record<string, unknown>;
+        const otherVersion = INSTRUMENT_POLICY_VERSION + 1;
+        const refolded = { ...real, __instrumentPolicyVersion: otherVersion };
+
+        expect(digest(JSON.stringify(refolded))).not.toBe(digest(JSON.stringify(real)));
+      }),
+      { numRuns: 25 },
+    );
+  });
+
+  it('is unchanged when nothing - including the policy version - differs, for any config', () => {
+    // The other half of Property 13's "for any sweep config" claim: two computations
+    // over the SAME config must agree, so a resume finds its own samples. Uses the real
+    // digest (not the local re-fold above) to exercise `sweepConfigHash` itself end to
+    // end, the same way the plain "unchanged for an identical config" test above does
+    // for the whole identity.
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 100 }), (seed) => {
+        const sweep = config({ seed });
+        expect(sweepConfigHash(sweep, digest)).toBe(sweepConfigHash({ ...sweep }, digest));
+      }),
+      { numRuns: 25 },
+    );
+  });
+});
+
+describe('assembleManifest - the recorded policy version agrees with the identity', () => {
+  it('never disagrees with the version folded into the config identity, for any config', () => {
+    // Task 10.1's guarantee, mirrored from the prompt-version property above: the
+    // manifest's `instrumentPolicyVersion` and the hash that scopes resume are two
+    // different reads of the SAME constant (Requirement 7.8), so they can never drift
+    // apart and quietly describe two different policies for one run.
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 100 }), (seed) => {
+        const sweep = config({ seed });
+        const built = manifest({});
+        expect(built.instrumentPolicyVersion).toBe(INSTRUMENT_POLICY_VERSION);
+        expect(canonicalSweepConfigJson(sweep)).toContain(
+          `"__instrumentPolicyVersion":${INSTRUMENT_POLICY_VERSION}`,
         );
       }),
       { numRuns: 25 },

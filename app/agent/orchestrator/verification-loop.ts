@@ -51,6 +51,7 @@ import {
   type BudgetStopReason,
   type FailingCase,
   type Json,
+  type ModuleInterface,
   type ModuleVersion,
   type Result,
   type Testbench,
@@ -80,6 +81,7 @@ import type {
 } from '../roles/generation/index.js';
 import type {
   GenerateTestbenchRequest,
+  RepairTestbenchRequest,
   TestbenchGenerationFailureReason,
   TestbenchGenerationOutcome,
 } from '../roles/testbench/index.js';
@@ -89,6 +91,9 @@ import type {
   GenerationAdmissionRequest,
   GenerationGateRefusal,
 } from './generation-gate.js';
+import type { InstrumentAdmission, InstrumentAdmissionDecision } from './instrument-admission.js';
+import { buildRepairHint } from './repair-hint.js';
+import { TestbenchPrecheck } from './testbench-precheck.js';
 
 /** The Trace `stageOrTool` name recorded for every oracle verdict this loop runs. */
 const VERIFICATION_STAGE = 'Verification_Loop' as const;
@@ -115,6 +120,11 @@ export interface CandidateGenerator {
 export interface IndependentTestbenchGenerator {
   generateTestbench(
     request: GenerateTestbenchRequest,
+    budget: SessionBudgetHandle,
+  ): Promise<TestbenchGenerationOutcome>;
+  /** The same repair primitive `TestbenchAgent#repairTestbench` exposes (Req 8.1, 8.2). */
+  repairTestbench(
+    request: RepairTestbenchRequest,
     budget: SessionBudgetHandle,
   ): Promise<TestbenchGenerationOutcome>;
 }
@@ -145,6 +155,19 @@ export interface VerificationLoopDeps {
   readonly recorder: ActionRecorder;
   /** The oracle-derived Trust_Labeler: the only path to a `Verified` label. */
   readonly trustLabeler: TrustLabeler;
+  /**
+   * The optional Instrument_Admission port, consulted at most once per run, after
+   * a Testbench_Precheck that did not attribute a build failure to the Testbench
+   * and before the first iteration (Req 4.1, 4.2).
+   *
+   * Absent by default: a runner that does not wire this sees behaviour identical
+   * to a run with the port wired but reporting `undecided` on every call (Req 4.9;
+   * design Property 7, "the only difference an admission port can make is a
+   * refusal"). The Testbench_Precheck itself needs no equivalent field - the loop
+   * already holds `#simulator` and builds its own `TestbenchPrecheck` from it, so
+   * that gate is unconditional rather than another optional dependency.
+   */
+  readonly instrumentAdmission?: InstrumentAdmission;
   /** ULID source for verification-result ids; defaults to `newUlid`. */
   readonly newId?: () => Ulid;
   /** Wall-clock source for recorded span timing; defaults to `Date.now`. */
@@ -153,7 +176,14 @@ export interface VerificationLoopDeps {
 
 /** Which step of the loop a progress event reports. */
 export type VerificationPhase =
-  'setup' | 'simulating' | 'repairing' | 'verified' | 'exhausted' | 'blocked' | 'setup-failed';
+  | 'setup'
+  | 'simulating'
+  | 'repairing'
+  | 'verified'
+  | 'exhausted'
+  | 'blocked'
+  | 'setup-failed'
+  | 'instrument-refused';
 
 /**
  * A non-blocking progress event streamed while the loop runs (Req 6.7, 17.6).
@@ -189,6 +219,29 @@ export interface TeachModeHandoff {
   readonly stopReason: BudgetStopReason;
 }
 
+/**
+ * Whether this sample's testbench reached a Testbench_Repair attempt, and whether
+ * that attempt produced the testbench the final verdict was decided from.
+ *
+ * A first-class, closed shape - never free text folded into an existing note or
+ * diagnostic (Req 4.2). Required (not optional) on every outcome that can reach a
+ * repairable point: an optional field defaults to absent at every existing
+ * construction site, and absent would have to be read as "not repaired" - a claim
+ * a future reader could not verify unless it were stated everywhere.
+ */
+export interface RepairProvenance {
+  /** Whether a Testbench_Repair was attempted for this sample, at EITHER trigger point. */
+  readonly attempted: boolean;
+  /**
+   * Whether the attempt's revised testbench is the one the final verdict was
+   * decided from (passed its re-check). `false` whenever `attempted` is `false`.
+   */
+  readonly accepted: boolean;
+}
+
+/** The unrepaired baseline every outcome starts from. */
+export const NO_REPAIR: RepairProvenance = Object.freeze({ attempted: false, accepted: false });
+
 /** The module reached a passing oracle verdict and was labeled `Verified` (Req 8.3). */
 export interface VerifiedModule {
   readonly status: 'verified';
@@ -202,6 +255,8 @@ export interface VerifiedModule {
   /** The Trace span that IS the ground truth for the `Verified` label. */
   readonly oracleSpanId: Ulid;
   readonly iterations: number;
+  /** Whether a Testbench_Repair was attempted/accepted for this sample (Req 4.2, 4.3). */
+  readonly repairProvenance: RepairProvenance;
 }
 
 /** The loop exhausted its budget without a pass; the module is `Unverified` (Req 8.5). */
@@ -218,6 +273,8 @@ export interface UnverifiedModule {
   readonly iterations: number;
   /** The seam handed to Teach_Mode for coaching on the failure (Req 8.5). */
   readonly teachMode: TeachModeHandoff;
+  /** Whether a Testbench_Repair was attempted/accepted for this sample (Req 4.2, 4.3). */
+  readonly repairProvenance: RepairProvenance;
 }
 
 /** The generation gate refused admission (intent unconfirmed / spec unapproved). */
@@ -261,11 +318,86 @@ export interface VerificationSetupFailed {
   readonly detail: string;
   /** The branchable cause; see `SetupFailureCause` for why `detail` cannot serve. */
   readonly cause: SetupFailureCause;
+  /**
+   * The rejected testbench draft, present only when `cause` is a coverage gap
+   * (Req 6.1, 6.2). Absent for every other setup failure, which has no draft to
+   * carry - a `generation-failed` testbench outcome never reached a draft either.
+   */
+  readonly rejectedTestbench?: string;
+  /** The required check names the draft omitted, present alongside `rejectedTestbench`. */
+  readonly missingCheckNames?: readonly string[];
+}
+
+/**
+ * WHY a Testbench was refused as an instrument, as a value rather than as prose.
+ *
+ * A closed enum with no free-text field, so the outcome it labels is structurally
+ * incapable of carrying a host, a path read from a diagnostic, or a stack trace -
+ * the same discipline `SetupFailureCause` already applies to setup.
+ */
+export type InstrumentRefusalReason =
+  /** The precheck, or an iteration, attributed a build failure to the Testbench. */
+  | 'testbench-build-failed'
+  /** The Instrument_Admission port refused it. */
+  | 'instrument-inadmissible';
+
+/**
+ * The result of `#admitInstrument`'s one admission step: the refusal to report
+ * (or `null` to proceed), the `RepairProvenance` for this step, and - only when a
+ * precheck-path repair was accepted - the revised testbench `#iterate` must
+ * continue with instead of `setup.testbench` (Req 8.3; design.md "#admitInstrument
+ * wiring").
+ *
+ * A repair can change WHICH testbench source `#iterate` continues with, which the
+ * pre-task-6.4 `{ reason; attributedFiles } | null` return could not express; this
+ * richer shape carries that fact alongside the refusal-or-null it replaces,
+ * rather than introducing a second, easily-desynchronized return value.
+ */
+interface InstrumentAdmissionResult {
+  readonly refusal: {
+    readonly reason: InstrumentRefusalReason;
+    readonly attributedFiles: readonly string[];
+  } | null;
+  readonly repairProvenance: RepairProvenance;
+  /** Present only when `repairProvenance.accepted` is `true`. */
+  readonly revisedTestbench?: {
+    readonly testbench: Testbench;
+    readonly testbenchFile: SourceFile;
+  };
+}
+
+/**
+ * The Testbench was refused as an instrument before, or without, an oracle verdict
+ * (Req 5.1-5.4).
+ *
+ * Carries the candidate and the Testbench so a refusal still surrenders a candidate
+ * to the independent judge (design "One finding that changes the shape of the
+ * solution"): the saving from refusing early is in the iterations spent, never in
+ * the evidence a refused sample yields. Carries no `VerificationResult`, no
+ * `SimulationVerdict`, and no oracle span id, because no oracle verdict was reached.
+ */
+export interface InstrumentRefusedModule {
+  readonly status: 'instrument-refused';
+  readonly reason: InstrumentRefusalReason;
+  /** `Unverified`, always: the artifact exists and no oracle passed it. */
+  readonly label: UnverifiedArtifact;
+  /** The candidate Loop_Setup produced - the field that keeps the golden denominator whole. */
+  readonly candidate: GeneratedCandidate;
+  /** The instrument that was refused, carried so the artifact names what was rejected. */
+  readonly testbench: Testbench;
+  /** Submitted files a build diagnostic named; a subset of the run's own paths. */
+  readonly attributedFiles: readonly string[];
+  /** Whether a Testbench_Repair was attempted/accepted for this sample (Req 4.2, 4.3). */
+  readonly repairProvenance: RepairProvenance;
 }
 
 /** The terminal result of a Verification_Loop run. */
 export type VerificationOutcome =
-  VerifiedModule | UnverifiedModule | VerificationBlocked | VerificationSetupFailed;
+  | VerifiedModule
+  | UnverifiedModule
+  | VerificationBlocked
+  | VerificationSetupFailed
+  | InstrumentRefusedModule;
 
 /** The prepared, admissible inputs for the iterate phase, or a terminal setup outcome. */
 type SetupResult =
@@ -299,6 +431,8 @@ export class VerificationLoop {
   readonly #simulator: SimulatorAdapter;
   readonly #recorder: ActionRecorder;
   readonly #trustLabeler: TrustLabeler;
+  readonly #instrumentAdmission: InstrumentAdmission | undefined;
+  readonly #precheck: TestbenchPrecheck;
   readonly #newId: () => Ulid;
   readonly #now: () => number;
 
@@ -309,6 +443,11 @@ export class VerificationLoop {
     this.#simulator = deps.simulator;
     this.#recorder = deps.recorder;
     this.#trustLabeler = deps.trustLabeler;
+    this.#instrumentAdmission = deps.instrumentAdmission;
+    // Built from the loop's own simulator, never injected: the gate is
+    // unconditional, so no caller can construct a VerificationLoop without it
+    // (design.md, component 5: "The precheck needs no injection").
+    this.#precheck = new TestbenchPrecheck(this.#simulator);
     this.#newId = deps.newId ?? newUlid;
     this.#now = deps.now ?? Date.now;
   }
@@ -384,11 +523,21 @@ export class VerificationLoop {
     if (testbench.status !== 'generated') {
       const detail = describeTestbenchFailure(testbench);
       const cause = testbenchFailureCause(testbench);
-      return {
-        ok: false,
+      const base = {
+        status: 'setup-failed',
+        reason: 'testbench-unavailable',
         detail,
-        outcome: { status: 'setup-failed', reason: 'testbench-unavailable', detail, cause },
-      };
+        cause,
+      } as const;
+      const outcome: VerificationSetupFailed =
+        testbench.status === 'coverage-incomplete'
+          ? {
+              ...base,
+              rejectedTestbench: testbench.source,
+              missingCheckNames: testbench.missingChecks.map((check) => check.name),
+            }
+          : base;
+      return { ok: false, detail, outcome };
     }
     if (!candidate.ok) {
       const detail = candidate.error.detail;
@@ -408,6 +557,135 @@ export class VerificationLoop {
   }
 
   /**
+   * Run the Testbench_Precheck and, only after it did not attribute a build
+   * failure to the Testbench, the optional Instrument_Admission port - both
+   * between Loop_Setup and the first iteration (Req 1.4, 4.1, 4.2; design.md
+   * "The new setup sequence").
+   *
+   * On a precheck build failure, attempts ONE Testbench_Repair before refusing
+   * (Req 1.1, 1.3, 3.1, 3.3, 3.4, 6.1-6.3, 8.3; design.md "The precheck-path
+   * sequence"): the diagnostic comes from `runWithDiagnostic`'s own captured
+   * `SimulationVerdict.stderr`, never a second simulate call, and a repair that
+   * produces a testbench is re-checked by the identical plain `run` a first
+   * draft is held to. Every failure mode on this branch - a re-check that still
+   * fails, `coverage-incomplete`/`generation-failed`, or a thrown
+   * `repairTestbench` call - finalizes the SAME refusal an unrepaired failure
+   * would have produced, differing only in `repairProvenance`.
+   *
+   * Returns the refusal to report (or `null` to proceed unchanged) alongside the
+   * `RepairProvenance` for this admission step, and - only when a precheck-path
+   * repair was accepted - the revised testbench/file `#iterate` must continue
+   * with instead of `setup.testbench`. Every non-repair path returns `NO_REPAIR`:
+   * a precheck outcome other than `testbench-build-failed` never reaches a
+   * repair attempt at all (Req 1.9), and the Instrument_Admission consultation
+   * below is entirely unchanged, degrading to `null` on a thrown or non-refusing
+   * `admit` call exactly as before this task (Req 4.5, 4.7, 4.8, 4.9).
+   */
+  async #admitInstrument(
+    testbench: Testbench,
+    testbenchFile: SourceFile,
+    moduleInterface: ModuleInterface,
+    limits: ResourceLimits,
+    context: ConfirmedGenerationContext,
+    budget: SessionBudgetHandle,
+  ): Promise<InstrumentAdmissionResult> {
+    const { outcome: precheckOutcome, diagnostic } = await this.#precheck.runWithDiagnostic(
+      testbenchFile,
+      moduleInterface,
+      limits,
+    );
+    if (precheckOutcome === 'testbench-build-failed') {
+      return this.#repairPrecheckFailure(
+        testbench,
+        moduleInterface,
+        limits,
+        context,
+        budget,
+        diagnostic,
+      );
+    }
+    if (precheckOutcome !== 'undecided' || this.#instrumentAdmission === undefined) {
+      return { refusal: null, repairProvenance: NO_REPAIR };
+    }
+
+    let decision: InstrumentAdmissionDecision;
+    try {
+      decision = await this.#instrumentAdmission.admit({ testbench: testbench.source });
+    } catch {
+      // An unavailable admission check leaves the loop's behaviour as it was
+      // before the port existed (Req 4.8).
+      return { refusal: null, repairProvenance: NO_REPAIR };
+    }
+    const refusal =
+      decision === 'inadmissible'
+        ? { reason: 'instrument-inadmissible' as const, attributedFiles: [] }
+        : null;
+    return { refusal, repairProvenance: NO_REPAIR };
+  }
+
+  /**
+   * Attempt ONE Testbench_Repair for a precheck build failure and re-check the
+   * revised source, or finalize the unrepaired refusal (Req 1.1, 1.3, 3.1, 3.3,
+   * 3.4, 5.1-5.3, 5.5, 6.1-6.3, 6.5, 8.3).
+   *
+   * The unrepaired refusal shape (`{ reason: 'testbench-build-failed',
+   * attributedFiles: [] }`) is identical on every path through this method: a
+   * repair that never produces a testbench, a repair call that throws (the
+   * injected `IndependentTestbenchGenerator` is a port a caller could implement
+   * to throw, even though `TestbenchAgent#repairTestbench` itself never does),
+   * and a repaired testbench that still fails its re-check. Only `accepted:
+   * true` differs in outcome shape, carrying the revised testbench forward for
+   * `#iterate` to continue with.
+   */
+  async #repairPrecheckFailure(
+    testbench: Testbench,
+    moduleInterface: ModuleInterface,
+    limits: ResourceLimits,
+    context: ConfirmedGenerationContext,
+    budget: SessionBudgetHandle,
+    diagnostic: string,
+  ): Promise<InstrumentAdmissionResult> {
+    const unrepairedRefusal = {
+      reason: 'testbench-build-failed' as const,
+      attributedFiles: [] as readonly string[],
+    };
+    const attemptedButDeclined: InstrumentAdmissionResult = {
+      refusal: unrepairedRefusal,
+      repairProvenance: { attempted: true, accepted: false },
+    };
+
+    const hint = buildRepairHint({ kind: 'precheck-build-failed', diagnostic });
+    const request: RepairTestbenchRequest = {
+      sessionId: context.sessionId,
+      spec: context.approvedSpec,
+      previousSource: testbench.source,
+      hint,
+    };
+
+    let repaired: TestbenchGenerationOutcome;
+    try {
+      repaired = await this.#testbench.repairTestbench(request, budget);
+    } catch {
+      return attemptedButDeclined;
+    }
+    if (repaired.status !== 'generated') {
+      return attemptedButDeclined;
+    }
+
+    const revisedTestbench = repaired.testbench;
+    const revisedTestbenchFile = toTestbenchFile(revisedTestbench, moduleInterface.moduleName);
+    const recheckOutcome = await this.#precheck.run(revisedTestbenchFile, moduleInterface, limits);
+    if (recheckOutcome === 'testbench-build-failed') {
+      return attemptedButDeclined;
+    }
+    return {
+      refusal: null,
+      repairProvenance: { attempted: true, accepted: true },
+      revisedTestbench: { testbench: revisedTestbench, testbenchFile: revisedTestbenchFile },
+    };
+  }
+
+  /**
    * Iterate simulate -> label-or-repair under the Session_Budget.
    *
    * The candidate we already hold is ALWAYS simulated before any budget check, so a
@@ -423,8 +701,45 @@ export class VerificationLoop {
     limits: ResourceLimits,
   ): AsyncGenerator<VerificationProgressEvent, VerificationOutcome, void> {
     const moduleName = genInput.spec.moduleInterface.moduleName;
-    const testbench = setup.testbench;
-    const testbenchFile = toTestbenchFile(testbench, moduleName);
+    let testbench = setup.testbench;
+    let testbenchFile = toTestbenchFile(testbench, moduleName);
+    const firstCandidate = setup.firstCandidate.candidate;
+
+    const admission = await this.#admitInstrument(
+      testbench,
+      testbenchFile,
+      genInput.spec.moduleInterface,
+      limits,
+      context,
+      budget,
+    );
+    if (admission.refusal !== null) {
+      const { refusal } = admission;
+      yield this.#progress(
+        0,
+        'instrument-refused',
+        refusal.reason === 'testbench-build-failed'
+          ? 'the independent testbench did not build against the spec-derived interface stub'
+          : 'the independent testbench was refused as a measuring instrument',
+      );
+      return {
+        status: 'instrument-refused',
+        reason: refusal.reason,
+        attributedFiles: refusal.attributedFiles,
+        label: unverified(firstCandidate.label.artifactRef),
+        candidate: firstCandidate,
+        testbench,
+        // task 6.4: a repair may have been attempted (and declined) on this
+        // precheck-path refusal; report exactly what happened.
+        repairProvenance: admission.repairProvenance,
+      };
+    }
+    if (admission.revisedTestbench !== undefined) {
+      // Accepted precheck-path repair (Req 3.3): the rest of this run continues
+      // against the REPAIRED testbench, never the original that failed its build.
+      ({ testbench, testbenchFile } = admission.revisedTestbench);
+    }
+
     let candidateEval = setup.firstCandidate;
     let iteration = 0;
 
@@ -456,6 +771,26 @@ export class VerificationLoop {
         }
         yield this.#progress(iteration, 'verified', 'oracle reported every check passing', 'pass');
         return this.#onPass(candidate, testbench, simulation, span, iteration);
+      }
+
+      if (refusedByTestbenchBuild(simulation, testbenchFile.path, `${moduleName}.v`)) {
+        yield this.#progress(
+          iteration,
+          'instrument-refused',
+          'the independent testbench failed to build mid-run; refusing rather than repairing RTL',
+          simulation.verdict,
+        );
+        return {
+          status: 'instrument-refused',
+          reason: 'testbench-build-failed',
+          attributedFiles: simulation.attributedFiles,
+          label: unverified(candidate.label.artifactRef),
+          candidate,
+          testbench,
+          // A mid-run testbench-build failure never repairs (Req 3.4 covers only
+          // the precheck path once wired in task 6.4); unrepaired for now.
+          repairProvenance: NO_REPAIR,
+        };
       }
 
       const failingCase = failingCaseOf(simulation);
@@ -555,6 +890,8 @@ export class VerificationLoop {
       simulation,
       oracleSpanId: span.id,
       iterations: iteration,
+      // No repair path exists yet (wired in task 6.4); every pass today is unrepaired.
+      repairProvenance: NO_REPAIR,
     };
   }
 
@@ -601,6 +938,8 @@ export class VerificationLoop {
       stopReason,
       iterations: iteration,
       teachMode,
+      // No repair path exists yet (wired in task 6.4); every exhaustion today is unrepaired.
+      repairProvenance: NO_REPAIR,
     };
   }
 
@@ -718,6 +1057,9 @@ export class VerificationLoop {
         diagnostics: refusal.diagnostics,
         stopReason: 'max-iterations',
       },
+      // A refused pass (unbindable provenance or incomplete evidence) never
+      // repairs; no repair path exists yet (wired in task 6.4).
+      repairProvenance: NO_REPAIR,
     };
   }
 
@@ -850,6 +1192,10 @@ function toolFailureVerdict(): SimulationVerdict {
     stderr: '',
     exitCode: null,
     resourceUsage: { wallMs: 0, maxMemMb: 0, cpuMs: 0 },
+    // No SandboxResult ever existed to classify: the simulator threw before the
+    // oracle produced one, so there is no cause to name beyond "the tool failed".
+    failureCause: 'tool-failed',
+    attributedFiles: [],
   };
 }
 
@@ -881,6 +1227,25 @@ function toTestbenchRequest(context: ConfirmedGenerationContext): GenerateTestbe
 /** The testbench workspace file, named from the trusted Spec module name. */
 function toTestbenchFile(testbench: Testbench, moduleName: string): SourceFile {
   return { path: `${moduleName}_tb.v`, contents: testbench.source };
+}
+
+/**
+ * Whether an iteration's simulation is a testbench-only build failure: the cause is
+ * `build-failed`, the attributed files hold the testbench path, and hold no RTL path
+ * (Req 2.7, 2.8, 2.9; design Property 4). A `build-failed` cause that also names the
+ * RTL path is a genuine RTL build failure (Req 2.8) and every other cause is left
+ * untouched (Req 2.9), so both fall through this predicate to `false`.
+ */
+function refusedByTestbenchBuild(
+  simulation: SimulationVerdict,
+  testbenchPath: string,
+  rtlPath: string,
+): boolean {
+  return (
+    simulation.failureCause === 'build-failed' &&
+    simulation.attributedFiles.includes(testbenchPath) &&
+    !simulation.attributedFiles.includes(rtlPath)
+  );
 }
 
 /** Charge one simulate iteration: no model tokens/cost, the run's wall clock. */

@@ -45,6 +45,7 @@ import {
   type ModelRequest,
   type ModelRouter,
   type ModelRouterFailure,
+  type ModelTask,
   type RoutedModelResult,
   type RoutingDiagnostics,
   type ScopeAssessment,
@@ -160,7 +161,7 @@ class ScriptedModelRouter implements ModelRouter {
   }
 
   invoke(
-    _task: 'generation' | 'repair' | 'orchestration' | 'teaching' | 'hard-planning',
+    _task: ModelTask,
     _request: ModelRequest,
     budget: SessionBudgetHandle,
   ): Promise<Result<RoutedModelResult, ModelRouterFailure>> {

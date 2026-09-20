@@ -91,20 +91,34 @@ function measuredReport(outcome: MutationProbeOutcome | null): MutationProbeRepo
 /**
  * Classify one control run into an instrument verdict.
  *
- * A pass is the ONLY outcome that proves the instrument. Everything else is invalid, and
- * the cause is separated by the shared rule in `./nonpass-cause.ts` because the three cases
- * point at different defects: a testbench that REJECTS the reference has an incorrect
- * expectation (the measured `right_shifter` case: it assumed a reset the interface never
- * declared), a testbench that does not BUILD with the reference has a structural mismatch,
- * and a run that produced nothing proves nothing.
+ * `simulation.failureCause` is read FIRST, before `classifyNonPass` ever runs, because a
+ * resource-bound kill (`timed-out`, `disk-capped`) is a fact about the SANDBOX, not about
+ * the testbench: the run was stopped mid-execution, so nothing was proven either way. The
+ * measured case this ordering exists to fix: `rtllm/arithmetic/multi_16bit` was recorded
+ * `TESTBENCH_REFERENCE_UNBUILDABLE` when its control run's own stderr said `workspace
+ * reached its 134217728-byte disk cap` - a residual diagnostic line left over from a kill,
+ * not evidence of a build failure. Short-circuiting on `failureCause` before `stderr` is
+ * ever read means that residue can never again be misread as `did-not-build`.
  *
- * Note that `SimulationVerdict.verdict === 'error'` collapses a compile failure, a timeout,
- * and a crash into one value, so the cause is re-derived from the diagnostics rather than
- * read off the verdict.
+ * `build-failed` is likewise read directly off `failureCause` rather than re-derived from
+ * `classifyNonPass`, since `failureCause` already IS the single owner of that distinction
+ * (`../../tools/simulator/failure-attribution.ts`).
+ *
+ * A pass is still the only outcome that proves the instrument. Every other case that is
+ * NOT already resolved by `failureCause` falls through to the shared rule in
+ * `./nonpass-cause.ts`, unchanged: a testbench that REJECTS the reference has an incorrect
+ * expectation (the measured `right_shifter` case: it assumed a reset the interface never
+ * declared), and a run that produced nothing proves nothing.
  */
 function classifyControlRun(simulation: SimulationVerdict): RecordedInstrumentVerdict {
+  if (simulation.failureCause === 'timed-out' || simulation.failureCause === 'disk-capped') {
+    return uncheckedInstrument('control-resource-exhausted');
+  }
   if (simulation.verdict === 'pass') {
     return VALID_INSTRUMENT;
+  }
+  if (simulation.failureCause === 'build-failed') {
+    return invalidInstrument('TESTBENCH_REFERENCE_UNBUILDABLE');
   }
   const cause = classifyNonPass({
     reportedFailure: simulation.verdict === 'fail',

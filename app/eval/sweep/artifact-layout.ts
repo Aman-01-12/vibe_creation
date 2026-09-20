@@ -10,6 +10,12 @@
 //   artifacts/<arm>/<problem>/sample-<index>/
 //     candidate.v            the final candidate RTL the model produced
 //     testbench.v            OUR spec-derived testbench, the thing under suspicion
+//     rejected-testbench.v   a Testbench draft Loop_Setup rejected for incomplete coverage
+//                            (HEAD kept when long); present only for that rejection, and
+//                            always distinct from the accepted `testbench.v` above
+//     pre-repair-testbench.v the testbench source a Testbench_Repair replaced (HEAD kept
+//                            when long); present only when a repair was accepted, and
+//                            distinct from both `testbench.v` and `rejected-testbench.v`
 //     simulator-stdout.txt   the oracle run's stdout (TAIL kept when long)
 //     simulator-stderr.txt   the oracle run's stderr (TAIL kept when long)
 //     control-stdout.txt     the POSITIVE CONTROL's stdout: our testbench versus the
@@ -21,6 +27,9 @@
 //   design's samples sit together, then by sample index. A file that is ABSENT was never
 //   produced (a `blocked` or `setup-failed` sample has no RTL and no testbench); absence
 //   is the record, and `outcome.json` names exactly which files exist.
+//
+//   `precheck-stderr.txt` is a RESERVED filename, not yet written by anything: see the
+//   comment on `ARTIFACT_FILENAMES.precheckStderr` below.
 //
 //   The control's files sit deliberately BESIDE `testbench.v`: when the instrument is
 //   invalid, the evidence for that finding and the testbench that caused it are in the same
@@ -42,6 +51,7 @@
 // Pure: no clock, no I/O, no randomness.
 
 import type { BudgetStopReason } from '@app/core';
+import type { RunFailureCause } from '@app/tools';
 
 import type {
   CapturedFailingCase,
@@ -91,17 +101,53 @@ export const ARTIFACTS_DIRNAME = 'artifacts';
  * mutant does not terminate). It is now a golden KILL, so a v6 `valid` requires strictly more
  * than a v5 `valid` did, and the `mutation` block gained `goldenTimeoutCount` and
  * `goldenErroredCount` while `nonCompilingCount` narrowed to genuine build failures.
+ *
+ * v6 -> v7: the document now carries the ATTRIBUTION data `instrument-precheck-and-attribution`
+ * introduces. `runFailureCause` and `attributedFiles` say WHY a run's verdict is `error` and
+ * WHICH submitted file a build diagnostic named; a v6 document has no way to say that beyond
+ * the collapsed `error` verdict, because `SimulationVerdict` did not carry the distinction yet.
+ * `missingCheckNames` (and `missingCheckNamesTruncated`) say WHICH required checks a rejected
+ * Testbench draft omitted, and a new sibling file, `rejected-testbench.v`, carries that draft's
+ * source; a v6 document has no way to say a Testbench was ever rejected for coverage at all,
+ * because Loop_Setup's rejection reached only the Trace before this spec. None of these fields
+ * has an honest default for a v6 document: a v6 run genuinely never captured this information,
+ * so there is nothing to migrate a v6 document's absence into - it is simply a smaller document
+ * about a run that could not have answered these questions.
+ *
+ * v7 -> v8: the document now carries `repairAttempted`, `repairAccepted`, and `repairHint`,
+ * mirroring what the results record gained in the v10 -> v11 bump of `RESULTS_SCHEMA_VERSION`.
+ * A new sibling artifact file, `pre-repair-testbench.v`, is now written when a repair was
+ * attempted. A v7 document has no way to say a repair was ever attempted, because the
+ * Testbench_Repair capability did not exist when it was written, so there is no honest default -
+ * the same "two new fields, not a redefinition" character as the v10 -> v11 results bump, not a
+ * redefinition of a field that already existed.
  */
-export const ARTIFACT_DOCUMENT_SCHEMA_VERSION = 6;
+export const ARTIFACT_DOCUMENT_SCHEMA_VERSION = 8;
 
 /** The filenames one sample's directory may hold. */
 export const ARTIFACT_FILENAMES = Object.freeze({
   candidateRtl: 'candidate.v',
   testbench: 'testbench.v',
+  /** A Testbench draft Loop_Setup rejected for incomplete coverage; never the accepted `testbench.v`. */
+  rejectedTestbench: 'rejected-testbench.v',
+  /**
+   * The testbench source a Testbench_Repair replaced; never the accepted `testbench.v`, and
+   * never the rejected-for-coverage `rejected-testbench.v` either - a repair replaces a
+   * testbench that already PASSED coverage, so the two rejection reasons are distinct.
+   */
+  preRepairTestbench: 'pre-repair-testbench.v',
   simulatorStdout: 'simulator-stdout.txt',
   simulatorStderr: 'simulator-stderr.txt',
   controlStdout: 'control-stdout.txt',
   controlStderr: 'control-stderr.txt',
+  /**
+   * RESERVED, NOT YET POPULATED: the Testbench_Precheck's own simulate call reduces its
+   * result to a bare `PrecheckOutcome` enum (`../../agent/orchestrator/testbench-precheck.js`)
+   * with no stderr passthrough, so nothing in the outcome chain reaching this layer carries a
+   * precheck-specific stderr today. The slot is reserved here for a future task or spec that
+   * threads that diagnostic through; `planArtifactFiles` below plans no file for it yet.
+   */
+  precheckStderr: 'precheck-stderr.txt',
   outcome: 'outcome.json',
 });
 
@@ -188,6 +234,8 @@ export function planArtifactFiles(artifacts: EvalSampleArtifacts): readonly Arti
   const planned = [
     sourcePlan(ARTIFACT_FILENAMES.candidateRtl, artifacts.candidateRtl),
     sourcePlan(ARTIFACT_FILENAMES.testbench, artifacts.testbenchSource),
+    sourcePlan(ARTIFACT_FILENAMES.rejectedTestbench, artifacts.rejectedTestbenchDraft),
+    sourcePlan(ARTIFACT_FILENAMES.preRepairTestbench, artifacts.rejectedPreRepairTestbench),
     diagnosticsPlan(ARTIFACT_FILENAMES.simulatorStdout, simulation?.stdout ?? null),
     diagnosticsPlan(ARTIFACT_FILENAMES.simulatorStderr, simulation?.stderr ?? null),
     diagnosticsPlan(ARTIFACT_FILENAMES.controlStdout, artifacts.controlStdout),
@@ -288,6 +336,30 @@ export interface ArtifactDocument {
   readonly mutation: MutationProbeReport | null;
   readonly simulation: CapturedSimulationSummary | null;
   readonly failingCase: CapturedFailingCase | null;
+  /** Why the run's own verdict is `error`, or `null`; see `EvalSampleArtifacts.runFailureCause`. */
+  readonly runFailureCause: RunFailureCause | null;
+  /** Submitted files a build diagnostic named; see `EvalSampleArtifacts.attributedFiles`. */
+  readonly attributedFiles: readonly string[];
+  /**
+   * The required check names a rejected Testbench draft omitted; see
+   * `EvalSampleArtifacts.missingCheckNames`. The draft's own SOURCE is never repeated here -
+   * it lives only in the sibling `rejected-testbench.v`, the same convention `testbenchSource`
+   * and the simulator streams already follow.
+   */
+  readonly missingCheckNames: readonly string[];
+  /** Whether `missingCheckNames` was cut at its cap. */
+  readonly missingCheckNamesTruncated: boolean;
+  /** Whether a Testbench_Repair was attempted for this sample; see `EvalSampleArtifacts.repairProvenance`. */
+  readonly repairAttempted: boolean;
+  /** Whether an attempted Testbench_Repair was accepted on re-check; see `EvalSampleArtifacts.repairProvenance`. */
+  readonly repairAccepted: boolean;
+  /**
+   * The Repair_Hint text handed to the Testbench_Agent, present iff `repairAttempted`; see
+   * `EvalSampleArtifacts.repairHint`. The pre-repair source itself is never repeated here -
+   * it lives only in the sibling `pre-repair-testbench.v`, the same convention
+   * `missingCheckNames` already follows for `rejected-testbench.v`.
+   */
+  readonly repairHint: string | null;
   /** Files written for this sample; a filename ABSENT here was never produced. */
   readonly files: Readonly<Record<string, ArtifactFileNote>>;
 }
@@ -333,6 +405,13 @@ export function artifactDocument(
     mutation: artifacts.mutation,
     simulation: artifacts.simulation === null ? null : simulationSummary(artifacts.simulation),
     failingCase: artifacts.failingCase,
+    runFailureCause: artifacts.runFailureCause,
+    attributedFiles: artifacts.attributedFiles,
+    missingCheckNames: artifacts.missingCheckNames,
+    missingCheckNamesTruncated: artifacts.missingCheckNamesTruncated,
+    repairAttempted: artifacts.repairProvenance.attempted,
+    repairAccepted: artifacts.repairProvenance.accepted,
+    repairHint: artifacts.repairHint,
     files: fileNotes(files),
   };
 }

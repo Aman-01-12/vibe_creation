@@ -10,7 +10,14 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { SetupFailureCause, VerificationOutcome, VerificationSetupFailed } from '@app/agent';
+import type {
+  SessionBudgetHandle,
+  SetupFailureCause,
+  TestbenchRepair,
+  VerificationOutcome,
+  VerificationSetupFailed,
+} from '@app/agent';
+import type { Ulid } from '@app/core';
 import type { ResourceLimits } from '@app/tools';
 
 import {
@@ -19,6 +26,13 @@ import {
   type EvalArtifactSink,
   type EvalSampleArtifacts,
 } from './artifact-sink.js';
+import { countsInGoldenPassAtK, summarizeGoldenPassAtK } from './golden-judge.js';
+import type { GoldenJudge, GoldenJudgeRequest, RecordedGoldenVerdict } from './golden-judge.js';
+import {
+  countsInPassAtK,
+  summarizeInstrumentControl,
+  type InstrumentControl,
+} from './instrument-control.js';
 import { createEvalHarness, type EvalHarnessDeps } from './harness.js';
 import {
   makeReproducibilityConfig,
@@ -63,6 +77,37 @@ function setupFailedOutcome(
   cause: SetupFailureCause = 'model-output-unusable',
 ): VerificationSetupFailed {
   return { status: 'setup-failed', reason: 'generation-unavailable', detail, cause };
+}
+
+/**
+ * An `instrument-refused` outcome, cast the same way `outcome()` is: only the fields
+ * `iterationsOf`, `candidateRtlOf`, and `testbenchSourceOf` actually read are supplied,
+ * because the real outcome also carries an `Unverified` label this test neither builds
+ * nor asserts on.
+ */
+function instrumentRefusedOutcome(): VerificationOutcome {
+  return {
+    status: 'instrument-refused',
+    reason: 'testbench-build-failed',
+    candidate: { rtl: 'module m(input a, output y); assign y = a; endmodule' },
+    testbench: { source: 'module m_tb; endmodule' },
+    attributedFiles: ['m_tb.v'],
+  } as unknown as VerificationOutcome;
+}
+
+/** A judge that always reports the given golden verdict, making no model call. */
+class FakeGoldenJudge implements GoldenJudge {
+  readonly requests: GoldenJudgeRequest[] = [];
+  readonly #verdict: RecordedGoldenVerdict;
+
+  constructor(verdict: RecordedGoldenVerdict) {
+    this.#verdict = verdict;
+  }
+
+  judge(request: GoldenJudgeRequest): Promise<RecordedGoldenVerdict | null> {
+    this.requests.push(request);
+    return Promise.resolve(this.#verdict);
+  }
 }
 
 /** One per-check verdict, as a simulation reports it. */
@@ -705,6 +750,120 @@ describe('EvalHarness.run - per-sample artifact capture', () => {
     }).run(FIXED_EVAL_SUBSET);
 
     expect(withSink).toEqual(without);
+  });
+});
+
+describe('EvalHarness.run - the per-sample Testbench_Repair factory (Req 5.1, 5.4, 5.5)', () => {
+  it('calls testbenchRepairFor once, with this sample own sessionId and its own budget', async () => {
+    // An `unverified` outcome carrying a testbench source and the unrepaired baseline, so
+    // `#repairIfTriggered` has a source to repair and has not already spent its one attempt.
+    const runner = new FakeLoopRunner(() => ({
+      kind: 'outcome',
+      outcome: {
+        status: 'unverified',
+        iterations: 2,
+        candidate: { rtl: 'module m(input a, output y); assign y = a; endmodule' },
+        testbench: { source: 'module m_tb; endmodule' },
+        simulation: { verdict: 'fail', checks: [], stdout: '', stderr: '', exitCode: 1 },
+        failingCase: null,
+        stopReason: 'max-iterations',
+        repairProvenance: { attempted: false, accepted: false },
+      } as unknown as VerificationOutcome,
+    }));
+    // A positive control reporting exactly one of the two triggering defects, so
+    // `#repairIfTriggered` finds a trigger and proceeds to consult the port.
+    const control: InstrumentControl = {
+      check: () =>
+        Promise.resolve({
+          verdict: { validity: 'invalid', defect: 'TESTBENCH_FAILED_REFERENCE' },
+          stdout: '',
+          stderr: '',
+          exitCode: 1,
+          mutation: null,
+        }),
+    };
+    const calls: { readonly sessionId: string; readonly budget: unknown }[] = [];
+    const stubPort: TestbenchRepair = {
+      repair: () => Promise.resolve({ decision: 'not-repaired' }),
+    };
+    const testbenchRepairFor = (sessionId: Ulid, budget: SessionBudgetHandle): TestbenchRepair => {
+      calls.push({ sessionId, budget });
+      return stubPort;
+    };
+
+    const evalHarness = harness({
+      loopRunner: runner,
+      instrumentControl: control,
+      testbenchRepairFor,
+      config: config({ sampleCount: 1 }),
+      ks: [1],
+    });
+    await evalHarness.run([firstProblem()]);
+
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    if (call === undefined) throw new Error('testbenchRepairFor was not called');
+    expect(typeof call.sessionId).toBe('string');
+    expect(call.sessionId.length).toBeGreaterThan(0);
+    // The SAME budget instance the sample's other model calls charge against, not a copy.
+    expect(call.budget).toHaveProperty('charge');
+    expect(call.budget).toHaveProperty('sessionId', call.sessionId);
+  });
+});
+
+describe('EvalHarness.run - the golden denominator is unharmed by a refusal (checkpoint 8, Req 3.8, 3.9, 5.6, 5.7, 8.8)', () => {
+  it('records zero iterations, a passing golden verdict, and excludes the sample from pass@k while including it in the golden denominator', async () => {
+    const runner = new FakeLoopRunner(() => ({
+      kind: 'outcome',
+      outcome: instrumentRefusedOutcome(),
+    }));
+    const judge = new FakeGoldenJudge({ kind: 'passed', failureCount: 0 });
+
+    const report = await harness({
+      loopRunner: runner,
+      goldenJudge: judge,
+      config: config({ sampleCount: 1 }),
+      ks: [1],
+    }).run([firstProblem()]);
+
+    const sample = report.problems[0]?.samples[0];
+    if (sample === undefined) throw new Error('no sample result');
+
+    // Req 3.8/5.6: an inadmissible instrument still yields iterations 0 and a
+    // recorded golden verdict, because the surrendered candidate was still judged.
+    expect(sample.iterations).toBe(0);
+    expect(sample.outcomeStatus).toBe('instrument-refused');
+    expect(sample.goldenVerdict).not.toBeNull();
+    expect(sample.goldenVerdict?.kind).toBe('passed');
+    expect(judge.requests).toHaveLength(1);
+
+    // Req 5.7/8.8: counted in the GOLDEN denominator, but NOT in the pass@k one - the
+    // production predicates decide this, not a re-derivation of their logic here.
+    expect(
+      countsInGoldenPassAtK({ outcomeStatus: sample.outcomeStatus, golden: sample.goldenVerdict }),
+    ).toBe(true);
+    expect(
+      countsInPassAtK({
+        outcomeStatus: sample.outcomeStatus,
+        instrument: sample.instrumentVerdict,
+      }),
+    ).toBe(false);
+
+    const goldenReport = summarizeGoldenPassAtK([
+      { outcomeStatus: sample.outcomeStatus, golden: sample.goldenVerdict },
+    ]);
+    expect(goldenReport.judgedSamples).toBe(1);
+    expect(goldenReport.goldenPassedSamples).toBe(1);
+
+    const instrumentReport = summarizeInstrumentControl([
+      {
+        outcomeStatus: sample.outcomeStatus,
+        instrument: sample.instrumentVerdict,
+        loopPassed: sample.passed,
+        golden: sample.goldenVerdict,
+      },
+    ]);
+    expect(instrumentReport.countedSamples).toBe(0);
   });
 });
 

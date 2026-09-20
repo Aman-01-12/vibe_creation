@@ -58,6 +58,7 @@ import {
   SandboxToolRunner,
   type RawRunCapture,
   type ResourceLimits,
+  type SandboxJob,
   type SimulatorAdapter,
 } from '@app/tools';
 import {
@@ -81,6 +82,7 @@ import {
   type IndependentTestbenchGenerator,
   type IntentSession,
   type IterationReVerifier,
+  type RepairTestbenchRequest,
   type IterationRequest,
   type IterationSpecUpdater,
   type LastVerifiedState,
@@ -314,6 +316,16 @@ class RecordingTestbench implements IndependentTestbenchGenerator {
     budget.charge({ tokens: 1, costCents: 1, wallClockMs: 1 });
     return Promise.resolve(this.#outcome);
   }
+  repairTestbench(
+    _request: RepairTestbenchRequest,
+    budget: SessionBudgetHandle,
+  ): Promise<TestbenchGenerationOutcome> {
+    budget.charge({ tokens: 1, costCents: 1, wallClockMs: 1 });
+    return Promise.resolve({
+      status: 'generation-failed',
+      failure: { reason: 'model-call-failed', detail: 'RecordingTestbench never repairs' },
+    });
+  }
 }
 
 /** A Spec updater that applies the change as a no-op (same interface: no regen needed). */
@@ -399,10 +411,27 @@ function failCapture(): RawRunCapture {
   };
 }
 
+/**
+ * The Testbench_Precheck's interface-stub filename (`testbench-precheck.ts`,
+ * `INTERFACE_STUB_MODULE`). The loop now runs an unconditional precheck simulate
+ * call before the first iteration, submitting this stub as "RTL". A sequenced
+ * fake must recognize and skip over that call so the scripted sequence still
+ * advances only on real iterations.
+ */
+const PRECHECK_STUB_PATH = 'testbench_precheck_stub.v';
+
+/** Whether a sandbox job is the precheck's own build check, not a real iteration. */
+function isPrecheckJob(job: SandboxJob): boolean {
+  return job.workspaceFiles.some((file) => file.path === PRECHECK_STUB_PATH);
+}
+
 /** A fake Simulator that plays scripted captures in sequence (last repeats). */
 function fakeSimulator(sequence: readonly (() => RawRunCapture)[]): SimulatorAdapter {
   let index = 0;
-  const runtime = new FakeSandboxRuntime(() => {
+  const runtime = new FakeSandboxRuntime((job) => {
+    if (isPrecheckJob(job)) {
+      return passCapture();
+    }
     const make = sequence[Math.min(index, sequence.length - 1)];
     index += 1;
     return (make ?? failCapture)();

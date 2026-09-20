@@ -85,6 +85,7 @@ import {
   type GenerationInput,
   type IndependentTestbenchGenerator,
   type IntentSession,
+  type RepairTestbenchRequest,
   type SessionBudgetHandle,
   type SpecApprovalReceipt,
   type SpecApprovalSink,
@@ -523,6 +524,19 @@ class SpecDerivedTestbenchGenerator implements IndependentTestbenchGenerator {
       coversCriteria: this.#spec.acceptanceCriteria.map((criterion) => criterion.id),
     };
     return Promise.resolve({ status: 'generated', testbench, checks: [] });
+  }
+  repairTestbench(
+    _request: RepairTestbenchRequest,
+    budget: SessionBudgetHandle,
+  ): Promise<TestbenchGenerationOutcome> {
+    budget.charge({ tokens: 8, costCents: MODEL_CALL_CENTS, wallClockMs: 1 });
+    return Promise.resolve({
+      status: 'generation-failed',
+      failure: {
+        reason: 'model-call-failed',
+        detail: 'SpecDerivedTestbenchGenerator never repairs',
+      },
+    });
   }
 }
 

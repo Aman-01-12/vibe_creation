@@ -90,6 +90,7 @@ import {
   type IndependentTestbenchGenerator,
   type IntentSession,
   type IterationOutcome,
+  type RepairTestbenchRequest,
   type IterationProgressEvent,
   type IterationReVerifier,
   type IterationRequest,
@@ -345,6 +346,16 @@ class SteadyTestbench implements IndependentTestbenchGenerator {
     budget.charge({ tokens: 1, costCents: 1, wallClockMs: 1 });
     return Promise.resolve(this.#outcome);
   }
+  repairTestbench(
+    _request: RepairTestbenchRequest,
+    budget: SessionBudgetHandle,
+  ): Promise<TestbenchGenerationOutcome> {
+    budget.charge({ tokens: 1, costCents: 1, wallClockMs: 1 });
+    return Promise.resolve({
+      status: 'generation-failed',
+      failure: { reason: 'model-call-failed', detail: 'SteadyTestbench never repairs' },
+    });
+  }
 }
 
 /** A confirmed generation context bound to a session id (fields the fakes ignore). */
@@ -418,6 +429,11 @@ class LoopReVerifier implements IterationReVerifier {
         return { status: 'blocked', reason: 'generation gate refused admission' };
       case 'setup-failed':
         return { status: 'setup-failed', reason: outcome.detail };
+      case 'instrument-refused':
+        // `ReVerifyResult` has no refused-instrument member (role-local, task-scoped
+        // separately); map onto `setup-failed`, the existing shape meaning "no usable
+        // module was produced", so this test fixture's switch stays exhaustive.
+        return { status: 'setup-failed', reason: outcome.reason };
       default: {
         const exhaustive: never = outcome;
         return exhaustive;

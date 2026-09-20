@@ -142,6 +142,23 @@ export {
   type EvalSampleArtifacts,
 } from './artifact-sink.js';
 
+// The eval-layer InstrumentAdmission adapter (Req 4.10, 4.11, 4.12, 4.15, 8.5; task 6.4):
+// backs the Instrument_Admission port the Verification_Loop consults with the SAME
+// InstrumentControl the harness already records through, so a sample's instrument is
+// measured once and described once.
+export { MemoizingInstrumentAdmission } from './instrument-admission.js';
+
+// The eval-layer TestbenchRepair adapter (Req 1.1-1.2, 5.1, 5.5, 6.1-6.4, 8.4; task 8.1,
+// 8.2): backs the TestbenchRepair port the Verification_Loop consults with the SAME
+// reference-design context the harness's InstrumentControl already ran against, plus
+// the total trigger-selection function that reads a recorded verdict into the closed
+// RepairTrigger set.
+export {
+  EvalTestbenchRepair,
+  repairTriggerFor,
+  type RepairingTestbenchGenerator,
+} from './testbench-repair.js';
+
 // The eval routing policy: every role on the bedrock-mantle host with a per-role
 // model id - the permutation knob for a per-role model bake-off (Req 15.10).
 export {

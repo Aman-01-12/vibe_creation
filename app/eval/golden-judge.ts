@@ -209,11 +209,22 @@ export interface GoldenPassAtKEligibility {
 const BEHAVIOURAL_GOLDEN_KINDS: readonly RecordedGoldenKind[] = Object.freeze(['passed', 'failed']);
 
 /**
+ * Whether the loop handed the judge a candidate at all: a reached oracle verdict, OR an
+ * `instrument-refused` stop, which still carries the Loop_Setup candidate (Req 5.7).
+ *
+ * The single owner of that widened condition, so `countsInGoldenPassAtK` and
+ * `summarizeGoldenPassAtK` read one definition instead of two copies that could drift.
+ */
+function hadCandidateToJudge(outcomeStatus: SampleOutcomeStatus): boolean {
+  return reachedOracleVerdict(outcomeStatus) || outcomeStatus === 'instrument-refused';
+}
+
+/**
  * THE GOLDEN DENOMINATOR INVARIANT.
  *
- * A sample counts in the golden denominator if and ONLY if the loop reached an oracle
- * verdict AND the independent judge returned a verdict on the candidate's BEHAVIOUR
- * (`passed` or `failed`).
+ * A sample counts in the golden denominator if and ONLY if EITHER the loop reached an
+ * oracle verdict OR the loop's outcome is `instrument-refused`, AND the independent judge
+ * returned a verdict on the candidate's BEHAVIOUR (`passed` or `failed`).
  *
  * Exactly one predicate decides this, and both the estimator and the reported exclusion
  * tally read it, so the denominator and the counts describing it cannot disagree - the
@@ -221,11 +232,10 @@ const BEHAVIOURAL_GOLDEN_KINDS: readonly RecordedGoldenKind[] = Object.freeze(['
  *
  * Why each exclusion, stated for the record:
  *
- *   NO ORACLE VERDICT (`blocked`, `setup-failed`, `runner-error`). The flow never handed the
- *   judge a candidate, so the judge never spoke. Counting it as a model failure would
- *   attribute a rate-limit burst, a harness crash, or a declined slot to the model. This is
- *   the same first condition `countsInPassAtK` applies, and it is read through the same
- *   `reachedOracleVerdict` owner rather than restated here.
+ *   NO ORACLE VERDICT AND NOT INSTRUMENT-REFUSED (`blocked`, `setup-failed`,
+ *   `runner-error`). The flow never handed the judge a candidate, so the judge never
+ *   spoke. Counting it as a model failure would attribute a rate-limit burst, a harness
+ *   crash, or a declined slot to the model.
  *
  *   NO GOLDEN OUTCOME AT ALL. Either no judge was wired, or the problem has no golden
  *   testbench (a Stage 0 quarantine). A sample nobody judged is not evidence about the model.
@@ -244,12 +254,22 @@ const BEHAVIOURAL_GOLDEN_KINDS: readonly RecordedGoldenKind[] = Object.freeze(['
  *   capability finding, and the same discipline the mutation control already applies to
  *   `goldenTimeoutMutants`.
  *
+ * `instrument-refused` IS A DELIBERATE INCLUSION, not an oversight (Req 5.7). It carries no
+ * oracle verdict - `reachedOracleVerdict` correctly reports `false` for it, and the pass@k
+ * denominator in `./instrument-control.ts` correctly excludes it, per Req 5.8, 5.9 - but it
+ * DOES carry the candidate Loop_Setup produced (`candidateRtlOf` returns it), because the
+ * loop stopped BEFORE any repair iteration ran, not before a candidate existed. That
+ * candidate is exactly what the independent judge can still score. Excluding it here would
+ * be the same mistake as excluding an instrument-invalid sample from the golden
+ * denominator: it would let saving budget on a broken instrument silently shrink the
+ * capability number the golden pass@k is meant to answer.
+ *
  * FAIL-SAFE IN ONE DIRECTION ONLY: every exclusion can only move a sample OUT of the golden
  * denominator, never in, and `RecordedGoldenKind` is closed, so there is no path by which an
  * unclassifiable run becomes a `passed`. That mirrors `unchecked` in the instrument control.
  */
 export function countsInGoldenPassAtK(sample: GoldenPassAtKEligibility): boolean {
-  if (!reachedOracleVerdict(sample.outcomeStatus)) {
+  if (!hadCandidateToJudge(sample.outcomeStatus)) {
     return false;
   }
   return sample.golden !== null && BEHAVIOURAL_GOLDEN_KINDS.includes(sample.golden.kind);
@@ -314,7 +334,8 @@ const GOLDEN_TALLY_FIELDS: Readonly<Record<RecordedGoldenKind, GoldenTallyField>
  * Aggregate per-sample eligibility facts into the golden report (pure).
  *
  * The three-way split is applied in the SAME order `countsInGoldenPassAtK` decides
- * membership in, so the two cannot disagree: no oracle verdict first, then no golden
+ * membership in, so the two cannot disagree: no candidate first (widened to admit
+ * `instrument-refused` alongside a reached oracle verdict, per Req 5.7), then no golden
  * outcome, then the kind's own bucket.
  */
 export function summarizeGoldenPassAtK(
@@ -330,7 +351,7 @@ export function summarizeGoldenPassAtK(
   let unjudgedSamples = 0;
   let goldenPassedSamples = 0;
   for (const sample of samples) {
-    if (!reachedOracleVerdict(sample.outcomeStatus)) {
+    if (!hadCandidateToJudge(sample.outcomeStatus)) {
       noCandidateSamples += 1;
       continue;
     }

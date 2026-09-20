@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { NO_REPAIR } from '@app/agent';
 import type { SessionBudgetHandle, VerificationOutcome } from '@app/agent';
 import type { ResourceLimits } from '@app/tools';
 import type { Spec } from '@app/core';
@@ -120,6 +121,11 @@ function declinedArtifacts(): EvalSampleArtifacts {
     candidateRtl: null,
     testbenchSource: null,
     simulation: null,
+    runFailureCause: null,
+    attributedFiles: [],
+    rejectedTestbenchDraft: null,
+    missingCheckNames: [],
+    missingCheckNamesTruncated: false,
     failingCase: null,
     goldenVerdict: null,
     // A declined slot produced no testbench, so there was no instrument to validate.
@@ -128,6 +134,9 @@ function declinedArtifacts(): EvalSampleArtifacts {
     controlStderr: null,
     controlExitCode: null,
     mutation: null,
+    repairProvenance: NO_REPAIR,
+    rejectedPreRepairTestbench: null,
+    repairHint: null,
   };
 }
 

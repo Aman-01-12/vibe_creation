@@ -149,6 +149,8 @@ function passVerdict(): SimulationVerdict {
     stderr: '',
     exitCode: 0,
     resourceUsage: { wallMs: 12, maxMemMb: 8, cpuMs: 10 },
+    failureCause: 'none',
+    attributedFiles: [],
   };
 }
 
@@ -162,6 +164,8 @@ function failVerdict(): SimulationVerdict {
     stderr: '',
     exitCode: 0,
     resourceUsage: { wallMs: 9, maxMemMb: 8, cpuMs: 7 },
+    failureCause: 'none',
+    attributedFiles: [],
   };
 }
 
@@ -175,6 +179,8 @@ function timeoutVerdict(): SimulationVerdict {
     stderr: '',
     exitCode: null,
     resourceUsage: { wallMs: LIMITS.wallMs, maxMemMb: 8, cpuMs: LIMITS.wallMs },
+    failureCause: 'timed-out',
+    attributedFiles: [],
   };
 }
 
@@ -188,6 +194,8 @@ function compileErrorVerdict(): SimulationVerdict {
     stderr: 'syntax error',
     exitCode: 2,
     resourceUsage: { wallMs: 4, maxMemMb: 8, cpuMs: 3 },
+    failureCause: 'build-failed',
+    attributedFiles: [],
   };
 }
 
@@ -201,6 +209,8 @@ function toolCrashVerdict(): SimulationVerdict {
     stderr: '',
     exitCode: null,
     resourceUsage: { wallMs: 3, maxMemMb: 8, cpuMs: 2 },
+    failureCause: 'tool-failed',
+    attributedFiles: [],
   };
 }
 

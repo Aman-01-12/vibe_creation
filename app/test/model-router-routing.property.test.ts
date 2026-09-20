@@ -7,8 +7,8 @@
 // (Requirements 12.2-12.5):
 //
 //   - Correct primary selection: for every ModelTask the FIRST attempted provider
-//     is the configured primary (generation/repair -> deepseek, orchestration/
-//     teaching -> gemini, hard-planning -> claude), checked against
+//     is the configured primary (generation/testbench/repair -> deepseek,
+//     orchestration/teaching -> gemini, hard-planning -> claude), checked against
 //     `primaryProviderFor`/`providerChainFor` and against the provider that
 //     actually produced the success when the primary succeeds (Req 12.2-12.4).
 //   - Bounded fallback, recorded: when a routed call fails/times out the router
@@ -32,6 +32,7 @@ import {
   FakeProviderAdapter,
   InMemorySessionBudgetHandle,
   InMemoryTracePersistence,
+  MODEL_TASKS,
   TaskModelRouter,
   TraceActionRecorder,
   primaryProviderFor,
@@ -48,15 +49,6 @@ import { isErr, isOk, makeSessionBudget, newUlid, ok, type Json, type Result } f
 import { propertyParameters, propertyTag } from '@app/test';
 
 // --- Domain-shaped generators ------------------------------------------------
-
-/** Every task the router routes; the routing table has an entry for each. */
-const MODEL_TASKS: readonly ModelTask[] = [
-  'generation',
-  'repair',
-  'orchestration',
-  'teaching',
-  'hard-planning',
-];
 
 /** The closed set of provider failure kinds a scripted call may report. */
 const FAILURE_KINDS: readonly ProviderFailureKind[] = [

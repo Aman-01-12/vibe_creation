@@ -33,8 +33,16 @@ import {
   summarizeGoldenPassAtK,
   type GoldenPassAtKEligibility,
   type RecordedGoldenKind,
+  type RecordedGoldenVerdict,
   type VerdictPair,
 } from './golden-judge.js';
+import {
+  countsInPassAtK,
+  reachedOracleVerdict,
+  uncheckedInstrument,
+  VALID_INSTRUMENT,
+  type RecordedInstrumentVerdict,
+} from './instrument-control.js';
 import type { SampleOutcomeStatus } from './report.js';
 
 /** A judged pair: the loop's verdict and the golden verdict. */
@@ -123,11 +131,22 @@ const OUTCOME_STATUSES: readonly SampleOutcomeStatus[] = Object.freeze([
   'unverified',
   'blocked',
   'setup-failed',
+  'instrument-refused',
   'runner-error',
 ]);
 
 /** The statuses that carry an oracle verdict, restated from Requirement 2.3's own words. */
 const VERDICT_BEARING: readonly SampleOutcomeStatus[] = Object.freeze(['verified', 'unverified']);
+
+/**
+ * The statuses whose sample still hands the judge a candidate, restated from Requirement
+ * 5.7's own words: a reached oracle verdict, OR `instrument-refused` (the loop stopped
+ * before repair but Loop_Setup's candidate still reached the judge).
+ */
+const HAD_CANDIDATE_TO_JUDGE: readonly SampleOutcomeStatus[] = Object.freeze([
+  ...VERDICT_BEARING,
+  'instrument-refused',
+]);
 
 /** One sample's eligibility facts; each test states only what it is about. */
 function eligibility(
@@ -174,6 +193,21 @@ describe('countsInGoldenPassAtK - the golden denominator membership rule', () =>
     }
   });
 
+  it('ADMITS an instrument-refused sample the independent judge PASSED (Req 5.7)', () => {
+    // The loop stopped before any repair iteration, but Loop_Setup's candidate still
+    // reached the judge. Excluding it here would shrink the capability number just because
+    // budget was saved on a broken instrument.
+    expect(countsInGoldenPassAtK(eligibility('instrument-refused', 'passed'))).toBe(true);
+  });
+
+  it('ADMITS an instrument-refused sample the independent judge FAILED (Req 5.7)', () => {
+    expect(countsInGoldenPassAtK(eligibility('instrument-refused', 'failed'))).toBe(true);
+  });
+
+  it('EXCLUDES an instrument-refused sample with no golden outcome at all', () => {
+    expect(countsInGoldenPassAtK(eligibility('instrument-refused', null))).toBe(false);
+  });
+
   it('EXCLUDES a sample with no golden outcome at all', () => {
     expect(countsInGoldenPassAtK(eligibility('verified', null))).toBe(false);
   });
@@ -199,7 +233,7 @@ describe('golden denominator - Property 1', () => {
         // The requirement restated in its own words, NOT by calling the predicate again.
         const expected = samples.filter(
           (sample) =>
-            VERDICT_BEARING.includes(sample.outcomeStatus) &&
+            HAD_CANDIDATE_TO_JUDGE.includes(sample.outcomeStatus) &&
             (sample.golden?.kind === 'passed' || sample.golden?.kind === 'failed'),
         ).length;
 
@@ -240,6 +274,107 @@ describe('golden denominator - Property 2', () => {
   });
 });
 
+/** Every instrument validity, so the truth table cannot miss a branch of either predicate. */
+const INSTRUMENT_VERDICTS: readonly RecordedInstrumentVerdict[] = Object.freeze([
+  VALID_INSTRUMENT,
+  uncheckedInstrument('control-absent'),
+]);
+
+/**
+ * One (status, instrument, golden) triple, in the shape both denominator predicates read.
+ *
+ * The two predicates each read only two of the three fields - `countsInPassAtK` never reads
+ * `golden`, `countsInGoldenPassAtK` never reads `instrument` - but Property 8 states a joint
+ * truth table over all three, so one fixture type and one builder serve both call sites.
+ */
+interface DenominatorTriple {
+  readonly outcomeStatus: SampleOutcomeStatus;
+  readonly instrument: RecordedInstrumentVerdict;
+  readonly golden: RecordedGoldenVerdict | null;
+}
+
+function triple(
+  outcomeStatus: SampleOutcomeStatus,
+  instrument: RecordedInstrumentVerdict,
+  goldenKind: RecordedGoldenKind | null,
+): DenominatorTriple {
+  return {
+    outcomeStatus,
+    instrument,
+    golden: goldenKind === null ? null : { kind: goldenKind, failureCount: null },
+  };
+}
+
+/**
+ * Every combination of status, instrument validity, and golden kind (`null` included).
+ *
+ * A cross product, not three independent arbitraries, for the same reason
+ * `eligibilityArbitrary` above is one: the case a naive implementation gets wrong is a
+ * specific COMBINATION (here, `instrument-refused` paired with a `valid` instrument and a
+ * `passed` golden outcome), and only an exhaustive product guarantees every run draws it.
+ */
+const denominatorTripleArbitrary = fc.constantFrom(
+  ...OUTCOME_STATUSES.flatMap((status) =>
+    INSTRUMENT_VERDICTS.flatMap((instrument) =>
+      [...RECORDED_GOLDEN_KINDS, null].map((kind) => triple(status, instrument, kind)),
+    ),
+  ),
+);
+
+describe('the denominator truth table - Property 8', () => {
+  // Feature: instrument-precheck-and-attribution, Property 8: The denominator truth table.
+  //
+  // For any triple of outcome status, instrument validity, and golden outcome, the pass@k
+  // denominator predicate reports the sample counted exactly when the status is
+  // verdict-bearing AND the validity is valid, and the golden denominator predicate reports
+  // the sample a member exactly when the status carries a candidate AND the golden outcome is
+  // passed or failed. An instrument-refused status is therefore never counted in pass@k and is
+  // a golden member whenever it was judged.
+  //
+  // Validates: Requirements 3.4, 5.7, 5.8, 5.9, 8.2, 8.3
+  it("matches both predicates to the requirements' own words, over every triple", () => {
+    fc.assert(
+      fc.property(fc.array(denominatorTripleArbitrary, { maxLength: 40 }), (triples) => {
+        for (const sample of triples) {
+          const inPassAtK = countsInPassAtK(sample);
+          const expectedInPassAtK =
+            reachedOracleVerdict(sample.outcomeStatus) && sample.instrument.validity === 'valid';
+          expect(inPassAtK).toBe(expectedInPassAtK);
+
+          const inGolden = countsInGoldenPassAtK(sample);
+          const expectedInGolden =
+            HAD_CANDIDATE_TO_JUDGE.includes(sample.outcomeStatus) &&
+            (sample.golden?.kind === 'passed' || sample.golden?.kind === 'failed');
+          expect(inGolden).toBe(expectedInGolden);
+        }
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it('never counts instrument-refused in pass@k, whatever its instrument validity says', () => {
+    // Req 5.8, 5.9: `instrument-refused` carries no oracle verdict, so it is excluded from
+    // pass@k by the FIRST half of the conjunction alone - even paired with a `valid`
+    // instrument, which is the one combination `reachedOracleVerdict` being unedited relies on.
+    for (const instrument of INSTRUMENT_VERDICTS) {
+      expect(countsInPassAtK(triple('instrument-refused', instrument, 'passed'))).toBe(false);
+    }
+  });
+
+  it('proves refused+valid+passed is a golden member AND a pass@k exclusion, together', () => {
+    // The design's exact final sentence: "An instrument-refused status is therefore never
+    // counted in pass@k and is a golden member whenever it was judged." Stated over the ONE
+    // triple that would read as vacuous if `instrument-refused` were dropped from either
+    // predicate's generator: a VALID instrument (so the pass@k exclusion cannot be blamed on
+    // instrument validity) paired with a `passed` golden outcome (so the golden admission
+    // cannot be blamed on `failed`'s own inclusion rule).
+    const sample = triple('instrument-refused', VALID_INSTRUMENT, 'passed');
+
+    expect(countsInPassAtK(sample)).toBe(false);
+    expect(countsInGoldenPassAtK(sample)).toBe(true);
+  });
+});
+
 describe('summarizeGoldenPassAtK - counting the exclusions', () => {
   it('counts each no-verdict cause under its own reason', () => {
     const report = summarizeGoldenPassAtK([
@@ -259,6 +394,14 @@ describe('summarizeGoldenPassAtK - counting the exclusions', () => {
     expect(report.timedOutSamples).toBe(1);
     expect(report.unjudgedSamples).toBe(1);
     expect(report.noCandidateSamples).toBe(1);
+  });
+
+  it('counts an instrument-refused sample as judged, not as no-candidate (Req 5.7)', () => {
+    const report = summarizeGoldenPassAtK([eligibility('instrument-refused', 'passed')]);
+
+    expect(report.judgedSamples).toBe(1);
+    expect(report.goldenPassedSamples).toBe(1);
+    expect(report.noCandidateSamples).toBe(0);
   });
 
   it('counts a no-oracle-verdict sample as no-candidate even when it carries a golden kind', () => {

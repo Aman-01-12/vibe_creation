@@ -17,7 +17,7 @@
 // pass - so the prompt and the parser cannot disagree. The reader remains the
 // guarantee: this is belt and braces, because a prompt is advice a model may ignore.
 //
-// Four rules here exist because each one, when broken, produces a testbench that
+// Five rules here exist because each one, when broken, produces a testbench that
 // rejects the KNOWN-GOOD reference design - an instrument that measures nothing:
 //
 //   - Expected values must be COMPUTED at simulation time from the driven stimulus.
@@ -25,6 +25,12 @@
 //     test that hand calculation instead of the design.
 //   - State anchoring must not re-anchor to a state the declared interface cannot
 //     reach (typically an assumed zero on a module with no reset port).
+//   - Concurrency is the MENTAL MODEL the three timing rules all depend on: a design
+//     is a concurrent machine observed, not a sequential program stepped. The two
+//     rules below say WHICH moment may be sampled and WHICH inputs form one result;
+//     this one says why a testbench that steps its own copy of the design forward
+//     cannot answer either question. It is the rule that stops the defect re-entering
+//     as a "wrong expected value" with no timing word anywhere in the failure line.
 //   - Timing must not assume a latency, pipeline depth, or valid cycle the Spec
 //     never stated; many events settle on one clock edge, so an assumed cycle
 //     offset rejects a correct design. That governs the OUTPUT side.
@@ -33,7 +39,7 @@
 //     which of the driven inputs form one result is unstated, and a testbench that
 //     picks a window asserts an input-side timing of its own.
 //
-// A fifth rule is here for the opposite failure. A testbench can pass the reference
+// A sixth rule is here for the opposite failure. A testbench can pass the reference
 // design and still measure nothing, by driving only values at which a broken design
 // and a correct one agree. The stimulus-adequacy rule requires stimulus that can
 // tell them apart. It is stated at the altitude of what a check must DISTINGUISH,
@@ -41,19 +47,33 @@
 // would teach the instrument the shape of its own exam, which is the circularity
 // this whole role exists to avoid.
 //
+// A seventh rule is upstream of all of them: the dialect rule. The six above assume
+// the testbench RUNS. A quarter of the measured instrument-invalid samples never
+// compiled, because the model wrote SystemVerilog into a file the oracle compiles as
+// Verilog-2001. That is not a style preference; it is a fact about the toolchain, and
+// it is stated as one.
+//
 // The anchoring, timing, input-window, and stimulus-adequacy rules are all
 // conditioned on the DECLARED interface, so the model is never told to reason about
-// a control this module does not have. See the vault notes
-// `gotcha-generated-testbench-assumes-a-reset-that-does-not-exist` and
-// `gotcha-three-testbench-defect-classes-that-fail-the-reference-design`.
+// a control this module does not have. The expected-value, concurrency, and dialect
+// rules depend on no interface detail and are therefore unconditional constants. See
+// the vault notes
+// `gotcha-generated-testbench-assumes-a-reset-that-does-not-exist`,
+// `gotcha-three-testbench-defect-classes-that-fail-the-reference-design`, and
+// `gotcha-stage1-screen-v2-dialect-and-concurrency-are-the-two-instrument-defects`.
 
 import type { ModelRequest } from '../../model-router/index.js';
+import type { DefectClass, RepairHint } from '../../orchestrator/repair-hint.js';
 
 import type { KnowledgePassage } from '@app/knowledge';
 import type { ClockingContract, ModuleInterface, PortDirection, Spec } from '@app/core';
 
 import { CHECK_KEYWORD } from './signalling.js';
-import type { RequiredCheck, TestbenchGenerationInput } from './types.js';
+import type {
+  RepairTestbenchModelInput,
+  RequiredCheck,
+  TestbenchGenerationInput,
+} from './types.js';
 
 /** Longest OKF passage excerpt included as a hint, to bound the prompt size. */
 const MAX_PASSAGE_CHARS = 800;
@@ -92,6 +112,80 @@ const EXPECTED_VALUE_RULE = [
   'compare the output against that. Do NOT write in a constant you worked out by',
   'hand while composing the testbench: for any arithmetic or bit-manipulation result',
   'the check then tests your own hand calculation rather than the design.',
+].join('\n');
+
+/**
+ * The Verilog-2001 declaration and dialect rule.
+ *
+ * Unconditional, because the dialect is a property of the TOOLCHAIN and not of any
+ * one interface: the oracle compiles the testbench as Verilog-2001 with Icarus
+ * Verilog, so a SystemVerilog idiom is a compile error for every design. This is the
+ * only rule here that fires BEFORE simulation - the other six presuppose a testbench
+ * that built - and it is the single largest measured cause of a non-building one.
+ *
+ * Stated as a fact about the compiler rather than as a style constraint, and pinned
+ * to the exact constructs the measurement actually caught (a declaration inside a
+ * procedural block or after an executable statement, a declaration with an initial
+ * value, an SV type keyword, an array-with-initializer, and a misplaced sign on a
+ * signed literal) rather than as a general "write portable Verilog", which a model
+ * can agree with and still violate line by line.
+ */
+const DIALECT_RULE = [
+  'Dialect: the testbench is compiled as Verilog-2001 by Icarus Verilog, which REJECTS',
+  'SystemVerilog constructs - a testbench that does not compile measures nothing.',
+  '  - Declare EVERY `reg`, `integer`, and array at MODULE scope, before the first',
+  '    `initial` or `always` block - never inside a procedural block, and never after an',
+  '    executable statement.',
+  '  - Give no declaration an initial value: write `reg [3:0] count;` at module scope and',
+  '    assign it inside an `initial` block, never `reg [3:0] count = 0;`.',
+  '  - Use `reg` and `wire` only; `logic`, `bit`, and every other SystemVerilog type is',
+  '    rejected.',
+  '  - There is no array-with-initializer syntax; assign array elements inside an',
+  '    `initial` block.',
+  "  - Write a signed literal with the sign in front: `-9'sd1`, never `9'sd-1`.",
+].join('\n');
+
+/**
+ * The RTL concurrency rule: a design is observed, not stepped.
+ *
+ * Unconditional, and deliberately a different KIND of rule from `describeTiming`.
+ * `describeTiming` and `describeInputWindow` answer WHICH moment may be sampled and
+ * WHICH inputs form one result; both are answers a model can follow to the letter and
+ * still get wrong, because they do not touch the belief underneath. This rule states
+ * the belief: hardware resolves many things at once on one edge, and an LLM trained on
+ * sequential imperative code reasons about it as a program it steps.
+ *
+ * Every measured sub-symptom is that one error wearing a different disguise - a
+ * post-reset value off by one instant, a shadow pipeline array indexed at a stage the
+ * testbench chose, a shadow state machine carrying its own phase, a chosen timeout
+ * bound. The failure lines mostly read `expected X, got Y` with no timing word in them
+ * at all, which is why two earlier prompt attempts at this class each saw it re-enter
+ * looking like a value bug. So the rule is aimed at the model, not at the moment.
+ *
+ * It composes with `describeStateAnchoring` rather than contradicting it. That rule
+ * permits carrying an expected value forward from a phase boundary or deriving it from
+ * the OBSERVED outputs; both are anchored in observation. What this rule forbids is
+ * re-deriving the design's own state transition and stepping it, which is anchored in
+ * nothing. The cross-reference is stated in the prompt text so the two cannot be read
+ * as a conflict.
+ */
+const CONCURRENCY_RULE = [
+  'Concurrency: a design is a CONCURRENT machine you OBSERVE, not a sequential program',
+  'you step. At one active clock edge every register updates at once, so a reset',
+  'deassertion and the first state update can resolve on the SAME edge - "reset ends,',
+  'THEN the behaviour starts" is wrong, and it rejects a correct design.',
+  'Do NOT build a second implementation of the design inside the testbench: no shadow',
+  'pipeline, no shadow state machine, no array you shift yourself to model latency, no',
+  "expected state you re-derive from the design's own transition and carry across clock",
+  'edges. (Carrying forward a value you OBSERVED, as the state-anchoring rule above',
+  'allows, is not that: what is forbidden is modelling the transition yourself.) A',
+  'disagreement between your model and the design is a disagreement between two',
+  'implementations, and yours is the unverified one.',
+  'Sample an output only in the SETTLED part of a clock period - after the active edge',
+  'has completed its nonblocking updates, at the opposite edge or after an explicit delay',
+  'past it - never in the same instant as the edge. Compute an expectation with blocking',
+  'assignments only over values you have ALREADY observed, never over values the design',
+  'is updating in the same time step.',
 ].join('\n');
 
 /**
@@ -179,8 +273,14 @@ function handshakeQualifierNames(
     .map((port) => port.name);
 }
 
-/** The declared single-bit outputs a testbench may legally wait on for timing. */
-function timingQualifierNames(moduleInterface: ModuleInterface): readonly string[] {
+/**
+ * The declared single-bit outputs a testbench may legally wait on for timing.
+ *
+ * Exported so `repair-hint.ts`'s `ruleFamilyFor` can read the identical interface
+ * fact this module's own `describeTiming` branches on, rather than re-deriving a
+ * second copy of the same handshake-keyword scan.
+ */
+export function timingQualifierNames(moduleInterface: ModuleInterface): readonly string[] {
   return handshakeQualifierNames(moduleInterface, 'output');
 }
 
@@ -189,8 +289,9 @@ function timingQualifierNames(moduleInterface: ModuleInterface): readonly string
  *
  * The input-side peer of `timingQualifierNames`, and the only signal from which a
  * testbench may legally derive which of the inputs it drove belong to one result.
+ * Exported for the same reason `timingQualifierNames` is.
  */
-function inputQualifierNames(moduleInterface: ModuleInterface): readonly string[] {
+export function inputQualifierNames(moduleInterface: ModuleInterface): readonly string[] {
   return handshakeQualifierNames(moduleInterface, 'input');
 }
 
@@ -280,8 +381,11 @@ function describeInputWindow(moduleInterface: ModuleInterface): string {
  * derives them, so "is there a vector to index" is answered by the declaration rather
  * than guessed from a name. A single-bit interface has no index to walk, and telling
  * the model to walk one would assert a structure the ports cannot justify.
+ *
+ * Exported for the same reason `timingQualifierNames` is: `repair-hint.ts`'s
+ * `ruleFamilyFor` reads this same fact rather than re-deriving it.
  */
-function declaresVectorDataPort(moduleInterface: ModuleInterface): boolean {
+export function declaresVectorDataPort(moduleInterface: ModuleInterface): boolean {
   const { clockName, resetName } = moduleInterface.clocking;
   return moduleInterface.ports.some(
     (port) => port.name !== clockName && port.name !== resetName && port.width > 1,
@@ -338,6 +442,17 @@ function describeStimulusAdequacy(moduleInterface: ModuleInterface): string {
   ].join('\n');
 }
 
+/**
+ * The output-contract instruction shared by first-draft generation and repair.
+ *
+ * Factored out so both prompts state the identical contract by construction
+ * rather than by two hand-synchronized copies: the model returns a JSON object
+ * with exactly one field, `"source"`, holding the complete Verilog testbench.
+ */
+const OUTPUT_CONTRACT_INSTRUCTION =
+  'Return a JSON object with exactly one field: "source", whose value is the\n' +
+  'complete Verilog testbench as a string. Return nothing else.';
+
 /** Render each required check as a naming instruction traceable to its source. */
 function describeRequiredChecks(checks: readonly RequiredCheck[]): string {
   return checks
@@ -357,8 +472,15 @@ function describeOkfHints(passages: readonly KnowledgePassage[]): string {
 
 /**
  * The instruction block that pins the output contract, the independence rule, and
- * the expected-value, state-anchoring, timing, input-window, and stimulus-adequacy
- * rules for the interface actually declared by the Spec.
+ * the expected-value, state-anchoring, concurrency, timing, input-window,
+ * stimulus-adequacy, and dialect rules for the interface actually declared by the
+ * Spec.
+ *
+ * Order is deliberate. The concurrency rule sits between state anchoring and the two
+ * moment-choosing rules because it is the mental model those two rest on, and because
+ * it cross-references the anchoring rule immediately above it. The dialect rule sits
+ * last among the rules, next to the output contract, because it is the only one about
+ * how the file must be WRITTEN rather than about what it must assert.
  */
 function instructions(checks: readonly RequiredCheck[], moduleInterface: ModuleInterface): string {
   return [
@@ -376,11 +498,15 @@ function instructions(checks: readonly RequiredCheck[], moduleInterface: ModuleI
     '',
     describeStateAnchoring(moduleInterface.clocking),
     '',
+    CONCURRENCY_RULE,
+    '',
     describeTiming(moduleInterface),
     '',
     describeInputWindow(moduleInterface),
     '',
     describeStimulusAdequacy(moduleInterface),
+    '',
+    DIALECT_RULE,
     '',
     'For EACH required check below, print exactly one line to standard output of',
     `the form "${CHECK_KEYWORD} <name> PASS" or "${CHECK_KEYWORD} <name> FAIL",`,
@@ -394,8 +520,7 @@ function instructions(checks: readonly RequiredCheck[], moduleInterface: ModuleI
     'Required checks (emit every one, with its exact name):',
     describeRequiredChecks(checks),
     '',
-    'Return a JSON object with exactly one field: "source", whose value is the',
-    'complete Verilog testbench as a string. Return nothing else.',
+    OUTPUT_CONTRACT_INSTRUCTION,
   ].join('\n');
 }
 
@@ -428,6 +553,136 @@ export function buildTestbenchModelInput(
     '',
     'OKF hints (advisory only, never authority over correctness):',
     describeOkfHints(input.okfPassages),
+  ].join('\n');
+  return { prompt };
+}
+
+/**
+ * One model-facing hint sentence per `DefectClass` member (Req 2.3, 2.9).
+ *
+ * Each sentence reuses the SAME wording register as this file's own rule
+ * descriptions, and references the named rule above by name where doing so is
+ * safe: that rule's own text is unconditional or interface-derived, carrying no
+ * RTL or reference-derived content, so pointing the model back at it adds no
+ * new channel for the reference's observed behaviour to enter (Req 2.4-2.6).
+ * `unclassified` is deliberately generic: this vocabulary member exists for a
+ * functional failure the closed set cannot name, so nothing more specific can
+ * honestly be said.
+ */
+const DEFECT_CLASS_HINTS: Readonly<Record<DefectClass, string>> = {
+  'state-anchoring': [
+    'This failure suggests your testbench re-anchored an expected value to a',
+    'state the declared interface cannot reach - see the State anchoring rule',
+    'above.',
+  ].join('\n'),
+  concurrency: [
+    'This failure suggests your testbench stepped a shadow implementation of the',
+    'design instead of observing it, or sampled an output before it settled -',
+    'see the Concurrency rule above.',
+  ].join('\n'),
+  timing: [
+    'This failure suggests your testbench assumed a latency, pipeline depth, or',
+    'valid cycle the Spec does not state - see the Timing rule above.',
+  ].join('\n'),
+  'input-window': [
+    'This failure suggests your testbench assumed which of the driven inputs',
+    'form one result, rather than deriving that from the Spec - see the Input',
+    'windows rule above.',
+  ].join('\n'),
+  'stimulus-adequacy': [
+    'This failure suggests your stimulus never reached a value that would',
+    'distinguish a correct design from a wrong one - see the Stimulus adequacy',
+    'rule above.',
+  ].join('\n'),
+  unclassified: [
+    'This failure does not match a known defect class; re-read the Spec goal,',
+    'constraints, and module interface below and reconsider the testbench as a',
+    'whole.',
+  ].join('\n'),
+};
+
+/**
+ * Render a Repair_Hint as prompt text (Req 2.1, 2.2, 2.3, 2.9).
+ *
+ * A `build-diagnostic` hint includes the toolchain's own diagnostic text
+ * verbatim, under a clear label. A `classified-functional` hint includes only
+ * the failing check's name and the one-sentence, defect-class-specific
+ * translation above - never the reference's observed value, a diff, or its
+ * source, none of which this type can even carry (Req 2.4, 2.5, 2.6).
+ *
+ * Exported (testbench-repair-loop task 8.7) so `app/eval/artifact-sink.ts`'s
+ * `EvalSampleArtifacts.repairHint` renders the identical text the model itself
+ * was shown, rather than a second, independently-drifting rendering of the
+ * same `RepairHint`.
+ */
+export function describeRepairHint(hint: RepairHint): string {
+  if (hint.kind === 'build-diagnostic') {
+    return ['The testbench did not compile. Toolchain diagnostic:', hint.diagnostic].join('\n');
+  }
+  return [
+    `The check "${hint.failingCheckName}" failed.`,
+    DEFECT_CLASS_HINTS[hint.defectClass],
+  ].join('\n');
+}
+
+/**
+ * The instruction block for a repair attempt: revise the given testbench so it
+ * no longer exhibits the hinted failure, returning the same output contract a
+ * first draft uses.
+ *
+ * Deliberately does not restate the five first-draft rules
+ * (`describeStateAnchoring`, `describeTiming`, `describeInputWindow`,
+ * `describeStimulusAdequacy`, `EXPECTED_VALUE_RULE`, `CONCURRENCY_RULE`,
+ * `DIALECT_RULE`): the model already has a testbench that mostly satisfies
+ * them, and restating all seven here would push the hint's specific,
+ * measured signal off the altitude a repair call is for. The hint text above
+ * cross-references the relevant rule by name; the model is not left without
+ * it.
+ */
+function repairInstructions(hint: RepairHint): string {
+  return [
+    'You are the Testbench_Agent for a single Verilog module, revising a',
+    'testbench you previously wrote for this Spec. You are given ONLY the',
+    'approved Spec, your previous testbench source, and a hint about what',
+    'failed. You are NOT given any implementation or RTL, and you must NOT',
+    'assume one: compute every expected value independently from the Spec,',
+    'never from an implementation.',
+    '',
+    describeRepairHint(hint),
+    '',
+    'Revise the testbench to fix this failure while continuing to instantiate',
+    'the module by its interface, drive the same stimulus categories as',
+    'before, and verify every acceptance criterion. Do not remove or rename',
+    'any `CHECK <name>` line already present.',
+    '',
+    OUTPUT_CONTRACT_INSTRUCTION,
+  ].join('\n');
+}
+
+/**
+ * Assemble the complete model request for a testbench repair (Req 2.8, 2.9, 8.2).
+ *
+ * The request is built solely from the RTL-free `RepairTestbenchModelInput`;
+ * there is no parameter through which RTL, or the reference design's observed
+ * behaviour or source, could enter. Per the Testbench_Repair model input's
+ * three-field discipline, OKF passages are never re-retrieved or re-included -
+ * the model already has a testbench to revise rather than a blank page.
+ */
+export function buildRepairModelInput(input: RepairTestbenchModelInput): ModelRequest {
+  const prompt = [
+    repairInstructions(input.hint),
+    '',
+    'Spec goal:',
+    input.spec.goal,
+    '',
+    'Constraints:',
+    input.spec.constraints.map((constraint) => `  - ${constraint}`).join('\n'),
+    '',
+    'Module interface:',
+    describeInterface(input.spec),
+    '',
+    'Previous testbench source (revise this):',
+    input.previousSource,
   ].join('\n');
   return { prompt };
 }

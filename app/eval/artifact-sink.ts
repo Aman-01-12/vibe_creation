@@ -44,7 +44,9 @@
 //   crash. Pure: no clock, no I/O, no randomness.
 
 import type { BudgetStopReason, Verdict } from '@app/core';
-import type { VerificationOutcome } from '@app/agent';
+import { describeRepairHint, NO_REPAIR } from '@app/agent';
+import type { RepairHint, RepairProvenance, VerificationOutcome } from '@app/agent';
+import type { RunFailureCause } from '@app/tools';
 
 import type { RecordedGoldenVerdict } from './golden-judge.js';
 import type { InstrumentControlResult, RecordedInstrumentVerdict } from './instrument-control.js';
@@ -69,6 +71,12 @@ export const ARTIFACT_CAPS = Object.freeze({
   maxCheckNameChars: 200,
   /** Longest captured failing-case text field, in characters. */
   maxFailingCaseFieldChars: 1_024,
+  /** Longest captured rejected-testbench draft, in characters; HEAD kept. */
+  maxRejectedDraftChars: 65_536,
+  /** Most missing required-check names captured from one setup failure. */
+  maxMissingCheckNames: 256,
+  /** Longest captured Testbench_Repair hint text, in characters. */
+  maxRepairHintChars: 4_096,
 });
 
 /** Which end of an over-long text was kept. */
@@ -159,6 +167,47 @@ export interface EvalSampleArtifacts {
   /** The oracle run's evidence, or `null` when no simulation ever ran. */
   readonly simulation: CapturedSimulation | null;
   readonly failingCase: CapturedFailingCase | null;
+  /**
+   * Why the run's own verdict is `error`, or `null`.
+   *
+   * `null` whenever the outcome carries no `SimulationVerdict` to read it from - which
+   * includes `instrument-refused`: that outcome is reached BEFORE any oracle verdict, so
+   * there is no run to attribute (Req 5.4). Read from `simulation.failureCause` for
+   * `verified` and `unverified`, the same value `simulation` above already exposes, made
+   * visible under its own name rather than requiring a caller to reach into `simulation`.
+   */
+  readonly runFailureCause: RunFailureCause | null;
+  /**
+   * Submitted files a build diagnostic named, or `[]` when the outcome carries none.
+   *
+   * A TRUSTED list of workspace paths (membership-only; see
+   * `app/tools/simulator/failure-attribution.ts`'s Property 3), so unlike the other
+   * captured text fields it needs no cap of its own: it is already bounded by the number
+   * of files one run submits (at most the RTL and the testbench). Read from
+   * `outcome.attributedFiles` for `instrument-refused` and from
+   * `simulation.attributedFiles` for `verified`/`unverified`.
+   */
+  readonly attributedFiles: readonly string[];
+  /**
+   * The testbench draft Loop_Setup rejected for incomplete coverage, or `null`.
+   *
+   * HEAD-kept, like `testbenchSource`: the module header and port list are what identify
+   * a draft. Present only for a `setup-failed` outcome whose `cause` was a coverage gap,
+   * and stored under a field distinct from `testbenchSource` so a reader can never mistake
+   * a refused draft for the instrument a verdict was decided by (Req 6.5).
+   */
+  readonly rejectedTestbenchDraft: CapturedText | null;
+  /** Whether `missingCheckNames` was cut at `ARTIFACT_CAPS.maxMissingCheckNames`. */
+  readonly missingCheckNamesTruncated: boolean;
+  /**
+   * The required check names the rejected draft omitted, or `[]` when the outcome
+   * carries none.
+   *
+   * Each name capped at `ARTIFACT_CAPS.maxCheckNameChars`; the list itself capped at
+   * `ARTIFACT_CAPS.maxMissingCheckNames`, with the cut recorded on
+   * `missingCheckNamesTruncated` rather than silently dropped.
+   */
+  readonly missingCheckNames: readonly string[];
   /** The INDEPENDENT judge's verdict and its failure count, or `null` when unjudged. */
   readonly goldenVerdict: RecordedGoldenVerdict | null;
   /**
@@ -191,6 +240,38 @@ export interface EvalSampleArtifacts {
    * still tally its most-survived operators without them.
    */
   readonly mutation: MutationProbeReport | null;
+  /** Whether a Testbench_Repair was attempted/accepted for this sample, copied verbatim. */
+  readonly repairProvenance: RepairProvenance;
+  /**
+   * The testbench source a Testbench_Repair replaced, or `null`.
+   *
+   * HEAD-kept, like `testbenchSource`, and stored under a field distinct from
+   * `testbenchSource` so a reader can never mistake the PRE-repair draft for the
+   * instrument a verdict was actually decided by (Req 4.6, 4.7) - the same distinct-
+   * field discipline `rejectedTestbenchDraft` already applies to a Loop_Setup
+   * rejection.
+   *
+   * Present only when `repairProvenance.accepted` is `true`: an accepted repair is
+   * the only case where a genuinely different pre-repair source exists to contrast
+   * against `testbenchSource`. An attempted-but-declined repair's outcome still
+   * carries its ORIGINAL, unrepaired testbench as `testbenchSource`, so there is
+   * nothing separate left to capture here.
+   */
+  readonly rejectedPreRepairTestbench: CapturedText | null;
+  /**
+   * The Repair_Hint handed to the model for this sample's Testbench_Repair attempt,
+   * rendered as prose, or `null`.
+   *
+   * Present whenever `repairProvenance.attempted` is `true`, regardless of whether
+   * the attempt was ultimately accepted: a hint was constructed and shown to the
+   * model either way, and that is the fact this field records. Rendered through the
+   * SAME `describeRepairHint` the model's own prompt is assembled from
+   * (`app/agent/roles/testbench/prompt.ts`), so this can never drift from what the
+   * model actually saw, and structurally never carries the reference's observed
+   * value, a diff, or its source (Req 2.4-2.6) - the same guarantee `RepairHint`
+   * already enforces at the model seam. Bounded by `ARTIFACT_CAPS.maxRepairHintChars`.
+   */
+  readonly repairHint: string | null;
 }
 
 /**
@@ -242,10 +323,39 @@ export interface ArtifactCaptureInput {
    * read from `measured` regardless, so an artifact can never disagree with the record.
    */
   readonly control: InstrumentControlResult | null;
+  /**
+   * The Repair_Hint this sample's Testbench_Repair attempt was built from, or `null`
+   * / omitted when `measured.repairProvenance.attempted` is `false`.
+   *
+   * Neither `CapturedOutcome` nor `SampleResult` carries the hint VALUE - only
+   * `measured.repairProvenance`'s `{ attempted, accepted }` pair - so the harness
+   * supplies it directly from whichever trigger point actually built it (Req 4.7).
+   */
+  readonly repairHint?: RepairHint | null;
+  /**
+   * The testbench source a Testbench_Repair replaced, or `null` / omitted when no
+   * repair was accepted for this sample.
+   *
+   * Like `repairHint`, this is not reachable from `outcome` or `measured`: by the
+   * time the outcome the harness holds reflects a repair, its own testbench source
+   * IS the revised one (see `./harness.ts`'s `withRevisedTestbench`), so the PRE-
+   * repair source has to be supplied separately, from before that replacement.
+   */
+  readonly preRepairTestbenchSource?: string | null;
 }
 
 /** The verdicts a simulation may report; a closed set, validated on read. */
 const VERDICTS: readonly Verdict[] = ['pass', 'fail', 'error'];
+
+/** The run failure causes `SimulationVerdict` may report; a closed set, validated on read. */
+const RUN_FAILURE_CAUSES: readonly RunFailureCause[] = [
+  'none',
+  'build-failed',
+  'timed-out',
+  'disk-capped',
+  'output-incomplete',
+  'tool-failed',
+];
 
 /**
  * Derive one sample's artifacts (pure, total).
@@ -254,7 +364,12 @@ const VERDICTS: readonly Verdict[] = ['pass', 'fail', 'error'];
  * because a diagnostic derivation must not be able to fail a measured sample.
  */
 export function captureSampleArtifacts(input: ArtifactCaptureInput): EvalSampleArtifacts {
-  const { outcome, measured, control } = input;
+  const { outcome, measured, control, repairHint = null, preRepairTestbenchSource = null } = input;
+  // Defensively read, like every other field on `measured`/`outcome` here: `measured` is
+  // typed as a `SampleResult`, whose `repairProvenance` is required, but this derivation
+  // must still degrade to the unrepaired baseline rather than throw for a caller that
+  // hands in a malformed value (Req 6.6's "never throws" contract, extended to this field).
+  const repairProvenance = measured.repairProvenance ?? NO_REPAIR;
   return {
     outcomeStatus: measured.outcomeStatus,
     passed: measured.passed,
@@ -263,10 +378,29 @@ export function captureSampleArtifacts(input: ArtifactCaptureInput): EvalSampleA
     failureNote: measured.failureNote,
     goldenVerdict: measured.goldenVerdict,
     instrumentVerdict: measured.instrumentVerdict,
+    repairProvenance,
+    // Req 4.6, 4.7: present only for an ACCEPTED repair - the only case with a
+    // genuinely distinct pre-repair source to contrast against `testbenchSource`.
+    rejectedPreRepairTestbench: repairProvenance.accepted
+      ? captureText(preRepairTestbenchSource, ARTIFACT_CAPS.maxSourceChars, 'head')
+      : null,
+    // Req 4.7: present whenever a repair was ATTEMPTED, accepted or not - a hint was
+    // built and shown to the model either way.
+    repairHint: repairProvenance.attempted
+      ? captureRepairHint(repairHint, ARTIFACT_CAPS.maxRepairHintChars)
+      : null,
     candidateRtl: captureText(candidateRtlOf(outcome), ARTIFACT_CAPS.maxSourceChars, 'head'),
     testbenchSource: captureText(testbenchSourceOf(outcome), ARTIFACT_CAPS.maxSourceChars, 'head'),
     simulation: captureSimulation(outcome),
     failingCase: captureFailingCase(outcome),
+    runFailureCause: runFailureCauseOf(outcome),
+    attributedFiles: attributedFilesOf(outcome),
+    rejectedTestbenchDraft: captureText(
+      rejectedTestbenchOf(outcome),
+      ARTIFACT_CAPS.maxRejectedDraftChars,
+      'head',
+    ),
+    ...captureMissingCheckNames(outcome),
     controlStdout: captureControlStream(control, 'stdout'),
     controlStderr: captureControlStream(control, 'stderr'),
     controlExitCode: control === null ? null : control.exitCode,
@@ -305,7 +439,7 @@ export function candidateRtlOf(outcome: CapturedOutcome): string | null {
   if (outcome.status === 'verified') {
     return nonEmptyStringAt(outcome.moduleVersion, 'rtl');
   }
-  if (outcome.status === 'unverified') {
+  if (outcome.status === 'unverified' || outcome.status === 'instrument-refused') {
     return nonEmptyStringAt(outcome.candidate, 'rtl');
   }
   return null;
@@ -319,10 +453,105 @@ export function candidateRtlOf(outcome: CapturedOutcome): string | null {
  * status added to the outcome union cannot be handled differently by the two paths.
  */
 export function testbenchSourceOf(outcome: CapturedOutcome): string | null {
-  if (outcome.status === 'verified' || outcome.status === 'unverified') {
+  if (
+    outcome.status === 'verified' ||
+    outcome.status === 'unverified' ||
+    outcome.status === 'instrument-refused'
+  ) {
     return nonEmptyStringAt(outcome.testbench, 'source');
   }
   return null;
+}
+
+/**
+ * Why the run's own verdict is `error`, or `null` when the outcome carries no
+ * `SimulationVerdict` to read it from.
+ *
+ * `instrument-refused` is reached before any oracle verdict (Req 5.4), so it never
+ * carries a `SimulationVerdict` and reports `null` here just as `blocked` and
+ * `setup-failed` already do - this is existing data on `verified`/`unverified` made
+ * visible under its own name, not a new derivation.
+ */
+function runFailureCauseOf(outcome: CapturedOutcome): RunFailureCause | null {
+  if (outcome.status !== 'verified' && outcome.status !== 'unverified') {
+    return null;
+  }
+  return runFailureCauseAt(outcome.simulation, 'failureCause');
+}
+
+/** A property that is one of the known run failure causes, or `null` for anything else. */
+function runFailureCauseAt(carrier: unknown, key: string): RunFailureCause | null {
+  const value = propertyAt(carrier, key);
+  return RUN_FAILURE_CAUSES.find((cause) => cause === value) ?? null;
+}
+
+/**
+ * Submitted files a build diagnostic named, or `[]` when the outcome carries none.
+ *
+ * Reads `outcome.attributedFiles` directly for `instrument-refused` (the field the
+ * refusal itself carries) and `simulation.attributedFiles` for `verified`/`unverified`.
+ * Every other status produced no run to attribute.
+ */
+function attributedFilesOf(outcome: CapturedOutcome): readonly string[] {
+  if (outcome.status === 'instrument-refused') {
+    return stringArrayAt(outcome, 'attributedFiles');
+  }
+  if (outcome.status === 'verified' || outcome.status === 'unverified') {
+    return stringArrayAt(outcome.simulation, 'attributedFiles');
+  }
+  return [];
+}
+
+/** The rejected testbench draft a `setup-failed` outcome carried, or `null`. */
+function rejectedTestbenchOf(outcome: CapturedOutcome): string | null {
+  if (outcome.status !== 'setup-failed') {
+    return null;
+  }
+  return nonEmptyStringAt(outcome, 'rejectedTestbench');
+}
+
+/** The missing required-check names a `setup-failed` outcome carried, capped, plus the cut. */
+function captureMissingCheckNames(outcome: CapturedOutcome): {
+  readonly missingCheckNames: readonly string[];
+  readonly missingCheckNamesTruncated: boolean;
+} {
+  if (outcome.status !== 'setup-failed') {
+    return { missingCheckNames: [], missingCheckNamesTruncated: false };
+  }
+  const raw = stringArrayAt(outcome, 'missingCheckNames');
+  const capped = raw
+    .slice(0, ARTIFACT_CAPS.maxMissingCheckNames)
+    .map((name) => name.slice(0, ARTIFACT_CAPS.maxCheckNameChars));
+  return {
+    missingCheckNames: capped,
+    missingCheckNamesTruncated: raw.length > ARTIFACT_CAPS.maxMissingCheckNames,
+  };
+}
+
+/** A property holding an array of strings, filtered to just the strings, or `[]`. */
+function stringArrayAt(carrier: unknown, key: string): readonly string[] {
+  const value = propertyAt(carrier, key);
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+}
+
+/**
+ * Render a Repair_Hint through the SAME prose renderer the model's own prompt uses,
+ * capped, or `null` when there is no hint to render.
+ *
+ * `describeRepairHint` already carries the anti-circularity guarantee (Req 2.4-2.6):
+ * it reads only the closed `RepairHint` union, which is structurally incapable of
+ * holding the reference's observed value, a diff, or its source. Capping the
+ * rendered text (rather than a raw field of the hint) keeps this artifact bounded
+ * the same way every other captured text here is, without a second cap that could
+ * drift from the model's own view of the hint.
+ */
+function captureRepairHint(hint: RepairHint | null, cap: number): string | null {
+  if (hint === null) {
+    return null;
+  }
+  return describeRepairHint(hint).slice(0, cap);
 }
 
 /** Cap a text, keeping the requested end, or `null` when there is nothing to capture. */

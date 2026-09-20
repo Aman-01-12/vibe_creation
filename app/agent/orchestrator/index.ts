@@ -40,10 +40,14 @@ export {
 // exhaustion presents the failing case labeled `Unverified` with a Teach_Mode
 // handoff seam. Its integration test is task 14.2; its self-healing loop is 14.3.
 export {
+  NO_REPAIR,
   VerificationLoop,
   type CandidateGenerator,
   type GenerationContextOpener,
   type IndependentTestbenchGenerator,
+  type InstrumentRefusalReason,
+  type InstrumentRefusedModule,
+  type RepairProvenance,
   type SetupFailureCause,
   type TeachModeHandoff,
   type UnverifiedModule,
@@ -85,3 +89,63 @@ export {
   type RecoveryStep,
   type SelfHealingLoopDeps,
 } from './self-healing.js';
+
+// The Instrument_Admission port (task 3.5): consulted by the Verification_Loop at
+// most once per run, before the first iteration, to learn whether a generated
+// Testbench is an admissible measuring instrument. No implementation lives here -
+// see `app/eval/instrument-admission.ts` for the eval-layer adapter.
+export {
+  type InstrumentAdmission,
+  type InstrumentAdmissionDecision,
+  type InstrumentAdmissionRequest,
+} from './instrument-admission.js';
+
+// The build constant identifying the Verification_Loop's instrument-admission
+// behaviour (task 3.5), folded into the experiment identity the same way
+// `TESTBENCH_PROMPT_VERSION` is.
+export { INSTRUMENT_POLICY_VERSION } from './instrument-policy-version.js';
+
+// The build constant identifying the testbench-repair-loop's behaviour (task
+// 6.3): whether `#admitInstrument` attempts a precheck-path repair, and whether
+// the harness attempts a positive-control-path repair, folded into the
+// experiment identity the same way `INSTRUMENT_POLICY_VERSION` is.
+export { TESTBENCH_REPAIR_POLICY_VERSION } from './testbench-repair-policy-version.js';
+
+// The Testbench_Precheck (task 3.1): a deterministic, model-free build check of a
+// generated Testbench against a Spec-derived Interface_Stub, run once before the
+// first repair iteration. See `app/tools/simulator/adapter.ts` for the
+// `SimulationVerdict.failureCause` / `attributedFiles` fields this check reads.
+export {
+  buildInterfaceStub,
+  TestbenchPrecheck,
+  type PrecheckOutcome,
+} from './testbench-precheck.js';
+
+// The Repair_Hint vocabulary and its one builder (testbench-repair-loop task
+// 1.1/1.2): the closed `DefectClass` enum, the two-member `RepairHint` union, the
+// `RepairTrigger` a hint is built from, and the pure `buildRepairHint` /
+// `ruleFamilyFor` functions. Exported here (rather than deferred to task 10.10)
+// because the property tests task 1.4 adds can only reach this module through
+// `@app/agent`'s package export map, which resolves `dist/index.js` alone.
+export {
+  buildRepairHint,
+  ruleFamilyFor,
+  type BuildDiagnosticHint,
+  type ClassifiedFunctionalHint,
+  type DefectClass,
+  type RepairHint,
+  type RepairTrigger,
+} from './repair-hint.js';
+
+// The Testbench_Repair port (task 6.2): consulted by the Eval_Harness for a
+// Positive_Control-caused Repair_Trigger, before that sample's Session_Budget is
+// read for the record. No implementation lives here - see
+// `app/eval/testbench-repair.ts` for `EvalTestbenchRepair`.
+export {
+  type TestbenchRepair,
+  type TestbenchRepairDecision,
+  type TestbenchRepairDeclined,
+  type TestbenchRepairOutcome,
+  type TestbenchRepairRequest,
+  type TestbenchRepairResult,
+} from './testbench-repair.js';

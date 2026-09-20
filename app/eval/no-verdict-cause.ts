@@ -60,7 +60,15 @@ export type NoVerdictCause =
   /** The inputs could not admit a model call: unapproved Spec, no criteria, bad seed. */
   | 'inputs-inadmissible'
   /** The generation gate refused admission: intent unconfirmed, or spec unapproved. */
-  | 'gate-refused';
+  | 'gate-refused'
+  /**
+   * The Testbench_Precheck or the Instrument_Admission port found the testbench
+   * inadmissible, so the loop stopped before any iteration (Req 5.10). Kept distinct
+   * from `gate-refused`: that cause is a generation-intent refusal decided before a
+   * testbench exists, while this one is a deterministic build/validity refusal of the
+   * testbench Loop_Setup already produced.
+   */
+  | 'instrument-refused';
 
 /**
  * The causes that mean the slot was ATTEMPTED and not MEASURED.
@@ -82,6 +90,7 @@ const DEFERRABLE_BY_CAUSE: Readonly<Record<NoVerdictCause, boolean>> = Object.fr
   'model-output-unusable': false,
   'inputs-inadmissible': false,
   'gate-refused': false,
+  'instrument-refused': false,
 });
 
 /**
@@ -100,6 +109,9 @@ const DESCRIPTION_BY_CAUSE: Readonly<Record<NoVerdictCause, string>> = Object.fr
   'model-output-unusable': 'a provider answered and the answer could not be used',
   'inputs-inadmissible': 'the inputs could not admit a model call',
   'gate-refused': 'the generation gate refused admission',
+  'instrument-refused':
+    'the testbench was refused as an instrument, so the sample was judged only by the ' +
+    'independent testbench',
 });
 
 /**
@@ -143,7 +155,8 @@ export function isDeferrableCause(cause: NoVerdictCause | null): boolean {
 export type ClassifiableOutcome =
   | { readonly status: 'verified' | 'unverified' | 'runner-error' }
   | { readonly status: 'blocked' }
-  | { readonly status: 'setup-failed'; readonly cause: SetupFailureCause };
+  | { readonly status: 'setup-failed'; readonly cause: SetupFailureCause }
+  | { readonly status: 'instrument-refused' };
 
 /**
  * The eval-layer cause for one loop setup failure (pure, total).
@@ -179,6 +192,8 @@ export function noVerdictCauseOf(outcome: ClassifiableOutcome): NoVerdictCause |
       return SETUP_CAUSE_TO_NO_VERDICT[outcome.cause];
     case 'runner-error':
       return 'harness-error';
+    case 'instrument-refused':
+      return 'instrument-refused';
     default: {
       const unreachable: never = outcome;
       return unreachable;

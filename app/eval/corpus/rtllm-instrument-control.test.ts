@@ -34,7 +34,14 @@ function reference(problemId: string): ReferenceDesign {
   };
 }
 
-/** A `SimulationVerdict` shaped only as far as the control reads it. */
+/**
+ * A `SimulationVerdict` shaped only as far as the control reads it.
+ *
+ * Pinned to `failureCause: 'none'` / `attributedFiles: []` by default: this fixture
+ * isolates `classifyControlRun`'s own re-derivation from `verdict` and `stderr`
+ * (task 1.2's territory, not the failure-cause narrowing), so tests that care about
+ * a specific cause override it explicitly.
+ */
 function simulation(overrides: Partial<SimulationVerdict> = {}): SimulationVerdict {
   return {
     verdict: 'pass',
@@ -43,9 +50,11 @@ function simulation(overrides: Partial<SimulationVerdict> = {}): SimulationVerdi
     stdout: '',
     stderr: '',
     exitCode: 0,
-    resourceUsage: { cpuMs: 1, memMb: 1, wallMs: 1 },
+    resourceUsage: { cpuMs: 1, maxMemMb: 1, wallMs: 1 },
+    failureCause: 'none',
+    attributedFiles: [],
     ...overrides,
-  } as SimulationVerdict;
+  };
 }
 
 /** A simulator that answers with a fixed verdict and records what it was handed. */
@@ -122,6 +131,8 @@ describe('RtllmInstrumentControl - classifying the control run', () => {
       simulation({
         verdict: 'error',
         stderr: 'tb.v:7: error: Unknown module type: right_shifter\n',
+        failureCause: 'build-failed',
+        attributedFiles: [CONTROL_TESTBENCH_WORKSPACE_FILENAME],
       }),
     );
 
@@ -132,6 +143,64 @@ describe('RtllmInstrumentControl - classifying the control run', () => {
     expect(result?.verdict).toEqual({
       validity: 'invalid',
       defect: 'TESTBENCH_REFERENCE_UNBUILDABLE',
+    });
+  });
+
+  it('reports INVALID / did-not-build off a stale failureCause, via the classifyNonPass fallback', async () => {
+    // `failureCause` defaults to `'none'` here on purpose: this covers a run that reports no
+    // failure but does carry build diagnostics, the one case still resolved by the
+    // `classifyNonPass` fallback rather than by reading `failureCause` directly.
+    const { control: subject } = control(
+      simulation({
+        verdict: 'error',
+        stderr: 'tb.v:7: error: Unknown module type: right_shifter\n',
+      }),
+    );
+
+    const result = await subject.check(request());
+
+    expect(result?.verdict).toEqual({
+      validity: 'invalid',
+      defect: 'TESTBENCH_REFERENCE_UNBUILDABLE',
+    });
+  });
+
+  it('reports UNCHECKED / resource-exhausted for a disk-capped run, never as a build defect', async () => {
+    // The measured `multi_16bit` regression this task exists to fix: the control run's own
+    // residual stderr line names a disk cap, not a build defect, and must be read off
+    // `failureCause` BEFORE `classifyNonPass` ever sees that line.
+    const { control: subject } = control(
+      simulation({
+        verdict: 'error',
+        stderr: 'workspace reached its 134217728-byte disk cap\n',
+        failureCause: 'disk-capped',
+      }),
+    );
+
+    const result = await subject.check(request());
+
+    expect(result?.verdict).toEqual({
+      validity: 'unchecked',
+      reason: 'control-resource-exhausted',
+    });
+  });
+
+  it('reports UNCHECKED / resource-exhausted for a timed-out run, even with plausible build-looking stderr', async () => {
+    const { control: subject } = control(
+      simulation({
+        verdict: 'error',
+        // Deliberately plausible-looking build diagnostic residue, to prove the short-circuit
+        // wins even when `classifyNonPass` would otherwise call this `did-not-build`.
+        stderr: 'tb.v:7: error: Unknown module type: right_shifter\n',
+        failureCause: 'timed-out',
+      }),
+    );
+
+    const result = await subject.check(request());
+
+    expect(result?.verdict).toEqual({
+      validity: 'unchecked',
+      reason: 'control-resource-exhausted',
     });
   });
 

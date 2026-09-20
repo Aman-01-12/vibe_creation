@@ -39,6 +39,7 @@ import type { BudgetStopReason } from '@app/core';
 import { RECORDED_GOLDEN_KINDS, type RecordedGoldenKind } from '../golden-judge.js';
 import type {
   InstrumentDefectCode,
+  InstrumentUncheckedReason,
   InstrumentValidity,
   RecordedInstrumentVerdict,
 } from '../instrument-control.js';
@@ -141,11 +142,65 @@ import type { SampleOutcomeStatus } from '../report.js';
  * equalling the arm's recorded samples is exactly what stops a shrunken denominator being cited
  * alone.
  *
- * There is therefore no migration and no default at any bump: the reader REFUSES to aggregate a
- * file containing older records and tells the operator to re-run into a fresh output directory
- * (see `STALE_SCHEMA_ADVICE`).
+ * v9 -> v10 (a REFUSED instrument stops the loop, and its cause is now PERSISTED). Two fields
+ * changed meaning in the same bump, both driven by the same defect: `instrumentVerdictOf`
+ * FLATTENED every `unchecked` record onto `control-unavailable`, regardless of the real cause,
+ * because the reason was never written down. Measured on `tbslice-v1`: 3 of 15 samples are
+ * `unchecked`, all three `setup-failed` with `iterations: 0`, and their real cause is
+ * `no-testbench` - the Testbench_Agent refused to emit a testbench for missing check coverage -
+ * not `control-unavailable`, which claims the control ran and could not speak. A v9 reader
+ * cannot tell those apart because the field the answer lives in does not exist yet.
+ *
+ * First, the ITERATION COUNT. An `instrument-refused` sample now records `iterations: 0` for a
+ * case that, under a v9 build, burned iterations repairing RTL against a testbench that could
+ * never have measured it. The measured case: `rtllm/arithmetic/adder_8bit` ran 6 full iterations
+ * against a testbench `iverilog -t null` reports a parse failure on, and the independent judge
+ * then passed the candidate anyway. A v9 record's `iterations` for a functionally-equivalent
+ * sample describes a flow - repair against a broken instrument - that no longer exists after this
+ * spec, so the two counts are not measurements of the same thing and averaging them would blend
+ * a cost this build no longer pays into one that still does.
+ *
+ * Second, the INSTRUMENT VERDICT. `instrumentUncheckedReason` is now PERSISTED: previously every
+ * `unchecked` record was written with no reason field at all, and `instrumentVerdictOf` INVENTED
+ * `control-unavailable` on every read no matter what actually happened. A v9 record has no real
+ * reason to read, so "upgrading" it would either invent a specific cause nobody measured, or fall
+ * back to `control-unavailable` for samples whose real cause was `no-testbench` or
+ * `control-resource-exhausted` - exactly the misclassification this spec exists to close (the
+ * measured `rtllm/arithmetic/multi_16bit` case: recorded `TESTBENCH_REFERENCE_UNBUILDABLE`, an
+ * instrument defect, when its control run's own stderr read `workspace reached its
+ * 134217728-byte disk cap`, a resource kill with nothing to say about the testbench).
+ *
+ * As at every previous bump there is no default that would be honest and no migration: the
+ * reader REFUSES to aggregate a file containing older records and tells the operator to re-run
+ * into a fresh output directory (see `STALE_SCHEMA_ADVICE`).
+ *
+ * v10 -> v11 (a REPAIRED instrument is distinguishable from a first-draft one - and this bump
+ * is a different KIND from every one above it). Every prior bump changed what an EXISTING
+ * field means: `instrumentValidity: valid` has gone through four different definitions across
+ * v2, v3, v5, and v7 above, each one silently wrong to read under the next. This bump changes
+ * none of that. `instrumentValidity`'s own meaning is UNCHANGED: a v10 record's
+ * `instrumentValidity: 'valid'` already means exactly what a v11 record's `valid` means,
+ * for the specific case where `repairAttempted` happens to be `false` - "our testbench passed
+ * both controls," full stop, with no fourth redefinition added here. What v10 cannot express is
+ * "valid AFTER repair": a testbench that failed the positive control once, was revised by
+ * exactly one Testbench_Repair attempt, and THEN passed both controls under the identical
+ * re-check standard a first draft is held to (`testbench-repair-loop` Requirement 4.4). A v10
+ * reader has no field to hold that fact, so it silently pools "sound on the first draft" with
+ * "fixed after failing" under the same `valid` - not because the word changed meaning, but
+ * because the record has nothing to say about HOW that sample reached it.
+ *
+ * `repairAttempted` and `repairAccepted` are therefore two NEW required fields, not a
+ * redefinition of an old one, and there is still no honest default for an older record: the
+ * Testbench_Repair capability did not exist when a v10 record was written, so there is no
+ * question a v10 record could have answered `false` to. Defaulting `repairAttempted` to
+ * `false` would not be neutral, it would assert "this sample's instrument was never repaired,"
+ * which is a fact about a capability the sample was never measured against - indistinguishable
+ * from a genuine "no repair happened" only by coincidence, not by construction. So a v10 (or
+ * older) file is refused wholesale on read, by the identical `record.schemaVersion !==
+ * RESULTS_SCHEMA_VERSION` refusal this bump number change already triggers for a v9 record;
+ * no separate special-case code is needed for the refusal itself.
  */
-export const RESULTS_SCHEMA_VERSION = 9;
+export const RESULTS_SCHEMA_VERSION = 11;
 
 /**
  * What an operator must do about a results file written before the schema bump.
@@ -155,7 +210,7 @@ export const RESULTS_SCHEMA_VERSION = 9;
  */
 export const STALE_SCHEMA_ADVICE: readonly string[] = Object.freeze([
   `this results file holds records from an older schema (current v${RESULTS_SCHEMA_VERSION}) and`,
-  'CANNOT be aggregated, for three independent reasons.',
+  'CANNOT be aggregated, for six independent reasons.',
   '(1) Those records carry NO token counts. The primary efficiency figure is now tokens and',
   'wall clock per verified artifact - the things the endpoint and the clock actually report -',
   'and a token count that was metered per sample and then discarded cannot be recovered from',
@@ -192,6 +247,29 @@ export const STALE_SCHEMA_ADVICE: readonly string[] = Object.freeze([
   'picking one asserts a cause nobody measured, and dropping it would break the partition',
   'the golden block prints, which is the only thing stopping a shrunken denominator from',
   'being cited on its own.',
+  '(5) TWO MORE THINGS CHANGED MEANING IN THE SAME BUMP: the ITERATION COUNT and the',
+  'INSTRUMENT VERDICT. An `instrument-refused` sample now records `iterations: 0` for a case',
+  'that an older build would have spent its whole repair budget on: measured on',
+  '`rtllm/arithmetic/adder_8bit`, 6 full iterations ran against a testbench `iverilog -t null`',
+  'reports a parse failure on, and the independent judge passed the candidate anyway. An older',
+  "record's `iterations` for a functionally-equivalent sample describes that spent-budget flow,",
+  'which no longer exists, so the two counts are not the same measurement. Separately, the',
+  'reason an `unchecked` instrument is unchecked is now PERSISTED, where it used to be absent',
+  'from every record and invented on read as `control-unavailable` regardless of the real',
+  'cause. Measured on `rtllm/arithmetic/multi_16bit`: recorded `TESTBENCH_REFERENCE_UNBUILDABLE`',
+  '- an instrument defect charged to our testbench - while its control run was actually killed',
+  'by a disk cap, a fact its own stderr stated and nothing downstream read. An older record has',
+  'no reason to read, so filling one in - even the falsely-reassuring `control-unavailable`',
+  'every such record already implied - asserts a cause nobody measured.',
+  '(6) `instrumentValidity` itself did NOT change meaning in this bump, unlike every reason',
+  'above: a v10 `valid` already means exactly what a v11 `valid` means, for the case where no',
+  'repair was attempted. What changed is that TWO NEW fields were introduced -',
+  "`repairAttempted` and `repairAccepted` - to say whether a sample's testbench was revised",
+  'by a Testbench_Repair attempt before it passed both controls. Older records have no such',
+  'fields because the capability did not exist when they were written, so there is no honest',
+  'default: filling in `false` would assert "never repaired" for a sample that was never',
+  'measured against a repair capability at all, silently pooling "sound on the first draft"',
+  'with "fixed after failing" under the identical word.',
   'Fix: re-run the campaign into a FRESH outputDir. The only records ever written at an older',
   'schema were throwaway smoke samples and one diagnostic calibration run.',
 ]);
@@ -209,6 +287,7 @@ const OUTCOME_STATUSES: readonly SampleOutcomeStatus[] = [
   'blocked',
   'setup-failed',
   'runner-error',
+  'instrument-refused',
 ];
 
 /** The budget stop reasons a record may carry; a closed set, validated on read. */
@@ -239,6 +318,29 @@ const INSTRUMENT_DEFECTS: readonly InstrumentDefectCode[] = [
   'TESTBENCH_REFERENCE_UNBUILDABLE',
   'CONTROL_RUN_ERRORED',
   'TESTBENCH_SURVIVED_MUTANTS',
+];
+
+/**
+ * The instrument-unchecked reasons a record may carry; a closed set, validated on read.
+ *
+ * `../instrument-control.js` exports the type but no enumerable array of its members (unlike
+ * `RECORDED_GOLDEN_KINDS`, which `../golden-judge.js` does export), so this list is kept here as
+ * a local const, following the exact precedent of `INSTRUMENT_DEFECTS` above. Every member of
+ * `InstrumentUncheckedReason` must appear exactly once; a member added there and not here is a
+ * silent gap that a new reason would fail to round-trip against, which is what
+ * `results-log.test.ts`'s exhaustive round-trip test over all 9 members would catch.
+ */
+const INSTRUMENT_UNCHECKED_REASONS: readonly InstrumentUncheckedReason[] = [
+  'control-absent',
+  'no-testbench',
+  'no-reference',
+  'testbench-unsubmittable',
+  'control-unavailable',
+  'no-mutants-generated',
+  'no-valid-mutants',
+  'no-golden-killed-mutants',
+  'mutation-probe-unavailable',
+  'control-resource-exhausted',
 ];
 
 /**
@@ -344,12 +446,26 @@ export interface SweepSampleRecord {
    * How an invalid instrument failed, or null when it is not invalid.
    *
    * Recorded because "our testbench did not build with the reference" and "our testbench
-   * built and rejected the reference" point at different defects. The reason an `unchecked`
-   * instrument is unchecked is NOT persisted here - `outcomeStatus` already explains the
-   * common case (no testbench was produced) and the per-sample artifacts carry the rest,
-   * which keeps this record narrow.
+   * built and rejected the reference" point at different defects.
    */
   readonly instrumentDefect: InstrumentDefectCode | null;
+  /**
+   * Why an `unchecked` instrument is unchecked, or null when it is not unchecked.
+   *
+   * Required rather than optional, matching `instrumentValidity` itself: a sample that IS
+   * checked has no unchecked reason to carry, so `null` there is not a placeholder, it is
+   * the accurate value. When `instrumentValidity === 'unchecked'` this is one of the 9 real
+   * `InstrumentUncheckedReason` members, never absent-by-omission - `instrumentVerdictOf`
+   * used to flatten every `unchecked` record onto `control-unavailable` for exactly the want
+   * of this field (see `RESULTS_SCHEMA_VERSION`'s v9 -> v10 note). An unreadable reason on an
+   * `unchecked` record REFUSES the whole record rather than degrading to a guessed reason:
+   * unlike `noVerdictCause`, which degrades leniently because being wrong about deferrability
+   * either wastes a re-run or spends money retrying a real result, an unchecked sample is
+   * never re-run and never enters pass@k either way, so there is no such asymmetric cost to
+   * lean on - only the cost of asserting a specific cause nobody measured, which is the exact
+   * defect this field exists to close.
+   */
+  readonly instrumentUncheckedReason: InstrumentUncheckedReason | null;
   /**
    * What the NEGATIVE control measured for this sample, or `null` when it measured nothing.
    *
@@ -399,6 +515,29 @@ export interface SweepSampleRecord {
    * measurements. See `../no-verdict-cause.ts`.
    */
   readonly noVerdictCause: NoVerdictCause | null;
+  /**
+   * Whether a Testbench_Repair was attempted for this sample, at either trigger point
+   * (`RepairProvenance.attempted` from `@app/agent`, copied verbatim).
+   *
+   * Required, not optional, matching `instrumentValidity` itself: the Testbench_Repair
+   * capability either exists for the build that measured this sample or it does not, and a
+   * record written under a build where it did not exist has no honest way to answer this
+   * question - see `RESULTS_SCHEMA_VERSION`'s v10 -> v11 note. `false` is not a placeholder
+   * here, it is the accurate value for the (still-common) case where the first draft passed
+   * both controls and no repair was ever triggered.
+   */
+  readonly repairAttempted: boolean;
+  /**
+   * Whether the Testbench_Repair attempt produced the testbench this sample's final
+   * `instrumentValidity` was decided from (`RepairProvenance.accepted` from `@app/agent`,
+   * copied verbatim).
+   *
+   * Required, not optional, for the same reason `repairAttempted` is. Always `false` when
+   * `repairAttempted` is `false` - an accepted repair implies an attempted one, so a record
+   * claiming the opposite did not come from real code and is refused on decode rather than
+   * trusted (see `decodeSampleRecord`).
+   */
+  readonly repairAccepted: boolean;
 }
 
 /** The key identifying one sample slot within one experiment. */
@@ -643,13 +782,42 @@ function readsAsGoldenKind(value: unknown): boolean {
 }
 
 /**
+ * Decode `instrumentUncheckedReason` against the validity it belongs to, or `null` when it is
+ * unreadable - which INCLUDES the shape being wrong for the sample's own validity.
+ *
+ * Strict, matching `instrumentValidity` rather than `noVerdictCause`: an `unchecked` record
+ * with no readable reason is refused whole rather than degraded to a guessed reason, because
+ * every reason string asserts a specific unmeasured cause, and reading `control-unavailable`
+ * into an unreadable field is the exact misclassification this field exists to stop repeating
+ * (see the field's own doc comment on `SweepSampleRecord`). A `valid` or `invalid` sample must
+ * carry `null` here - a checked instrument has no unchecked reason to carry - so a record that
+ * claims BOTH a validity and an unrelated reason is exactly as untrustworthy as one missing a
+ * reason it needs, and both are refused the same way.
+ */
+function decodeUncheckedReason(
+  validity: InstrumentValidity,
+  value: unknown,
+): InstrumentUncheckedReason | null | typeof INVALID_SHAPE {
+  if (validity !== 'unchecked') {
+    return value === null || value === undefined ? null : INVALID_SHAPE;
+  }
+  const reason = member(value, INSTRUMENT_UNCHECKED_REASONS);
+  return reason ?? INVALID_SHAPE;
+}
+
+/** Sentinel distinguishing "genuinely null" from "unreadable" in `decodeUncheckedReason`. */
+const INVALID_SHAPE = Symbol('invalid-shape');
+
+/**
  * Decode one untrusted record, or `null` when it is not a complete, valid record.
  *
  * Strict on purpose: a half-written or hand-edited line is DROPPED rather than
  * repaired, because a record with a plausible-looking default would enter the resume
  * index and the pass@k aggregation as if it were a real measured sample. `instrumentValidity`
  * is required for exactly that reason - defaulting it would invent a validated instrument,
- * and `goldenVerdict` is refused for the mirror reason (see `readsAsGoldenKind`).
+ * `goldenVerdict` is refused for the mirror reason (see `readsAsGoldenKind`), and
+ * `instrumentUncheckedReason` is refused for the same reason again (see
+ * `decodeUncheckedReason`).
  */
 export function decodeSampleRecord(raw: unknown): SweepSampleRecord | null {
   const record = asRecord(raw);
@@ -674,6 +842,22 @@ export function decodeSampleRecord(raw: unknown): SweepSampleRecord | null {
   if (typeof record.passed !== 'boolean' || typeof record.costKnown !== 'boolean') {
     return null;
   }
+  if (typeof record.repairAttempted !== 'boolean' || typeof record.repairAccepted !== 'boolean') {
+    return null;
+  }
+  // Internal-consistency refusal, mirroring `decodeMutationCounts`'s own contradictory-shape
+  // checks: an accepted repair implies an attempted one, so a record claiming `accepted` with
+  // no `attempted` did not come from real code and is refused rather than trusted.
+  if (record.repairAccepted && !record.repairAttempted) {
+    return null;
+  }
+  const instrumentUncheckedReason = decodeUncheckedReason(
+    instrumentValidity,
+    record.instrumentUncheckedReason,
+  );
+  if (instrumentUncheckedReason === INVALID_SHAPE) {
+    return null;
+  }
   return {
     schemaVersion: RESULTS_SCHEMA_VERSION,
     ...identity,
@@ -682,11 +866,14 @@ export function decodeSampleRecord(raw: unknown): SweepSampleRecord | null {
     passed: record.passed,
     outcomeStatus,
     costKnown: record.costKnown,
+    repairAttempted: record.repairAttempted,
+    repairAccepted: record.repairAccepted,
     stopReason: optionalMember(record.stopReason, STOP_REASONS),
     goldenVerdict: optionalMember(record.goldenVerdict, GOLDEN_KINDS),
     goldenFailureCount: nonNegativeInt(record.goldenFailureCount),
     instrumentValidity,
     instrumentDefect: optionalMember(record.instrumentDefect, INSTRUMENT_DEFECTS),
+    instrumentUncheckedReason,
     mutation: decodeMutationCounts(record.mutation),
     failureNote: str(record.failureNote),
     // Read leniently, unlike `instrumentValidity`, and the asymmetry is deliberate. An
@@ -704,10 +891,12 @@ export function decodeSampleRecord(raw: unknown): SweepSampleRecord | null {
  *
  * A record's `instrumentDefect` is untrusted, so an `invalid` record with no readable defect
  * resolves to `CONTROL_RUN_ERRORED` - still invalid, which is the fail-safe direction: the
- * sample stays out of the pass@k denominator. An `unchecked` record's reason is not
- * persisted (see `SweepSampleRecord.instrumentDefect`), so it reads back as
- * `control-unavailable`: "the control did not speak for this sample", which is the only
- * claim the record supports.
+ * sample stays out of the pass@k denominator. `instrumentUncheckedReason` is now PERSISTED and
+ * decode-time validation already refuses any `unchecked` record whose reason is unreadable (see
+ * `decodeUncheckedReason`), so a `SweepSampleRecord` that survived decoding can never actually
+ * reach the `?? 'control-unavailable'` fallback below on a real `unchecked` record - it is kept
+ * only for defense in depth, in case a `SweepSampleRecord` is ever constructed by a path other
+ * than `decodeSampleRecord` (a test fixture, for instance).
  */
 export function instrumentVerdictOf(record: SweepSampleRecord): RecordedInstrumentVerdict {
   if (record.instrumentValidity === 'valid') {
@@ -716,7 +905,10 @@ export function instrumentVerdictOf(record: SweepSampleRecord): RecordedInstrume
   if (record.instrumentValidity === 'invalid') {
     return { validity: 'invalid', defect: record.instrumentDefect ?? 'CONTROL_RUN_ERRORED' };
   }
-  return { validity: 'unchecked', reason: 'control-unavailable' };
+  return {
+    validity: 'unchecked',
+    reason: record.instrumentUncheckedReason ?? 'control-unavailable',
+  };
 }
 
 /** How healthy the results file a summary was computed from is. */

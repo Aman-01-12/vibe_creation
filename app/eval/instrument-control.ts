@@ -174,7 +174,20 @@ export type InstrumentUncheckedReason =
    */
   | 'no-golden-killed-mutants'
   /** The negative control threw or could not run; fail-safe, never a verdict. */
-  | 'mutation-probe-unavailable';
+  | 'mutation-probe-unavailable'
+  /**
+   * The control run was killed for exceeding a resource bound - a wall-clock timeout or a
+   * disk cap - so the instrument's validity could not be observed.
+   *
+   * Distinct from every reason above it: those describe an instrument that was ABSENT or
+   * UNSUBMITTABLE, never run at all. This one describes a run that started and was forcibly
+   * stopped mid-execution, which is a fact about the sandbox, not about the testbench. The
+   * measured case this reason exists to correct: `rtllm/arithmetic/multi_16bit` was recorded
+   * `TESTBENCH_REFERENCE_UNBUILDABLE` - a defect charged to our testbench - when the control
+   * run's own stderr said `workspace reached its 134217728-byte disk cap`, a resource kill
+   * with nothing to say about whether the testbench builds.
+   */
+  | 'control-resource-exhausted';
 
 /**
  * One sample's instrument verdict, as a report, a record, and an artifact carry it.
@@ -283,6 +296,8 @@ const UNCHECKED_DESCRIPTIONS: Readonly<Record<InstrumentUncheckedReason, string>
     'is vacuous',
   'mutation-probe-unavailable':
     'the negative control could not run, so the instrument stays unproven',
+  'control-resource-exhausted':
+    'the control run was killed for exceeding a resource bound, so the instrument stays unproven',
 });
 
 /**

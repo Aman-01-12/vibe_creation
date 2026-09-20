@@ -105,11 +105,14 @@ import {
 } from '../golden-judge.js';
 import {
   countsInPassAtK,
+  describeInstrumentVerdict,
   instrumentControlMeasured,
   reachedOracleVerdict,
   summarizeInstrumentControl,
+  uncheckedInstrument,
   type InstrumentControlReport,
   type InstrumentSample,
+  type InstrumentUncheckedReason,
 } from '../instrument-control.js';
 import {
   mutationControlMeasured,
@@ -237,6 +240,35 @@ export interface DeferredCauseCount {
   readonly count: number;
 }
 
+/** One `unchecked`-instrument reason and how many samples carried it. */
+export interface UncheckedReasonCount {
+  readonly reason: InstrumentUncheckedReason;
+  readonly count: number;
+}
+
+/**
+ * The `InstrumentUncheckedReason` members, in a fixed tie-break order.
+ *
+ * `../instrument-control.js` exports the type but no enumerable array of its members
+ * (unlike `NO_VERDICT_CAUSES` in `../no-verdict-cause.js`), so this list is kept here as a
+ * local const, following the exact precedent already set by `results-log.ts`'s own
+ * `INSTRUMENT_UNCHECKED_REASONS`. Iterating this rather than the observed values means the
+ * tie-break order is fixed and a summary is byte-identical no matter which order concurrent
+ * samples finished in - the same discipline `deferredCauses` applies to `NO_VERDICT_CAUSES`.
+ */
+const INSTRUMENT_UNCHECKED_REASONS: readonly InstrumentUncheckedReason[] = [
+  'control-absent',
+  'no-testbench',
+  'no-reference',
+  'testbench-unsubmittable',
+  'control-unavailable',
+  'no-mutants-generated',
+  'no-valid-mutants',
+  'no-golden-killed-mutants',
+  'mutation-probe-unavailable',
+  'control-resource-exhausted',
+];
+
 /** One arm's aggregated result. */
 export interface ArmSummary {
   readonly armName: string;
@@ -317,6 +349,46 @@ export interface ArmSummary {
   readonly firstTryRate: number;
   /** `repairedSamples / sampleCount`. */
   readonly repairedRate: number;
+  /**
+   * Samples for which a Testbench_Repair was attempted - a DIFFERENT axis from
+   * `repairedSamples` above.
+   *
+   * `repairedSamples` counts passing samples that needed a repair ITERATION of the
+   * candidate design (the base hero-loop concept: same testbench, another try at the
+   * RTL). This field counts samples whose TESTBENCH ITSELF was revised by a
+   * Testbench_Repair attempt, a distinct capability this spec adds. Read from
+   * `SweepSampleRecord.repairAttempted`, so it is unaffected by whether the sample
+   * ultimately passed.
+   */
+  readonly testbenchRepairAttempted: number;
+  /**
+   * Of `testbenchRepairAttempted`, how many were accepted on re-check.
+   *
+   * Read from `SweepSampleRecord.repairAccepted`, which is `true` if and only if the
+   * sample's FINAL recorded instrument verdict is `valid` (see `harness.ts`'s
+   * `#runSample`: `accepted: finalControl.verdict.validity === 'valid'`). An accepted
+   * Testbench_Repair therefore always contributes to `instrument.validSamples`, which is
+   * what `validAfterRepair` below decomposes.
+   */
+  readonly testbenchRepairAccepted: number;
+  /**
+   * Of `instrument.validSamples`, how many needed no Testbench_Repair at all.
+   *
+   * `instrument.validSamples - testbenchRepairAccepted`: every accepted repair ends
+   * `valid` (see `testbenchRepairAccepted`), so subtracting that count from the headline
+   * total leaves exactly the samples that were valid on the FIRST testbench, with no
+   * repair attempt in their history.
+   */
+  readonly validNoRepair: number;
+  /**
+   * Of `instrument.validSamples`, how many reached `valid` only after a Testbench_Repair.
+   *
+   * Equal to `testbenchRepairAccepted`: an accepted repair is defined as one whose sample
+   * ended `valid`, so every accepted repair is counted here and nothing else is - a
+   * repair that was attempted but NOT accepted left its sample instrument-invalid or
+   * unchecked and is not part of this headline total at all.
+   */
+  readonly validAfterRepair: number;
   /** Mean iterations over PASSING samples, or null when none passed. */
   readonly meanIterationsToPass: number | null;
   /**
@@ -348,6 +420,15 @@ export interface ArmSummary {
    * generation-unavailable". Empty when no no-verdict sample carried a note.
    */
   readonly noVerdictNotes: readonly NoVerdictNoteCount[];
+  /**
+   * Why this arm's `unchecked`-instrument samples could not be spoken for: reason to count,
+   * most frequent first.
+   *
+   * `instrument.uncheckedSamples` says HOW MANY; this says WHY, the same relationship
+   * `noVerdictNotes` has to `statusCounts`. Empty exactly when `instrument.uncheckedSamples`
+   * is 0.
+   */
+  readonly uncheckedReasonCounts: readonly UncheckedReasonCount[];
   /**
    * Slots this arm ATTEMPTED and never measured - the arm's matrix hole.
    *
@@ -610,6 +691,31 @@ function deferredCauses(records: readonly SweepSampleRecord[]): readonly Deferre
   }).sort((left, right) => right.count - left.count);
 }
 
+/**
+ * Tally the reasons behind an arm's `unchecked`-instrument samples, most frequent first.
+ *
+ * Iterated over `INSTRUMENT_UNCHECKED_REASONS` rather than over the observed values, for the
+ * same reason `deferredCauses` iterates `NO_VERDICT_CAUSES`: a fixed declaration order makes
+ * the rendered breakdown byte-identical regardless of completion order under concurrency.
+ * Zero-count reasons are dropped, so an arm with no unchecked samples gains no noise.
+ */
+function uncheckedReasonCounts(
+  records: readonly SweepSampleRecord[],
+): readonly UncheckedReasonCount[] {
+  const counts = new Map<InstrumentUncheckedReason, number>();
+  for (const record of records) {
+    if (record.instrumentValidity !== 'unchecked' || record.instrumentUncheckedReason === null) {
+      continue;
+    }
+    const reason = record.instrumentUncheckedReason;
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  return INSTRUMENT_UNCHECKED_REASONS.flatMap((reason) => {
+    const count = counts.get(reason) ?? 0;
+    return count === 0 ? [] : [{ reason, count }];
+  }).sort((left, right) => right.count - left.count);
+}
+
 /** Order two strings deterministically, so every rendered list is stable. */
 function compareText(left: string, right: string): number {
   if (left === right) {
@@ -710,6 +816,10 @@ function summarizeArm(
   const firstTrySamples = passing.filter((record) => record.iterations <= 1).length;
   const sampleCount = records.length;
   const instrument = summarizeInstrumentControl(instrumentSamples(records));
+  const testbenchRepairAttempted = records.filter((record) => record.repairAttempted).length;
+  const testbenchRepairAccepted = records.filter(
+    (record) => record.repairAttempted && record.repairAccepted,
+  ).length;
   const validated = instrumentControlMeasured(instrument);
   const eligible = validated ? denominatorRecords(records) : unvalidatedRecords(records);
   const goldenEligible = goldenDenominatorRecords(records);
@@ -736,6 +846,10 @@ function summarizeArm(
     repairedSamples: passing.length - firstTrySamples,
     firstTryRate: sampleCount === 0 ? 0 : firstTrySamples / sampleCount,
     repairedRate: sampleCount === 0 ? 0 : (passing.length - firstTrySamples) / sampleCount,
+    testbenchRepairAttempted,
+    testbenchRepairAccepted,
+    validNoRepair: instrument.validSamples - testbenchRepairAccepted,
+    validAfterRepair: testbenchRepairAccepted,
     meanIterationsToPass: meanOrNull(passing.map((record) => record.iterations)),
     efficiency: armEfficiency(records, eligible),
     cost: armCost(records, passing.length),
@@ -744,6 +858,7 @@ function summarizeArm(
     ),
     statusCounts: statusCounts(records),
     noVerdictNotes: noVerdictNotes(records),
+    uncheckedReasonCounts: uncheckedReasonCounts(records),
     // Both taken from the SAME filtered list, so the count and the causes describing it are
     // one population by construction and `deferredCauses` is empty exactly when the count is 0.
     deferredSamples: deferred.length,
@@ -930,6 +1045,7 @@ function instrumentLines(summary: ArmSummary): readonly string[] {
   return [
     `  instrument:      ${instrument.validSamples}/${instrument.checkedSamples} testbenches ` +
       'pass their reference design',
+    ...testbenchRepairLines(summary),
     // One spelling of the key in both branches, so `instrument-invalid` is greppable across a
     // campaign's summaries whether or not any turned up. The emphasis lives in the message.
     ...(instrument.invalidSamples > 0
@@ -956,8 +1072,78 @@ function instrumentLines(summary: ArmSummary): readonly string[] {
       ? [
           `  instrument-unchecked: ${instrument.uncheckedWithVerdict} judged sample(s) whose ` +
             'instrument could not be proven; also excluded',
+          ...uncheckedReasonLines(summary.uncheckedReasonCounts),
         ]
       : []),
+    ...instrumentRefusedLines(summary),
+  ];
+}
+
+/**
+ * Render the `instrument-valid` decomposition: how many needed a Testbench_Repair.
+ *
+ * Printed only when `testbenchRepairAttempted > 0`, matching this file's convention of
+ * gating a sub-block on it having something to say (see `instrument.invalidSamples > 0` /
+ * `instrument.uncheckedWithVerdict > 0` above). Nested under the `instrument:` line it
+ * decomposes, at the same indentation column `instrument-invalid`'s own defect breakdown
+ * uses, because it is the same kind of thing: the headline total broken into its parts.
+ */
+function testbenchRepairLines(summary: ArmSummary): readonly string[] {
+  if (summary.testbenchRepairAttempted === 0) {
+    return [];
+  }
+  return [
+    `                   of these: valid-no-repair ${summary.validNoRepair}  ` +
+      `valid-after-repair ${summary.validAfterRepair}  ` +
+      `(testbench-repair attempted ${summary.testbenchRepairAttempted}, ` +
+      `accepted-on-recheck ${summary.testbenchRepairAccepted})`,
+  ];
+}
+
+/** The label that opens the unchecked-instrument reason breakdown; sets the value column. */
+const UNCHECKED_REASON_LABEL = '                   of these: ';
+
+/**
+ * Render WHY this arm's unchecked-instrument samples could not be spoken for, one reason per
+ * line, most frequent first.
+ *
+ * Nested under the `instrument-unchecked` line it explains, exactly as
+ * `instrument-invalid`'s own defect breakdown is nested under it a few lines up: a reader who
+ * already stopped at `instrument-unchecked` finds the WHY in the same block instead of having
+ * to search a second one.
+ */
+function uncheckedReasonLines(counts: readonly UncheckedReasonCount[]): readonly string[] {
+  const continuation = ' '.repeat(UNCHECKED_REASON_LABEL.length);
+  return counts.map(
+    ({ reason, count }, index) =>
+      `${index === 0 ? UNCHECKED_REASON_LABEL : continuation}${reason} x${count} - ` +
+      describeInstrumentVerdict(uncheckedInstrument(reason)),
+  );
+}
+
+/**
+ * Render this arm's `instrument-refused` count and the reason it exists at all.
+ *
+ * A REFUSED instrument is a THIRD population beside `instrument-invalid` and
+ * `instrument-unchecked`: the Testbench_Precheck or the Instrument_Admission port stopped the
+ * loop before it spent an iteration, so - unlike an invalid or unchecked instrument - this
+ * sample's candidate is the loop's FIRST candidate and never saw a repair. That is the fact a
+ * reader must not lose track of when this line is non-zero: the accompanying golden pass@k
+ * (`goldenPassAtKLines`) is not a like-for-like measurement against a sample that ran the full
+ * loop (Req 5.11, 5.12).
+ *
+ * Printed only when non-zero, matching every other conditional block in this file.
+ */
+function instrumentRefusedLines(summary: ArmSummary): readonly string[] {
+  const refused = summary.statusCounts['instrument-refused'] ?? 0;
+  if (refused === 0) {
+    return [];
+  }
+  return [
+    `  instrument-refused: ${refused}  <== the loop stopped BEFORE any repair iteration; each`,
+    '                   of these samples was judged as a FIRST candidate with NO repair, so',
+    '                   its golden pass@k contribution is NOT comparable to a sample that ran',
+    '                   the full repair loop',
   ];
 }
 
@@ -1225,6 +1411,29 @@ function goldenPassAtKLines(summary: ArmSummary, ks: readonly number[]): readonl
     `  GOLDEN ${value}  (over ${denominator} sample(s) judged by the INDEPENDENT golden testbench)`,
     ...GOLDEN_PASS_AT_K_NOTE,
     ...goldenExclusionLines(summary.goldenReport),
+    ...instrumentRefusedComparabilityNote(summary),
+  ];
+}
+
+/**
+ * State plainly that this arm's golden pass@k carries no comparability claim, when any of its
+ * samples were stopped by an Instrument_Refused outcome (Req 5.12).
+ *
+ * Scoped to an arm holding at least one Instrument_Refused sample, per Req 5.12's own wording
+ * ("WHERE an arm holds at least one Instrument_Refused sample") - not printed unconditionally,
+ * because an arm with none did not stop any sample before repair and its golden pass@k is
+ * measured exactly the way a prior run's was.
+ */
+function instrumentRefusedComparabilityNote(summary: ArmSummary): readonly string[] {
+  const refused = summary.statusCounts['instrument-refused'] ?? 0;
+  if (refused === 0) {
+    return [];
+  }
+  return [
+    `${CONTINUATION_COLUMN}${refused} of these sample(s) are Instrument_Refused: judged as a`,
+    `${CONTINUATION_COLUMN}FIRST candidate with NO repair iteration. This GOLDEN pass@k is`,
+    `${CONTINUATION_COLUMN}reported with NO CLAIM OF COMPARABILITY to a value measured where`,
+    `${CONTINUATION_COLUMN}every sample ran the full repair loop.`,
   ];
 }
 

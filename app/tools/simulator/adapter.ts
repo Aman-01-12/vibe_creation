@@ -36,6 +36,7 @@ import type {
   ToolRunner,
 } from '../sandbox/index.js';
 import { readCheckSignals } from './check-signalling.js';
+import { classifyRunFailure, type RunFailureCause } from './failure-attribution.js';
 
 /**
  * The artifact-map key under which the captured VCD waveform is returned.
@@ -78,6 +79,22 @@ export interface SimulationVerdict {
   readonly exitCode: number | null;
   /** Observed resource consumption of the run. */
   readonly resourceUsage: ResourceUsage;
+  /**
+   * Why this run's verdict is `error`; `none` for a run that reached `pass` or `fail`.
+   *
+   * Required, not optional: an optional field would let a caller construct a verdict
+   * meaning "cause unknown", which is the exact collapse this field exists to undo
+   * (design "SimulationVerdict delta"). Derived by `classifyRunFailure` from the
+   * sandbox's own `timedOut` / `diskLimitExceeded` / `stdoutTruncated` flags, never
+   * from `verdict` itself, so adding it cannot move the verdict it explains (Property 1).
+   */
+  readonly failureCause: RunFailureCause;
+  /**
+   * The submitted workspace files a build diagnostic named; a subset of the paths
+   * this run's job submitted, in submission order. Empty unless `failureCause` is
+   * `build-failed` (Property 3).
+   */
+  readonly attributedFiles: readonly string[];
 }
 
 /**
@@ -120,6 +137,14 @@ function capturedVcd(result: SandboxResult): ArtifactBlobRef | null {
 /**
  * Interpret a raw `SandboxResult` into a `SimulationVerdict`.
  *
+ * `submittedPaths` is the workspace file paths the job submitted (the RTL and
+ * testbench `assembleSimulateJob` placed in `workspaceFiles`), passed through
+ * unread except by `classifyRunFailure`, which uses it solely to identify which
+ * submitted file a build diagnostic named (Property 3). Defaults to `[]` so
+ * existing callers that interpret a result outside a real job (unit tests, the
+ * reproducibility property) keep compiling; an empty list can only ever yield
+ * `attributedFiles: []`, never a wrong attribution.
+ *
  * The sandbox already reserved `error` for a timeout, a workspace disk-cap kill, an
  * infrastructure failure, or a missing required output (including the VCD); that
  * decision is propagated unchanged with no checks, because such a run verified
@@ -131,17 +156,27 @@ function capturedVcd(result: SandboxResult): ArtifactBlobRef | null {
  * check, so it must not read as a pass), a run whose stdout was TRUNCATED is
  * `error` for the same reason one step earlier (a failing check may sit in the
  * bytes the Tool_Runner never retained), and only an entirely readable, entirely
- * complete, entirely passing run is `pass` (Req 8.10). Pure and exported for unit
- * testing.
+ * complete, entirely passing run is `pass` (Req 8.10).
+ *
+ * `verdict` is computed by `classifyVerdict` exactly as before `failureCause` and
+ * `attributedFiles` existed; `classifyRunFailure` only explains that verdict after
+ * the fact and is never consulted to produce it (Property 1). Pure and exported for
+ * unit testing.
  */
-export function interpretSandboxResult(result: SandboxResult): SimulationVerdict {
+export function interpretSandboxResult(
+  result: SandboxResult,
+  submittedPaths: readonly string[] = [],
+): SimulationVerdict {
   const vcd = capturedVcd(result);
+  const attribution = classifyRunFailure(result, submittedPaths);
   const diagnostics = {
     vcd,
     stdout: result.stdout,
     stderr: result.stderr,
     exitCode: result.exitCode,
     resourceUsage: result.resourceUsage,
+    failureCause: attribution.cause,
+    attributedFiles: attribution.attributedFiles,
   };
   if (result.verdict === 'error') {
     return { verdict: 'error', checks: [], ...diagnostics };
@@ -195,6 +230,7 @@ export class IcarusSimulatorAdapter implements SimulatorAdapter {
   ): Promise<SimulationVerdict> {
     const job = assembleSimulateJob(rtl, testbench, limits);
     const result = await this.toolRunner.run(job);
-    return interpretSandboxResult(result);
+    const submittedPaths = job.workspaceFiles.map((file) => file.path);
+    return interpretSandboxResult(result, submittedPaths);
   }
 }

@@ -83,6 +83,12 @@ function simulation(verdict: SimulationVerdict['verdict']): SimulationVerdict {
     stderr: '',
     exitCode: verdict === 'error' ? null : 0,
     resourceUsage: { cpuMs: 1, wallMs: 1, maxMemMb: 1 },
+    // Pinned: this fixture isolates the negative control's kill/survivor split from
+    // the `verdict` value alone, unrelated to failure-cause attribution, which is
+    // covered separately by the failure-attribution unit tests and the FULL
+    // `SandboxResult` arbitrary in oracle-reproducibility.property.test.ts.
+    failureCause: verdict === 'error' ? 'tool-failed' : 'none',
+    attributedFiles: [],
   };
 }
 

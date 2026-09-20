@@ -151,7 +151,7 @@ function routed(outputText: string): Result<RoutedModelResult, ModelRouterFailur
   return {
     ok: true,
     value: {
-      task: 'generation',
+      task: 'testbench',
       provider: 'deepseek',
       modelId: routedModelIdFor('deepseek'),
       outputText,

@@ -34,7 +34,9 @@
 // property file: an anti-circular guarantee with two owners is one that can be true
 // in one place and false in the other. So each rule the prompt states is asserted
 // present, and the whole assembled prompt is asserted free of the RTL sentinel, in
-// one pass.
+// one pass. The Verilog-2001 dialect rule and the RTL concurrency rule (prompt
+// version 3) are asserted the same way: unconditional, so present for every Spec,
+// and carrying no channel through which RTL could have entered.
 //
 // Validates: Requirements 7.1, 7.2, 7.7, 9.5
 
@@ -270,7 +272,7 @@ class CapturingModelRouter implements ModelRouter {
     return Promise.resolve({
       ok: true,
       value: {
-        task: 'generation',
+        task: 'testbench',
         provider: 'deepseek',
         modelId: routedModelIdFor('deepseek'),
         outputText: JSON.stringify({ source: this.source }),
@@ -402,6 +404,33 @@ describe(PROPERTY, () => {
             'This interface declares NO input qualifier',
           );
           expect(namesInputQualifier).not.toBe(withholdsInputQualifier);
+          // The Verilog-2001 dialect rule is a fact about the TOOLCHAIN, not about any
+          // interface, so it is present - in full - for every Spec. Each clause is
+          // asserted separately: the measured defect was a set of distinct offending
+          // constructs, and a rule that lost one clause to an edit would still satisfy a
+          // single "Dialect:" assertion.
+          expect(builtOnce.prompt).toContain('Dialect: the testbench is compiled as Verilog-2001');
+          expect(builtOnce.prompt).toContain('Declare EVERY `reg`, `integer`, and array at MODULE');
+          expect(builtOnce.prompt).toContain('Give no declaration an initial value');
+          expect(builtOnce.prompt).toContain('Use `reg` and `wire` only');
+          expect(builtOnce.prompt).toContain('no array-with-initializer syntax');
+          expect(builtOnce.prompt).toContain("`-9'sd1`, never `9'sd-1`");
+          // The concurrency rule is likewise unconditional, and is the MENTAL-MODEL rule
+          // the timing and input-window rules rest on - a different kind of rule, not a
+          // restatement, so its three clauses are asserted on their own terms: the
+          // machine is observed rather than stepped, no second implementation is built,
+          // and sampling happens only in the settled part of the period.
+          expect(builtOnce.prompt).toContain('Concurrency: a design is a CONCURRENT machine');
+          expect(builtOnce.prompt).toContain(
+            'Do NOT build a second implementation of the design inside the testbench',
+          );
+          expect(builtOnce.prompt).toContain(
+            'Sample an output only in the SETTLED part of a clock period',
+          );
+          // And it must READ as consistent with the state-anchoring rule rather than as a
+          // contradiction of it: the carve-out naming the observed carry-forward is part
+          // of the rule text, so an edit that drops it fails here.
+          expect(builtOnce.prompt).toContain('Carrying forward a value you OBSERVED');
 
           // (3) Captured-prompt isolation through the real agent path.
           const router = new CapturingModelRouter(sourceCovering(checks));

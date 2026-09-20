@@ -9,6 +9,7 @@
 // temperature, and sample count produced these numbers.
 
 import type { BudgetStopReason } from '@app/core';
+import type { RepairProvenance } from '@app/agent';
 
 import type { AgreementReport, RecordedGoldenVerdict } from './golden-judge.js';
 import type { InstrumentControlReport, RecordedInstrumentVerdict } from './instrument-control.js';
@@ -23,6 +24,14 @@ export type SampleOutcomeStatus =
   | 'unverified'
   | 'blocked'
   | 'setup-failed'
+  // Added by app/agent/orchestrator/verification-loop.ts's `InstrumentRefusedModule`
+  // (task 4.1). Excluded from `reachedOracleVerdict`'s positive set in
+  // `./instrument-control.ts` (Req 5.8, 5.9), so it never enters the pass@k
+  // denominator. Admitted to the GOLDEN denominator by `countsInGoldenPassAtK` in
+  // `./golden-judge.ts` (Req 5.7): a refused testbench still surrenders its
+  // candidate to the independent judge. Classified under its own distinct
+  // `NoVerdictCause` in `./no-verdict-cause.ts` (Req 5.10).
+  | 'instrument-refused'
   /** The loop runner threw; the sample is treated as failed, fail-safe. */
   | 'runner-error';
 
@@ -133,6 +142,18 @@ export interface SampleResult {
    * already carries the reason.
    */
   readonly mutationProbe: MutationProbeReport | null;
+  /**
+   * Whether a Testbench_Repair was attempted/accepted for this sample, at either
+   * the Testbench_Precheck trigger point (inside `app/agent`) or the Positive_
+   * Control trigger point (`EvalHarness#repairIfTriggered`, below).
+   *
+   * `attempted: false` means neither trigger point ever consulted the repair
+   * port for this sample - the unrepaired baseline (`NO_REPAIR`). `accepted`
+   * is `true` only when the attempt's revised testbench is the one the final
+   * verdict in this very record was decided from; every other combination
+   * means the sample's recorded fields describe the ORIGINAL, unrepaired run.
+   */
+  readonly repairProvenance: RepairProvenance;
 }
 
 /** The aggregated result for one problem across all its samples. */

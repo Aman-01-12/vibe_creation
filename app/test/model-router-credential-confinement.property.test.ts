@@ -35,6 +35,7 @@ import {
   InMemorySecretManager,
   InMemorySessionBudgetHandle,
   InMemoryTracePersistence,
+  MODEL_TASKS,
   TraceActionRecorder,
   containsSecret,
   createModelRouter,
@@ -53,14 +54,13 @@ import { propertyParameters, propertyTag, secretShapedTokenArbitrary } from '@ap
 
 // --- Constants ---------------------------------------------------------------
 
-/** Every task the router routes; iterating over all exercises every chain. */
-const TASKS: readonly ModelTask[] = [
-  'generation',
-  'repair',
-  'orchestration',
-  'teaching',
-  'hard-planning',
-];
+/**
+ * Every task the router routes; iterating over all exercises every chain.
+ *
+ * Imported rather than re-listed: confinement is a claim about every routed task, so a
+ * new role must widen this scenario space automatically instead of silently escaping it.
+ */
+const TASKS: readonly ModelTask[] = MODEL_TASKS;
 
 /**
  * Every provider whose credential is loaded into the secret manager.

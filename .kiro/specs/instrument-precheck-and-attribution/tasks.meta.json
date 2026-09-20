@@ -1,0 +1,721 @@
+{
+  "pbtResults": {
+    "6.5 Write the property test for the adapter": {
+      "status": "passed",
+      "lastRunTimestamp": 1789844191942
+    },
+    "10.2 Write the property test for the identity fold-in": {
+      "status": "passed",
+      "lastRunTimestamp": 1789844391430
+    },
+    "7.2 Write the property test for candidate surrender": {
+      "status": "passed",
+      "lastRunTimestamp": 1789845867565
+    }
+  },
+  "executionHistory": {
+    "1.1 Add the pure failure-attribution module": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832114679
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832131775
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832373630
+      }
+    ],
+    "1.4 Carry the cause and the attributed files on `SimulationVerdict`": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832114721
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832409036
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833014775
+      }
+    ],
+    "2. Checkpoint - the seam is narrowed and nothing downstream has changed": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832114753
+      }
+    ],
+    "3.1 Add the interface stub and the precheck": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832114786
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832381996
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832401439
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833024529
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833431461
+      }
+    ],
+    "3.5 Add the instrument-admission port and the policy-version constant": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832114814
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832132561
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832374279
+      }
+    ],
+    "4.1 Add the `instrument-refused` terminal outcome": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832114854
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833455876
+      },
+      {
+        "executionId": "544e4198-2870-4dee-973a-749984e31f75",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789834261774
+      }
+    ],
+    "4.2 Run the precheck and the admission check between setup and the first iteration": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832114894
+      },
+      {
+        "executionId": "544e4198-2870-4dee-973a-749984e31f75",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789834279637
+      },
+      {
+        "executionId": "544e4198-2870-4dee-973a-749984e31f75",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789835196240
+      }
+    ],
+    "4.4 Attribute a build failure inside the iteration loop": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832114938
+      },
+      {
+        "executionId": "544e4198-2870-4dee-973a-749984e31f75",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789835235882
+      },
+      {
+        "executionId": "544e4198-2870-4dee-973a-749984e31f75",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789835614644
+      }
+    ],
+    "4.6 Carry the rejected testbench draft out of setup": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832114970
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789837685201
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789838029527
+      }
+    ],
+    "5. Checkpoint - the loop stops early and nothing it used to do has changed": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115004
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789838072602
+      }
+    ],
+    "6.1 Add the resource-exhausted unchecked reason": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115034
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832382613
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833015528
+      }
+    ],
+    "6.2 Classify a killed control run as unchecked, not as a defect": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115065
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833048570
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833430469
+      }
+    ],
+    "6.4 Add the memoizing admission adapter": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115093
+      },
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833456756
+      },
+      {
+        "executionId": "544e4198-2870-4dee-973a-749984e31f75",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789834262189
+      }
+    ],
+    "6.6 Thread the admission through the harness and the loop runner": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115126
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789838079807
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789838601604
+      }
+    ],
+    "7.1 Read the refused outcome in the capture and the judge paths": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115163
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789838607812
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789839133139
+      }
+    ],
+    "7.4 Admit the refused status to the denominators and the no-verdict vocabulary": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115194
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789839140320
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789839720718
+      }
+    ],
+    "8. Checkpoint - the golden denominator is provably unharmed": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115226
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789839763208
+      }
+    ],
+    "9.1 Persist the unchecked reason and the refused status": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115256
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789840175301
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789840942340
+      }
+    ],
+    "9.4 Bump the artifact document schema and add the new filenames": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115292
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789840950118
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789841357529
+      }
+    ],
+    "9.5 Report the new counts and the non-comparability note": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115342
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789841386836
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789841835654
+      }
+    ],
+    "10.1 Fold the policy version into the identity and the manifest": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115369
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789841843798
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789842091329
+      }
+    ],
+    "10.3 Re-pin the config hashes": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115397
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789842099551
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789842348355
+      }
+    ],
+    "10.4 Export the new surface and close the boundary": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115422
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789842356611
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789842741622
+      }
+    ],
+    "11. Final checkpoint - the whole gate, and the honest numbers": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115449
+      }
+    ],
+    "12.1 Run the committed slice into a fresh output directory and compare": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789832115484
+      }
+    ],
+    "1. Decide the run failure cause once, at the simulate seam": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833014920
+      }
+    ],
+    "3. The Spec-derived stub and the testbench precheck": [
+      {
+        "executionId": "cf379e03-c39b-47bf-a20c-3efca000b3ad",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789833431498
+      }
+    ],
+    "4. The loop refuses instead of repairing": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789838029683
+      }
+    ],
+    "6. The eval layer classifies honestly and validates earlier": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789838601655
+      }
+    ],
+    "7. A refused sample still surrenders its candidate": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789839720829
+      }
+    ],
+    "9. Records, artifacts, and the summary": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789841835706
+      }
+    ],
+    "10. The experiment identity": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789842741666
+      }
+    ],
+    "1.2 Write the property test for cause precedence": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843217780
+      }
+    ],
+    "1.3 Write the property test for attribution containment": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843244033
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843287435
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843953605
+      }
+    ],
+    "1.5 Write the property test for verdict non-regression": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843250730
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843964942
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789844504317
+      }
+    ],
+    "3.2 Write the property test for the stub's shape": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843251468
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843288360
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843952655
+      }
+    ],
+    "3.3 Write the property test for the precheck decision table": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843252547
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843966000
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789844505164
+      }
+    ],
+    "3.4 Write unit tests for the measured testbench cases": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843253666
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789844525679
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789845630357
+      }
+    ],
+    "4.3 Write the property test for admission non-interference": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843254460
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789845653294
+      }
+    ],
+    "4.5 Write the property test for the repair decision": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843255237
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789844526414
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789845630891
+      }
+    ],
+    "6.3 Write the property test for resource-bound classification": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843256328
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843289112
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843951943
+      }
+    ],
+    "6.5 Write the property test for the adapter": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843257097
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843966833
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789844506184
+      }
+    ],
+    "7.2 Write the property test for candidate surrender": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843257719
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789845654377
+      }
+    ],
+    "7.3 Write the property test for bounded capture": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843258877
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789844527622
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789845627508
+      }
+    ],
+    "7.5 Write the property test for the denominator truth table": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843259491
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789845654849
+      }
+    ],
+    "9.2 Write the property test for the record round trip": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843260601
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843967741
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789844503338
+      }
+    ],
+    "9.3 Write the property test for the stale-schema refusal": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843261527
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789844528229
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789845629171
+      }
+    ],
+    "9.6 Write the property test for summary reconciliation": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843262443
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789844529091
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789845628513
+      }
+    ],
+    "10.2 Write the property test for the identity fold-in": [
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843263095
+      },
+      {
+        "executionId": "602a0e2a-57d7-42e7-8539-c8ac117d3934",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789843968328
+      }
+    ]
+  }
+}

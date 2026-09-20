@@ -42,6 +42,14 @@ import {
   type SessionBudget,
   type Ulid,
 } from '@app/core';
+import {
+  buildRepairHint,
+  NO_REPAIR,
+  type RepairHint,
+  type RepairProvenance,
+  type SessionBudgetHandle,
+  type TestbenchRepair,
+} from '@app/agent';
 import type { ResourceLimits } from '@app/tools';
 
 import {
@@ -58,6 +66,7 @@ import {
   type RecordedGoldenVerdict,
   type VerdictPair,
 } from './golden-judge.js';
+import { MemoizingInstrumentAdmission } from './instrument-admission.js';
 import {
   summarizeInstrumentControl,
   uncheckedInstrument,
@@ -76,6 +85,7 @@ import { MeteredSessionBudget } from './metered-budget.js';
 import { sampleSeed, type ReproducibilityConfig } from './reproducibility.js';
 import { meanPassAtK, passAtK } from './metrics.js';
 import type { EvalProblem } from './problem.js';
+import { repairTriggerFor } from './testbench-repair.js';
 import type { EvalLoopRunner, StudentSessionCaps } from './loop-runner.js';
 import type {
   CostEnvelopeReport,
@@ -136,6 +146,33 @@ export interface EvalHarnessDeps {
    * number (see `#captureArtifacts` and `./artifact-sink.ts`).
    */
   readonly artifactSink?: EvalArtifactSink;
+  /**
+   * Optional per-sample TESTBENCH_REPAIR factory, consulted for a
+   * Positive_Control-caused Repair_Trigger, before that sample's Session_Budget is
+   * read for the record.
+   *
+   * A FACTORY, not a fixed instance, for the same reason `#buildAdmission` builds a
+   * fresh `MemoizingInstrumentAdmission` per sample rather than taking one
+   * constructed instance: `EvalTestbenchRepair`'s own contract is "one instance per
+   * sample, constructed with the sample's own `sessionId` and its own
+   * `SessionBudgetHandle`" (see `./testbench-repair.ts`), and neither of those exists
+   * until `#runSample` has already minted them. Called at most once per sample - the
+   * SAME sessionId and SAME budget `#runSample` charges every other model call in
+   * that sample against - right after they are established, mirroring
+   * `#buildAdmission`'s placement.
+   *
+   * After the positive control runs, a sample whose testbench rejects the
+   * known-good reference (or fails to build with it) - AND for which the loop's
+   * own precheck-path repair was never attempted for this sample (Req 1.3, 1.4) -
+   * is offered exactly one repair attempt through the port this factory builds,
+   * before its verdict is finalized. On `{ decision: 'repaired' }`, the revised
+   * testbench is re-checked under the SAME control and mutation config a first
+   * draft is held to (Req 3.2, 3.6), and the sample's recorded fields reflect the
+   * re-check, not the original run. When absent, every sample's
+   * positive-control-path repair is skipped entirely and the run behaves exactly as
+   * it did before this seam existed.
+   */
+  readonly testbenchRepairFor?: (sessionId: Ulid, budget: SessionBudgetHandle) => TestbenchRepair;
   /** ULID source for per-session budget ids; defaults to `newUlid`. */
   readonly newId?: () => Ulid;
 }
@@ -152,6 +189,8 @@ interface ResolvedConfig {
   readonly goldenJudge: GoldenJudge | null;
   readonly instrumentControl: InstrumentControl | null;
   readonly artifactSink: EvalArtifactSink | null;
+  readonly testbenchRepairFor:
+    ((sessionId: Ulid, budget: SessionBudgetHandle) => TestbenchRepair) | null;
   readonly newId: () => Ulid;
 }
 
@@ -196,6 +235,7 @@ export function createEvalHarness(deps: EvalHarnessDeps): Result<EvalHarness, Do
       goldenJudge: deps.goldenJudge ?? null,
       instrumentControl: deps.instrumentControl ?? null,
       artifactSink: deps.artifactSink ?? null,
+      testbenchRepairFor: deps.testbenchRepairFor ?? null,
       newId,
     }),
   );
@@ -277,30 +317,141 @@ export class EvalHarness {
   async #runSample(problem: EvalProblem, sampleIndex: number): Promise<SampleResult> {
     const seed = sampleSeed(this.#resolved.config, problem.id, sampleIndex);
     const budget = this.#freshBudget();
-    const outcome = await this.#drive(problem, sampleIndex, seed, budget);
+    const admission = this.#buildAdmission(problem);
+    // Built right where the harness first has a fresh sessionId and budget for this sample,
+    // mirroring `#buildAdmission`'s placement: one `TestbenchRepair` per sample, bound to
+    // the SAME sessionId and budget every other model call in this sample charges against.
+    const testbenchRepair = this.#buildTestbenchRepair(budget);
+    const outcome = await this.#drive(problem, sampleIndex, seed, budget, admission);
+    // Whether the loop already attempted (and used up) the one repair this sample is
+    // allowed, read before consulting the control or the repair port (Req 1.3, 1.4).
+    const repairProvenance = repairProvenanceOf(outcome);
+    // Prefer the result the loop's own admission check already produced over the instrument
+    // (Req 4.12, 4.14): the loop consults `admission.admit` at most once, before its first
+    // iteration, and `recorded()` hands back the exact `InstrumentControlResult` that decision
+    // came from. Re-running `#controlInstrument` on top of that would run the control a SECOND
+    // time for the same sample, which Req 4.12 forbids. Only when nothing was recorded - no
+    // admission was wired, or the runner never actually consulted it (e.g. a precheck failure
+    // returned Instrument_Refused before admission was ever reached) - does this fall back to
+    // the pre-existing after-the-loop control, unchanged.
+    const control = admission?.recorded() ?? (await this.#controlInstrument(problem, outcome));
+    // Only when the positive control just found exactly the two triggering defects, AND no
+    // repair has already been attempted for this sample, does this consult the repair port
+    // (Req 1.4).
+    const { finalOutcome, finalControl, wasRepaired, repairHint, preRepairTestbenchSource } =
+      await this.#repairIfTriggered(problem, outcome, control, repairProvenance, testbenchRepair);
+    // Read AFTER any repair-and-recheck sequence has fully completed, not immediately
+    // after `#drive`, so a repair attempt's own model call is accounted for (Req 5.4).
     const consumed = budget.consumed();
     const stopReason = budget.stopReason();
-    const control = await this.#controlInstrument(problem, outcome);
     const sample: SampleResult = {
       sampleIndex,
       seed,
-      passed: outcome.status === 'verified',
-      outcomeStatus: outcome.status,
-      failureNote: sampleFailureNote(outcome),
-      noVerdictCause: noVerdictCauseOf(outcome),
-      iterations: iterationsOf(outcome),
+      passed: finalOutcome.status === 'verified',
+      outcomeStatus: finalOutcome.status,
+      failureNote: sampleFailureNote(finalOutcome),
+      noVerdictCause: noVerdictCauseOf(finalOutcome),
+      iterations: iterationsOf(finalOutcome),
       costCents: consumed.costCents,
       promptTokens: consumed.promptTokens,
       completionTokens: consumed.completionTokens,
       totalTokens: consumed.tokens,
       unreportedUsageCalls: consumed.unreportedUsageCalls,
       stopReason,
-      goldenVerdict: await this.#judgeIndependently(problem, outcome),
-      instrumentVerdict: control.verdict,
-      mutationProbe: control.mutation,
+      goldenVerdict: await this.#judgeIndependently(problem, finalOutcome),
+      instrumentVerdict: finalControl.verdict,
+      mutationProbe: finalControl.mutation,
+      repairProvenance: wasRepaired
+        ? { attempted: true, accepted: finalControl.verdict.validity === 'valid' }
+        : repairProvenance,
     };
-    await this.#captureArtifacts(problem, sample, outcome, control);
+    await this.#captureArtifacts(
+      problem,
+      sample,
+      finalOutcome,
+      finalControl,
+      repairHint,
+      preRepairTestbenchSource,
+    );
     return sample;
+  }
+
+  /**
+   * Offer this sample exactly one Positive_Control-caused repair attempt, before its
+   * verdict is finalized (Req 1.1-1.5, 3.2, 3.6, 6.1-6.4, 8.4).
+   *
+   * Total by construction - every path returns a result, never a throw - so a repair
+   * attempt can never end a campaign that has hours invested in it. Every path that
+   * declines to repair returns the ORIGINAL outcome and control UNCHANGED and
+   * `wasRepaired: false`, so the caller proceeds exactly as it would with no repair
+   * capability at all:
+   *   - no port wired, or a precheck-path repair already spent this sample's one
+   *     attempt (Req 1.3, 1.4)
+   *   - the control's verdict is not one of the two triggering defects (Req 1.1, 1.2)
+   *   - the outcome carries no testbench source to repair (Req 1.6, 6.1)
+   *   - the port threw (Req 6.1, 6.2)
+   *   - the port declined (`not-repaired` / `undecided`) (Req 6.1, 6.4)
+   *
+   * On `{ decision: 'repaired' }`, the revised testbench is re-checked through the
+   * EXISTING `#controlInstrument` - unchanged, so the repaired testbench is held to
+   * identically the same standard a first draft is (Req 3.2, 3.6).
+   *
+   * `port` is this sample's own `TestbenchRepair` (see `#buildTestbenchRepair`), or
+   * `null` when no factory is wired - passed in rather than read off `this.#resolved`
+   * because the port is per-sample, not run-wide.
+   */
+  async #repairIfTriggered(
+    problem: EvalProblem,
+    outcome: DriveOutcome,
+    control: InstrumentControlResult,
+    precheckProvenance: RepairProvenance,
+    port: TestbenchRepair | null,
+  ): Promise<{
+    readonly finalOutcome: DriveOutcome;
+    readonly finalControl: InstrumentControlResult;
+    readonly wasRepaired: boolean;
+    /** The hint this attempt was built from, or `null` when no attempt was made. */
+    readonly repairHint: RepairHint | null;
+    /** The pre-repair testbench source, present only when `wasRepaired` is `true`. */
+    readonly preRepairTestbenchSource: string | null;
+  }> {
+    const declined = {
+      finalOutcome: outcome,
+      finalControl: control,
+      wasRepaired: false,
+      repairHint: null,
+      preRepairTestbenchSource: null,
+    };
+    if (port === null || precheckProvenance.attempted) {
+      return declined;
+    }
+    const trigger = repairTriggerFor(control.verdict, problem.spec, control.stderr);
+    if (trigger === null) {
+      return declined;
+    }
+    const previousSource = testbenchSourceOf(outcome);
+    if (previousSource === null) {
+      return declined; // Req 1.6, 6.1: no testbench source to repair.
+    }
+    const hint = buildRepairHint(trigger);
+    let decision;
+    try {
+      decision = await port.repair({ spec: problem.spec, previousSource, hint });
+    } catch {
+      return declined; // Req 6.1, 6.2: fail-safe, never propagates.
+    }
+    if (decision.decision !== 'repaired') {
+      return declined; // Req 6.1, 6.4: `not-repaired` / `undecided` proceed unrepaired.
+    }
+    const revisedOutcome = withRevisedTestbench(outcome, decision.revisedSource);
+    const recheck = await this.#controlInstrument(problem, revisedOutcome);
+    return {
+      finalOutcome: revisedOutcome,
+      finalControl: recheck,
+      wasRepaired: true,
+      repairHint: hint,
+      preRepairTestbenchSource: previousSource,
+    };
   }
 
   /**
@@ -362,6 +513,8 @@ export class EvalHarness {
     sample: SampleResult,
     outcome: CapturedOutcome,
     control: InstrumentControlResult,
+    repairHint: RepairHint | null,
+    preRepairTestbenchSource: string | null,
   ): Promise<void> {
     const sink = this.#resolved.artifactSink;
     if (sink === null) {
@@ -370,7 +523,13 @@ export class EvalHarness {
     try {
       await sink.write(
         { problemId: problem.id, sampleIndex: sample.sampleIndex, seed: sample.seed },
-        captureSampleArtifacts({ outcome, measured: sample, control }),
+        captureSampleArtifacts({
+          outcome,
+          measured: sample,
+          control,
+          repairHint,
+          preRepairTestbenchSource,
+        }),
       );
     } catch {
       // Sanitized and fail-safe: the sink's error detail routinely names a path and an
@@ -425,6 +584,7 @@ export class EvalHarness {
     sampleIndex: number,
     seed: number,
     budget: MeteredSessionBudget,
+    admission: MemoizingInstrumentAdmission | null,
   ): Promise<DriveOutcome> {
     try {
       return await this.#resolved.loopRunner.runSample({
@@ -434,11 +594,48 @@ export class EvalHarness {
         temperature: this.#resolved.config.temperature,
         budget,
         limits: this.#resolved.limits,
+        ...(admission === null ? {} : { instrumentAdmission: admission }),
       });
     } catch {
       // Sanitized, fail-safe: the runner's error detail never enters the report.
       return { status: 'runner-error' };
     }
+  }
+
+  /**
+   * Build this sample's per-sample Instrument_Admission adapter, or `null` when no
+   * Instrument_Control is wired (Req 4.10).
+   *
+   * One `MemoizingInstrumentAdmission` per sample, matching its documented lifetime: no
+   * cross-sample state to reset, and the control it wraps runs at most once whether the loop
+   * consults `admit` zero or one times (Req 4.12).
+   */
+  #buildAdmission(problem: EvalProblem): MemoizingInstrumentAdmission | null {
+    const control = this.#resolved.instrumentControl;
+    if (control === null) {
+      return null;
+    }
+    return new MemoizingInstrumentAdmission(control, {
+      problemId: problem.id,
+      limits: this.#resolved.limits,
+    });
+  }
+
+  /**
+   * Build this sample's per-sample Testbench_Repair port, or `null` when no factory
+   * is wired (mirrors `#buildAdmission`).
+   *
+   * One `TestbenchRepair` instance per sample, built from THIS sample's own
+   * `sessionId` and `SessionBudgetHandle` - the same `budget` `#runSample` already
+   * charges every other model call in this sample against - so a repair attempt is
+   * accounted for inside the identical budget a first draft is (Req 5.1, 5.4, 5.5).
+   */
+  #buildTestbenchRepair(budget: MeteredSessionBudget): TestbenchRepair | null {
+    const factory = this.#resolved.testbenchRepairFor;
+    if (factory === null) {
+      return null;
+    }
+    return factory(budget.sessionId, budget);
   }
 
   /** Assemble the whole-run report from the per-problem results (pure). */
@@ -510,6 +707,50 @@ type DriveOutcome = CapturedOutcome;
 /** Loop iterations the session ran, or 0 when the outcome carries no iteration count. */
 function iterationsOf(outcome: DriveOutcome): number {
   return 'iterations' in outcome ? outcome.iterations : 0;
+}
+
+/**
+ * Whether this sample's outcome already carries a Testbench_Repair attempt, or
+ * `NO_REPAIR` when it carries none.
+ *
+ * Read from `outcome.repairProvenance` for the three statuses that carry it -
+ * `verified`, `unverified`, `instrument-refused`, the only outcomes that can
+ * reach a repairable point. `blocked`, `setup-failed`, and `runner-error` never
+ * reach one, so they report the unrepaired baseline rather than a value that
+ * does not exist on them.
+ */
+function repairProvenanceOf(outcome: DriveOutcome): RepairProvenance {
+  if (
+    outcome.status === 'verified' ||
+    outcome.status === 'unverified' ||
+    outcome.status === 'instrument-refused'
+  ) {
+    return outcome.repairProvenance;
+  }
+  return NO_REPAIR;
+}
+
+/**
+ * A shallow copy of `outcome` with its testbench source replaced by
+ * `revisedSource`, or `outcome` unchanged when it carries no `testbench` field.
+ *
+ * Legal because `testbenchSourceOf`/`candidateRtlOf` already read
+ * `outcome.testbench.source` structurally (see `./artifact-sink.ts`), so every
+ * downstream reader of the returned outcome - `#judgeIndependently`,
+ * `#captureArtifacts`, the golden judge - sees the repaired source with no
+ * further change. Total and safe for `blocked`/`setup-failed`/`runner-error`
+ * too, even though `#repairIfTriggered` never reaches a trigger for those (a
+ * status with no testbench source never fires `repairTriggerFor`).
+ */
+function withRevisedTestbench(outcome: DriveOutcome, revisedSource: string): DriveOutcome {
+  if (
+    outcome.status === 'verified' ||
+    outcome.status === 'unverified' ||
+    outcome.status === 'instrument-refused'
+  ) {
+    return { ...outcome, testbench: { ...outcome.testbench, source: revisedSource } };
+  }
+  return outcome;
 }
 
 /**

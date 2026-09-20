@@ -29,6 +29,7 @@ import {
   SandboxToolRunner,
   type RawRunCapture,
   type ResourceLimits,
+  type SandboxJob,
 } from '@app/tools';
 
 import { InMemoryTracePersistence, TraceActionRecorder } from '../action-recorder/index.js';
@@ -41,6 +42,7 @@ import type {
 } from '../roles/generation/index.js';
 import type {
   GenerateTestbenchRequest,
+  RepairTestbenchRequest,
   RequiredCheck,
   TestbenchGenerationOutcome,
 } from '../roles/testbench/index.js';
@@ -197,7 +199,7 @@ class ScriptedGenerator implements CandidateGenerator {
   }
 }
 
-/** A testbench port that returns a scripted outcome. */
+/** A testbench port that returns a scripted outcome. Never repairs (task 6.4). */
 class ScriptedTestbench implements IndependentTestbenchGenerator {
   readonly #outcome: TestbenchGenerationOutcome;
   constructor(outcome: TestbenchGenerationOutcome) {
@@ -210,6 +212,30 @@ class ScriptedTestbench implements IndependentTestbenchGenerator {
     budget.charge({ tokens: 1, costCents: 1, wallClockMs: 1 });
     return Promise.resolve(this.#outcome);
   }
+  repairTestbench(
+    _request: RepairTestbenchRequest,
+    budget: SessionBudgetHandle,
+  ): Promise<TestbenchGenerationOutcome> {
+    budget.charge({ tokens: 1, costCents: 1, wallClockMs: 1 });
+    return Promise.resolve({
+      status: 'generation-failed',
+      failure: { reason: 'model-call-failed', detail: 'ScriptedTestbench never repairs' },
+    });
+  }
+}
+
+/**
+ * The Testbench_Precheck's interface-stub filename (`testbench-precheck.ts`,
+ * `INTERFACE_STUB_MODULE`). The loop now runs an unconditional precheck simulate
+ * call before the first iteration, submitting this stub as "RTL"; fakes that
+ * script the Simulator by call order must recognize and skip over that call so
+ * the scripted SEQUENCE still lines up with real iterations only.
+ */
+const PRECHECK_STUB_PATH = 'testbench_precheck_stub.v';
+
+/** Whether a sandbox job is the precheck's own build check, not a real iteration. */
+function isPrecheckJob(job: SandboxJob): boolean {
+  return job.workspaceFiles.some((file) => file.path === PRECHECK_STUB_PATH);
 }
 
 /** A raw capture whose testbench emitted a passing check and a VCD. */
@@ -267,9 +293,9 @@ function makeLoop(
   gate: GenerationContextOpener,
   generator: CandidateGenerator,
   testbench: IndependentTestbenchGenerator,
-  captures: () => RawRunCapture,
+  captures: (job: SandboxJob) => RawRunCapture,
 ): { loop: VerificationLoop; recorder: TraceActionRecorder } {
-  const runtime = new FakeSandboxRuntime(captures);
+  const runtime = new FakeSandboxRuntime((job) => captures(job));
   const simulator = new IcarusSimulatorAdapter(new SandboxToolRunner(runtime));
   const recorder = new TraceActionRecorder(new InMemoryTracePersistence());
   const loop = new VerificationLoop({
@@ -301,12 +327,17 @@ describe('VerificationLoop.verify - fail then repair then pass (Req 8.1-8.4)', (
       testbench: testbenchFor(spec),
       checks: [],
     });
-    let runs = 0;
+    let iterationRuns = 0;
     const { loop } = makeLoop(
       new AdmittingGate(confirmedContext(spec)),
       generator,
       testbench,
-      () => (runs++ === 0 ? failCapture() : passCapture()),
+      (job) => {
+        if (isPrecheckJob(job)) {
+          return passCapture();
+        }
+        return iterationRuns++ === 0 ? failCapture() : passCapture();
+      },
     );
 
     const outcome = await loop.verify(REQUEST, budgetWithIterations(20), LIMITS);

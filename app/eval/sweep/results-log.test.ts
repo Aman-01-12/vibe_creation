@@ -17,6 +17,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import { RECORDED_GOLDEN_KINDS } from '../golden-judge.js';
+import type { InstrumentUncheckedReason } from '../instrument-control.js';
 import type { MutationSampleCounts } from '../mutation-control.js';
 import {
   CompletedSampleIndex,
@@ -30,6 +31,7 @@ import {
   STALE_SCHEMA_ADVICE,
   type SweepSampleRecord,
 } from './results-log.js';
+import { summarizeRecords } from './summary.js';
 
 /** A complete, valid record; each test overrides only the field it is about. */
 function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
@@ -57,6 +59,9 @@ function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
     goldenFailureCount: 0,
     instrumentValidity: 'valid',
     instrumentDefect: null,
+    // The default is a CHECKED instrument, so there is no unchecked reason to carry. A test
+    // about `unchecked` sets `instrumentValidity` and this field together.
+    instrumentUncheckedReason: null,
     // The default carries a PROBED negative control that killed everything, so a test which
     // says nothing about mutation still exercises the normal current-standard path.
     mutation: {
@@ -71,6 +76,11 @@ function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
       goldenErroredCount: 0,
       elapsedMs: 3_200,
     },
+    // The default sample's testbench passed on the first draft, so there is no repair to
+    // report. A test about the repair fields sets both explicitly, because a record claiming
+    // `repairAccepted` without `repairAttempted` is refused (see the round-trip tests below).
+    repairAttempted: false,
+    repairAccepted: false,
     durationMs: 42_000,
     completedAtMs: 1_700_000_000_000,
     failureNote: null,
@@ -396,6 +406,32 @@ describe('an older record schema is counted separately from corruption', () => {
     expect(advice).toContain('timed-out');
   });
 
+  it('names BOTH v9->v10 changes as reasons the file cannot be aggregated', () => {
+    // The reason for the current bump. An operator has to learn that an older record's
+    // iteration count describes a spent-repair-budget flow that no longer exists, AND that
+    // an unchecked instrument's real reason cannot be recovered - reading either one back
+    // would fabricate a measurement.
+    const advice = STALE_SCHEMA_ADVICE.join(' ');
+
+    expect(advice).toContain('adder_8bit');
+    expect(advice).toContain('iterations: 0');
+    expect(advice).toContain('multi_16bit');
+    expect(advice).toContain('control-unavailable');
+  });
+
+  it('names the v10->v11 repair fields without claiming instrumentValidity changed meaning', () => {
+    // The reason for THIS bump is different in kind from every one above it: unlike those,
+    // `instrumentValidity` itself did NOT get redefined here. An operator has to learn both
+    // halves - the old field's meaning held steady, and two new fields were introduced with
+    // no honest default - or they might assume every bump redefines `valid` and go looking
+    // for a fifth redefinition that was never made.
+    const advice = STALE_SCHEMA_ADVICE.join(' ');
+
+    expect(advice).toContain('did NOT change meaning in this bump');
+    expect(advice).toContain('repairAttempted');
+    expect(advice).toContain('repairAccepted');
+  });
+
   it('given a previous-version line, when the log is parsed, then it aggregates nothing', () => {
     // The whole-file consequence, from the log's own side: a stale line contributes NO
     // record, so there is nothing for a summary to aggregate, and `staleSchemaLines` is what
@@ -449,6 +485,84 @@ describe('an older record schema is counted separately from corruption', () => {
       instrumentDefect: 'SOMETHING_ELSE',
     });
     expect(decoded?.instrumentDefect).toBeNull();
+  });
+
+  it('round-trips an unchecked record with its persisted reason', () => {
+    const unchecked = record({
+      outcomeStatus: 'setup-failed',
+      goldenVerdict: null,
+      goldenFailureCount: null,
+      instrumentValidity: 'unchecked',
+      instrumentUncheckedReason: 'no-testbench',
+      iterations: 0,
+    });
+
+    expect(decodeSampleRecord(JSON.parse(encodeSampleRecord(unchecked)))).toEqual(unchecked);
+  });
+
+  it('rejects an unchecked record with no persisted reason, rather than defaulting one', () => {
+    // The v9->v10 defect this field exists to close: every v9 `unchecked` record has no
+    // reason at all, and reading one back would either invent a specific cause nobody
+    // measured, or silently fall back to `control-unavailable` for a sample whose real
+    // cause may have been `no-testbench` or `control-resource-exhausted`.
+    expect(
+      decodeSampleRecord({
+        ...record({ instrumentValidity: 'unchecked' }),
+        instrumentUncheckedReason: null,
+      }),
+    ).toBeNull();
+  });
+
+  it('rejects an unchecked record with an unrecognized reason, rather than defaulting one', () => {
+    expect(
+      decodeSampleRecord({
+        ...record({ instrumentValidity: 'unchecked' }),
+        instrumentUncheckedReason: 'made-up-reason',
+      }),
+    ).toBeNull();
+  });
+
+  it('rejects a CHECKED record that carries an unchecked reason anyway', () => {
+    // A `valid` or `invalid` sample has no unchecked reason to carry; a record that claims
+    // both is as untrustworthy as one missing a reason it needs.
+    expect(
+      decodeSampleRecord({
+        ...record({ instrumentValidity: 'valid' }),
+        instrumentUncheckedReason: 'no-testbench',
+      }),
+    ).toBeNull();
+  });
+
+  it('accepts every member of InstrumentUncheckedReason on an unchecked record', () => {
+    const reasons: readonly InstrumentUncheckedReason[] = [
+      'control-absent',
+      'no-testbench',
+      'no-reference',
+      'testbench-unsubmittable',
+      'control-unavailable',
+      'no-mutants-generated',
+      'no-valid-mutants',
+      'no-golden-killed-mutants',
+      'mutation-probe-unavailable',
+      'control-resource-exhausted',
+    ];
+    for (const reason of reasons) {
+      const decoded = decodeSampleRecord(
+        JSON.parse(
+          encodeSampleRecord(
+            record({
+              outcomeStatus: 'setup-failed',
+              goldenVerdict: null,
+              goldenFailureCount: null,
+              instrumentValidity: 'unchecked',
+              instrumentUncheckedReason: reason,
+              iterations: 0,
+            }),
+          ),
+        ),
+      );
+      expect(decoded?.instrumentUncheckedReason).toBe(reason);
+    }
   });
 });
 
@@ -538,9 +652,126 @@ describe('instrumentVerdictOf - rebuilding the union from the flat record', () =
     ).toEqual({ validity: 'invalid', defect: 'CONTROL_RUN_ERRORED' });
   });
 
-  it('reads an unchecked record back as unchecked', () => {
-    expect(instrumentVerdictOf(record({ instrumentValidity: 'unchecked' }))?.validity).toBe(
-      'unchecked',
+  it('reads an unchecked record back with its PERSISTED reason', () => {
+    expect(
+      instrumentVerdictOf(
+        record({
+          instrumentValidity: 'unchecked',
+          instrumentUncheckedReason: 'no-testbench',
+        }),
+      ),
+    ).toEqual({ validity: 'unchecked', reason: 'no-testbench' });
+  });
+
+  it('falls back to control-unavailable for a directly-constructed record with no reason, as defense in depth', () => {
+    // `decodeSampleRecord` refuses this shape outright (see the decoding-strictness
+    // describe block below), so this only exercises a `SweepSampleRecord` built by some
+    // other path, e.g. a test fixture.
+    expect(
+      instrumentVerdictOf(
+        record({ instrumentValidity: 'unchecked', instrumentUncheckedReason: null }),
+      ),
+    ).toEqual({ validity: 'unchecked', reason: 'control-unavailable' });
+  });
+});
+
+describe('unchecked reason round trip - Property 10', () => {
+  // instrument-precheck-and-attribution, Property 10: An unchecked reason survives the
+  // round trip.
+  //
+  // For any RecordedInstrumentVerdict, encoding it into a sample record and decoding that
+  // record back yields an equal verdict, so no `unchecked` reason is flattened on the way
+  // to the summary. The measured defect this closes: a v9 record carried no reason field at
+  // all, so `instrumentVerdictOf` invented `control-unavailable` for every `unchecked`
+  // sample regardless of the real cause (`rtllm/arithmetic/multi_16bit` was actually killed
+  // by a disk cap, not an unbuildable testbench).
+  //
+  // Validates: Requirements 3.5, 3.6
+
+  /** Every member of the closed InstrumentUncheckedReason set, including task 6.1's addition. */
+  const uncheckedReasonArbitrary: fc.Arbitrary<InstrumentUncheckedReason> = fc.constantFrom(
+    'control-absent',
+    'no-testbench',
+    'no-reference',
+    'testbench-unsubmittable',
+    'control-unavailable',
+    'no-mutants-generated',
+    'no-valid-mutants',
+    'no-golden-killed-mutants',
+    'mutation-probe-unavailable',
+    'control-resource-exhausted',
+  );
+
+  /**
+   * An outcome status paired with the `passed`/`goldenVerdict` shape it actually carries,
+   * so the generated record is never internally contradictory. `instrument-refused` is
+   * included because it is the new terminal outcome an `unchecked` instrument can now be
+   * recorded under (task 4.1, task 9.1), and it carries no oracle verdict.
+   */
+  const outcomeShapeArbitrary: fc.Arbitrary<{
+    outcomeStatus: SweepSampleRecord['outcomeStatus'];
+    passed: boolean;
+    goldenVerdict: SweepSampleRecord['goldenVerdict'];
+    iterations: number;
+  }> = fc.constantFrom(
+    {
+      outcomeStatus: 'unverified' as const,
+      passed: false,
+      goldenVerdict: 'failed' as const,
+      iterations: 3,
+    },
+    {
+      outcomeStatus: 'instrument-refused' as const,
+      passed: false,
+      goldenVerdict: 'passed' as const,
+      iterations: 0,
+    },
+    { outcomeStatus: 'setup-failed' as const, passed: false, goldenVerdict: null, iterations: 0 },
+  );
+
+  /** An arbitrary, internally-consistent unchecked record: any reason, any carrying outcome. */
+  const uncheckedRecordArbitrary: fc.Arbitrary<SweepSampleRecord> = fc
+    .tuple(uncheckedReasonArbitrary, outcomeShapeArbitrary)
+    .map(([reason, shape]) =>
+      record({
+        instrumentValidity: 'unchecked',
+        instrumentUncheckedReason: reason,
+        ...shape,
+      }),
+    );
+
+  it('preserves instrumentUncheckedReason exactly through encode then decode', () => {
+    fc.assert(
+      fc.property(uncheckedRecordArbitrary, (original) => {
+        const decoded = decodeSampleRecord(JSON.parse(encodeSampleRecord(original)));
+
+        expect(decoded).toEqual(original);
+        expect(decoded?.instrumentUncheckedReason).toBe(original.instrumentUncheckedReason);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it('reconstructs the same RecordedInstrumentVerdict from the persisted reason, never the flattened default', () => {
+    fc.assert(
+      fc.property(uncheckedRecordArbitrary, (original) => {
+        const decoded = decodeSampleRecord(JSON.parse(encodeSampleRecord(original)));
+        expect(decoded).not.toBeNull();
+
+        const verdict = instrumentVerdictOf(decoded as SweepSampleRecord);
+
+        expect(verdict).toEqual({
+          validity: 'unchecked',
+          reason: original.instrumentUncheckedReason,
+        });
+        // The specific regression this property pins: a resource-bound kill (or any other
+        // real reason) must never round-trip as the generic fallback unless that fallback
+        // IS the reason actually recorded.
+        if (original.instrumentUncheckedReason !== 'control-unavailable') {
+          expect(verdict).not.toEqual({ validity: 'unchecked', reason: 'control-unavailable' });
+        }
+      }),
+      { numRuns: 200 },
     );
   });
 });
@@ -579,5 +810,112 @@ describe('the resume / skip decision', () => {
   it('keys a sample on all three coordinates', () => {
     expect(sampleKey('arm', 'problem', 3)).not.toBe(sampleKey('arm', 'problem', 4));
     expect(sampleKey('arm', 'problem', 3)).not.toBe(sampleKey('other', 'problem', 3));
+  });
+});
+
+describe('a stale record is refused, never repaired - Property 14', () => {
+  // instrument-precheck-and-attribution, Property 14: A stale record is refused, never
+  // repaired.
+  //
+  // For any sample record encoded under a schema version below 10, the results-log reader
+  // reports it as a stale-schema line and aggregates nothing from the file that holds it.
+  //
+  // Validates: Requirements 7.1, 7.2
+
+  /** An integer schema version strictly below the current one, never zero or negative. */
+  const olderSchemaVersionArbitrary: fc.Arbitrary<number> = fc.integer({
+    min: 1,
+    max: RESULTS_SCHEMA_VERSION - 1,
+  });
+
+  /**
+   * A JSONL line for a valid-shaped record whose `schemaVersion` is strictly older: the
+   * exact thing `readsAsOlderSchema` classifies as history rather than corruption. Its
+   * `goldenVerdict` is drawn as the banner-grammar `error` at least sometimes, because that
+   * value is precisely what an old file may hold and a current-schema decoder must never
+   * read as a live record.
+   */
+  const staleLineArbitrary: fc.Arbitrary<string> = fc
+    .tuple(olderSchemaVersionArbitrary, fc.oneof(fc.constant('passed'), fc.constant('error')))
+    .map(([schemaVersion, goldenVerdict]) =>
+      JSON.stringify({ ...record(), schemaVersion, goldenVerdict }),
+    );
+
+  /** A JSONL line for a fully valid, current-schema record; sampleIndex varies to stay distinct. */
+  const validLineArbitrary: fc.Arbitrary<string> = fc
+    .integer({ min: 0, max: 1_000 })
+    .map((sampleIndex) => encodeSampleRecord(record({ sampleIndex })));
+
+  /**
+   * A genuinely malformed line: either not JSON at all, or JSON whose shape a decoder
+   * cannot read as either a current or a stale record (no readable `schemaVersion`).
+   */
+  const malformedLineArbitrary: fc.Arbitrary<string> = fc.oneof(
+    fc.string({ minLength: 1 }).filter((text) => {
+      // A blank or whitespace-only line is ignored entirely by the parser, never counted, and
+      // an embedded newline would split into extra lines and throw off the tally - both
+      // excluded so this generator only ever produces exactly one malformed line.
+      if (text.trim().length === 0 || text.includes('\n')) {
+        return false;
+      }
+      try {
+        JSON.parse(text);
+        return false;
+      } catch {
+        return true;
+      }
+    }),
+    fc
+      .oneof(fc.string(), fc.boolean(), fc.constant(null), fc.array(fc.string()))
+      .map((value) => JSON.stringify({ ...record(), schemaVersion: value })),
+  );
+
+  /** One of the three line kinds, tagged so the property can tally what it generated. */
+  type TaggedLine = { readonly kind: 'stale' | 'valid' | 'malformed'; readonly line: string };
+  const taggedLineArbitrary: fc.Arbitrary<TaggedLine> = fc.oneof(
+    staleLineArbitrary.map((line): TaggedLine => ({ kind: 'stale', line })),
+    validLineArbitrary.map((line): TaggedLine => ({ kind: 'valid', line })),
+    malformedLineArbitrary.map((line): TaggedLine => ({ kind: 'malformed', line })),
+  );
+
+  it('counts every stale line and contributes nothing from it to the record set', () => {
+    fc.assert(
+      fc.property(fc.array(taggedLineArbitrary, { minLength: 1, maxLength: 12 }), (lines) => {
+        const text = lines.map(({ line }) => line).join('\n');
+        const parsed = parseResultsLog(text);
+
+        const expectedStale = lines.filter(({ kind }) => kind === 'stale').length;
+        const expectedValid = lines.filter(({ kind }) => kind === 'valid').length;
+        const expectedMalformed = lines.filter(({ kind }) => kind === 'malformed').length;
+
+        expect(parsed.staleSchemaLines).toBe(expectedStale);
+        expect(parsed.malformedLines).toBe(expectedMalformed);
+        // Every stale line vanishes from the record set rather than being filled in with
+        // defaults: the record count reflects ONLY the valid current-schema lines.
+        expect(parsed.records).toHaveLength(expectedValid);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it('always refuses the whole file when at least one stale line is present, however many valid records sit beside it', () => {
+    fc.assert(
+      fc.property(
+        fc.array(staleLineArbitrary, { minLength: 1, maxLength: 6 }),
+        fc.array(validLineArbitrary, { minLength: 0, maxLength: 6 }),
+        (staleLines, validLines) => {
+          const text = [...staleLines, ...validLines].join('\n');
+          const parsed = parseResultsLog(text);
+          const summary = summarizeRecords(parsed.records, [1], 'abc123', parsed);
+
+          // The whole file is refused, not partially aggregated: an empty arms array and
+          // zero totals even though `parsed.records` may hold clean, current-schema samples.
+          expect(summary.refusedStaleSchema).toBe(true);
+          expect(summary.arms).toEqual([]);
+          expect(summary.totalSamples).toBe(0);
+        },
+      ),
+      { numRuns: 200 },
+    );
   });
 });

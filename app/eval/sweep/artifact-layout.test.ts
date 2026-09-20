@@ -15,6 +15,8 @@ import { isAbsolute, join, resolve, sep } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { NO_REPAIR } from '@app/agent';
+
 import type {
   CapturedSimulation,
   CapturedText,
@@ -77,6 +79,11 @@ function artifacts(overrides: Partial<EvalSampleArtifacts> = {}): EvalSampleArti
     candidateRtl: whole('module m(input a, output y); endmodule'),
     testbenchSource: whole('module m_tb; endmodule'),
     simulation: simulation(),
+    runFailureCause: null,
+    attributedFiles: [],
+    rejectedTestbenchDraft: null,
+    missingCheckNames: [],
+    missingCheckNamesTruncated: false,
     failingCase: {
       checkName: 'shift_by_three',
       description: 'Spec-derived check "shift_by_three" did not pass.',
@@ -85,6 +92,9 @@ function artifacts(overrides: Partial<EvalSampleArtifacts> = {}): EvalSampleArti
       atSimTimeNs: 40,
     },
     goldenVerdict: { kind: 'passed', failureCount: 0 },
+    repairProvenance: NO_REPAIR,
+    rejectedPreRepairTestbench: null,
+    repairHint: null,
     ...overrides,
   };
 }

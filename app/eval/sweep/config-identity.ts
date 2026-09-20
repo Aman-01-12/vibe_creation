@@ -22,7 +22,11 @@
 //   because it is the obvious stable choice and the digest is injected, so this module
 //   stays pure and testable.
 
-import { TESTBENCH_PROMPT_VERSION } from '@app/agent';
+import {
+  INSTRUMENT_POLICY_VERSION,
+  TESTBENCH_PROMPT_VERSION,
+  TESTBENCH_REPAIR_POLICY_VERSION,
+} from '@app/agent';
 
 import type { SweepConfig } from './config.js';
 
@@ -38,6 +42,25 @@ const SHORT_HASH_LENGTH = 16;
  * `identityBearingFields` already reads `config`'s own keys verbatim.
  */
 const TESTBENCH_PROMPT_VERSION_KEY = '__testbenchPromptVersion';
+
+/**
+ * The canonical JSON key `INSTRUMENT_POLICY_VERSION` is folded in under.
+ *
+ * Reserved rather than a `SweepConfig` field, for the same reason and in the same way as
+ * `TESTBENCH_PROMPT_VERSION_KEY` above; see `../../agent/orchestrator/instrument-policy-version.ts`
+ * for why this is a distinct constant rather than a reuse of `TESTBENCH_PROMPT_VERSION`.
+ */
+const INSTRUMENT_POLICY_VERSION_KEY = '__instrumentPolicyVersion';
+
+/**
+ * The canonical JSON key `TESTBENCH_REPAIR_POLICY_VERSION` is folded in under.
+ *
+ * Reserved rather than a `SweepConfig` field, for the same reason and in the same way as
+ * `INSTRUMENT_POLICY_VERSION_KEY` above; see
+ * `../../agent/orchestrator/testbench-repair-policy-version.ts` for why this is a distinct
+ * constant rather than a reuse of `INSTRUMENT_POLICY_VERSION`.
+ */
+const TESTBENCH_REPAIR_POLICY_VERSION_KEY = '__testbenchRepairPolicyVersion';
 
 /**
  * The config fields DELIBERATELY excluded from the experiment's identity.
@@ -61,19 +84,26 @@ const IDENTITY_EXCLUDED_FIELDS: readonly (keyof SweepConfig)[] = ['captureArtifa
 
 /**
  * The config's identity-bearing fields: everything except the excluded ones, plus the
- * prompt version the running code carries.
+ * prompt version, the instrument-policy version, and the testbench-repair-policy version
+ * the running code carries.
  *
- * `TESTBENCH_PROMPT_VERSION` is read directly from the import rather than taken as a
- * parameter, so `sweepConfigHash`'s signature - and every call site - stays unchanged: a
- * manifest or a resume check can never pass a stale or fabricated version, only the one
- * the code that is actually running was built with.
+ * `TESTBENCH_PROMPT_VERSION`, `INSTRUMENT_POLICY_VERSION`, and
+ * `TESTBENCH_REPAIR_POLICY_VERSION` are all read directly from the import rather than
+ * taken as a parameter, so `sweepConfigHash`'s signature - and every call site - stays
+ * unchanged: a manifest or a resume check can never pass a stale or fabricated version,
+ * only the one the code that is actually running was built with.
  */
 function identityBearingFields(config: SweepConfig): Record<string, unknown> {
   const excluded = new Set<string>(IDENTITY_EXCLUDED_FIELDS);
   const fields = Object.fromEntries(
     Object.entries(config).filter(([field]) => !excluded.has(field)),
   );
-  return { ...fields, [TESTBENCH_PROMPT_VERSION_KEY]: TESTBENCH_PROMPT_VERSION };
+  return {
+    ...fields,
+    [TESTBENCH_PROMPT_VERSION_KEY]: TESTBENCH_PROMPT_VERSION,
+    [INSTRUMENT_POLICY_VERSION_KEY]: INSTRUMENT_POLICY_VERSION,
+    [TESTBENCH_REPAIR_POLICY_VERSION_KEY]: TESTBENCH_REPAIR_POLICY_VERSION,
+  };
 }
 
 /** Canonical JSON of an arbitrary value: object keys sorted at every depth (pure). */

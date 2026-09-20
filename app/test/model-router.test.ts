@@ -113,6 +113,7 @@ function allSucceedingAdapters(): {
 describe('TaskModelRouter routing table (Req 12.2-12.4)', () => {
   const cases: ReadonlyArray<readonly [ModelTask, ProviderName]> = [
     ['generation', 'deepseek'],
+    ['testbench', 'deepseek'],
     ['repair', 'deepseek'],
     ['orchestration', 'gemini'],
     ['teaching', 'gemini'],
