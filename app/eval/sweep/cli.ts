@@ -514,6 +514,11 @@ async function execute(prepared: PreparedRun): Promise<SweepCliResult> {
       : { artifactSinkFor: (arm: SweepArmConfig) => artifactStore.sinkFor(arm.name) }),
     goldenJudge: shared.goldenJudge,
     instrumentControl: shared.instrumentControl,
+    // Unconditionally on for every real CLI-driven run: this is the eval layer's own
+    // Testbench_Repair capability being exercised end to end, not a per-experiment
+    // variable a bake-off permutes (unlike `arm.roleModels`), so there is no config
+    // field gating it the way `negativeControl.enabled` gates the mutation control.
+    testbenchRepairEnabled: true,
     resultsLog: log,
     completed: CompletedSampleIndex.fromRecords(history.records, configHash),
     killSwitch: new SweepKillSwitch(config.killSwitch, Date.now),

@@ -1,0 +1,480 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Add the closed vocabulary and the hint-building functions": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824580
+      },
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904840447
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789911219941
+      }
+    ],
+    "1.2 Add `ruleFamilyFor`, the heuristic Spec-structure-only mapping": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824666
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789911654695
+      }
+    ],
+    "2.1 Add `RepairProvenance` and widen `VerificationOutcome`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824704
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789911655461
+      }
+    ],
+    "3. Checkpoint - the hint module and the provenance shape are correct in isolation": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824727
+      }
+    ],
+    "4.1 Add `RepairTestbenchRequest` and `RepairTestbenchModelInput`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824750
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789913123780
+      }
+    ],
+    "4.2 Add `repairTestbench` to `TestbenchAgent`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824774
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789913172128
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789913520496
+      }
+    ],
+    "5. Checkpoint - the repair primitive is correct and isolated": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824799
+      }
+    ],
+    "6.1 Add `TestbenchPrecheck.runWithDiagnostic`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824846
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789913606655
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789914039435
+      }
+    ],
+    "6.2 Declare the `TestbenchRepair` port (no implementation)": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824884
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789913606901
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789914040304
+      }
+    ],
+    "6.3 Add `TESTBENCH_REPAIR_POLICY_VERSION`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824907
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789913607857
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789914041004
+      }
+    ],
+    "6.4 Wire the precheck-path repair into `#admitInstrument`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824928
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789914086595
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789915224132
+      }
+    ],
+    "7. Checkpoint - the precheck-path repair is correct and the import boundary holds": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824951
+      }
+    ],
+    "8.1 Add `EvalTestbenchRepair`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824974
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789915292703
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789915885685
+      }
+    ],
+    "8.2 Add `repairTriggerFor`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904824996
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789915293106
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789915886515
+      }
+    ],
+    "8.3 Add `#repairIfTriggered` and rewire `#runSample`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825023
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789915978894
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789916552038
+      }
+    ],
+    "8.7 Add `RepairTestbenchRequest`-shaped wiring for `EvalSampleArtifacts`": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825045
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789916609465
+      }
+    ],
+    "9. Checkpoint - the two trigger points share one primitive and degrade identically": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825069
+      }
+    ],
+    "10.1 Bump the results schema and add the provenance fields": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825093
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789917556356
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789918885217
+      }
+    ],
+    "10.3 Bump the artifact document schema and add the new filename": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825139
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789917557123
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789918929905
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789918938967
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789919386978
+      }
+    ],
+    "10.4 Report per-arm repair counts in the sweep summary": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825174
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789917559374
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789918930455
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789918939575
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789919387392
+      }
+    ],
+    "10.6 Fold `TESTBENCH_REPAIR_POLICY_VERSION` into the identity and the manifest": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825195
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789919446963
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789919718715
+      }
+    ],
+    "10.8 Re-pin the config hashes": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825220
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789919727994
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789919984236
+      }
+    ],
+    "10.9 Write the unit test for the stale-schema advice text": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825244
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789920006352
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789920311111
+      }
+    ],
+    "10.10 Export the new surface": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825269
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789920006970
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789920311844
+      }
+    ],
+    "11. Final checkpoint - the whole gate, and the honest numbers": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825293
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789920334251
+      },
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789920436018
+      }
+    ],
+    "12.1 Re-run the slice into a fresh output directory and compare": [
+      {
+        "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789904825316
+      }
+    ],
+    "1. The pure repair-hint module (no dependencies)": [
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789911654745
+      }
+    ],
+    "2. The `RepairProvenance` shape and its threading through existing outcomes": [
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789911655505
+      }
+    ],
+    "1.3 Write the property test for anti-circularity (Property 2)": [
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789911696181
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789912394602
+      }
+    ],
+    "1.4 Write the property test for verbatim-vs-classified separation (Property 3)": [
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789911697267
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789912395002
+      }
+    ],
+    "1.5 Write the unit test for the real measured `TESTBENCH_FAILED_REFERENCE` case": [
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789911698370
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789913121993
+      }
+    ],
+    "2.2 Write the property test for provenance additivity (Property 7)": [
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789911698953
+      },
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789912395796
+      }
+    ],
+    "4. `TestbenchAgent#repairTestbench`, the one shared repair primitive": [
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789913520567
+      }
+    ],
+    "6. The precheck-path repair, entirely inside `app/agent`": [
+      {
+        "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789915224193
+      }
+    ],
+    "10. Records, artifacts, schema, and identity - last, so the pins are computed once against finished behaviour": [
+      {
+        "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
+        "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
+        "timestamp": 1789920311882
+      }
+    ]
+  }
+}

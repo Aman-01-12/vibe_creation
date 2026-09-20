@@ -7,7 +7,7 @@
 //   here, and it puts `bedrock-mantle` - the one host we actually hold a credential
 //   for - on no route at all. Running the eval on that policy would measure nothing:
 //   every call would fail `provider-unavailable`. So the eval builds its own policy
-//   pinning all five `ModelTask`s to `bedrock-mantle` with real catalog model ids.
+//   pinning every `ModelTask` to `bedrock-mantle` with real catalog model ids.
 //
 // WHY PER-ROLE IDS ARE THE POINT
 //   The per-role bake-off holds ONE context configuration constant (provider, prompt,

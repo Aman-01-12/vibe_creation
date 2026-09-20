@@ -28,21 +28,43 @@ import type { ModelRouter, ModelTask, SessionBudgetHandle } from '../../model-ro
 
 import { coveredCriterionIds, requiredChecks, simulationCriteria } from './coverage.js';
 import { parseTestbenchDraft } from './parse.js';
-import { buildTestbenchModelInput } from './prompt.js';
+import { buildRepairModelInput, buildTestbenchModelInput } from './prompt.js';
 import { sourceEmitsCheck } from './signalling.js';
 import type {
   GenerateTestbenchRequest,
+  RepairTestbenchRequest,
   RequiredCheck,
   TestbenchGenerationFailure,
   TestbenchGenerationInput,
   TestbenchGenerationOutcome,
 } from './types.js';
 
+/**
+ * The fields shared by `GenerateTestbenchRequest` and `RepairTestbenchRequest`
+ * that the coverage-gate and recording helpers below actually read.
+ *
+ * `#validateCoverage`, `#recordGenerated`, `#recordCoverageGap`, and `#fail` hold
+ * the revised source to the identical gate and recording discipline a first
+ * draft gets (Req 6.3), regardless of which request produced it, so they are
+ * typed over this common shape rather than duplicated per request type.
+ */
+type TestbenchRequestSummary = Pick<GenerateTestbenchRequest, 'sessionId' | 'spec' | 'testbenchId'>;
+
 /** The Trace `stageOrTool` name recorded for every Testbench_Agent action. */
 const TESTBENCH_STAGE = 'Testbench_Agent' as const;
 
-/** Testbench generation is a generation-class model task, routed to DeepSeek. */
-const TESTBENCH_MODEL_TASK: ModelTask = 'generation';
+/**
+ * Testbench generation is its OWN routable role, not a case of `generation`.
+ *
+ * It remains a code-generation-class task and defaults to the same route, but it is a
+ * separate `ModelTask` so a per-role bake-off can assign testbench generation a
+ * DIFFERENT model from RTL generation and ship the winning mix. That separation is
+ * not cosmetic: this agent's measured quality is instrument validity - does the
+ * testbench it wrote pass a known-good reference design, and does it cover every
+ * criterion - which is a distinct capability from the RTL pass@k the Generation_Agent
+ * is scored on, and the two do not have to peak on the same model.
+ */
+const TESTBENCH_MODEL_TASK: ModelTask = 'testbench';
 
 /** The injected collaborators and deterministic seams for the Testbench_Agent. */
 export interface TestbenchAgentDeps {
@@ -143,6 +165,63 @@ export class TestbenchAgent {
     );
   }
 
+  /**
+   * Revise a previously-generated Testbench from a sanitized Repair_Hint (Req
+   * 8.1, 8.2).
+   *
+   * Structurally identical in spirit to `generateTestbench`: one model call
+   * under the SAME injected `budget`, the SAME `#validateCoverage` gate applied
+   * to the revised source (Req 6.3 - a repair that produces a
+   * coverage-incomplete draft is rejected exactly as a first draft would be),
+   * and the SAME Trace recording discipline attributed to the Spec version.
+   * Accepts no candidate RTL: `RepairTestbenchRequest` has no field one could
+   * occupy, the same guarantee `generateTestbench`'s request already gives.
+   * There is no spec-approval or simulation-criteria guard here: a repair is
+   * only ever attempted after a first draft already passed both (Req 8.1,
+   * 8.2), and no OKF re-retrieval, since the model already has a testbench to
+   * revise rather than a blank page.
+   */
+  async repairTestbench(
+    request: RepairTestbenchRequest,
+    budget: SessionBudgetHandle,
+  ): Promise<TestbenchGenerationOutcome> {
+    const startedAtMs = this.#now();
+    const { spec } = request;
+    const checks = requiredChecks(spec);
+
+    const invocation = await this.#router.invoke(
+      TESTBENCH_MODEL_TASK,
+      buildRepairModelInput(request),
+      budget,
+    );
+    if (!invocation.ok) {
+      return this.#fail(request, startedAtMs, 0, {
+        reason: 'model-call-failed',
+        detail: invocation.error.code,
+        routerFailure: invocation.error,
+      });
+    }
+
+    const cost = invocation.value.costCents;
+    const retryCount = invocation.value.attempts - 1;
+    const parsed = parseTestbenchDraft(invocation.value.outputText);
+    if (!parsed.ok) {
+      return this.#fail(request, startedAtMs, cost, {
+        reason: 'unparseable-output',
+        detail: parsed.error.reason,
+      });
+    }
+
+    return this.#validateCoverage(
+      request,
+      parsed.value.source,
+      checks,
+      startedAtMs,
+      cost,
+      retryCount,
+    );
+  }
+
   /** Retrieve OKF hints and assemble the RTL-free generation input (Req 7.1). */
   async #assembleInput(request: GenerateTestbenchRequest): Promise<TestbenchGenerationInput> {
     const retrieval = await this.#retriever.retrieve({
@@ -158,7 +237,7 @@ export class TestbenchAgent {
 
   /** Validate full per-check coverage and produce a Testbench when complete (Req 7.3). */
   async #validateCoverage(
-    request: GenerateTestbenchRequest,
+    request: TestbenchRequestSummary,
     source: string,
     checks: readonly RequiredCheck[],
     startedAtMs: number,
@@ -184,7 +263,7 @@ export class TestbenchAgent {
 
   /** Record a successful generation span, attributed to the Spec version (Req 7.7). */
   #recordGenerated(
-    request: GenerateTestbenchRequest,
+    request: TestbenchRequestSummary,
     testbench: Testbench,
     checks: readonly RequiredCheck[],
     startedAtMs: number,
@@ -206,7 +285,7 @@ export class TestbenchAgent {
 
   /** Record a coverage-gap span (no Testbench produced), attributed to the Spec version. */
   #recordCoverageGap(
-    request: GenerateTestbenchRequest,
+    request: TestbenchRequestSummary,
     startedAtMs: number,
     costCents: number,
     retryCount: number,
@@ -224,7 +303,7 @@ export class TestbenchAgent {
 
   /** Record a generation failure span and return the fail-safe outcome. */
   async #fail(
-    request: GenerateTestbenchRequest,
+    request: TestbenchRequestSummary,
     startedAtMs: number,
     costCents: number,
     failure: TestbenchGenerationFailure,
@@ -258,7 +337,7 @@ export class TestbenchAgent {
    */
   async #record(
     sessionId: Ulid,
-    spec: GenerateTestbenchRequest['spec'],
+    spec: TestbenchRequestSummary['spec'],
     startedAtMs: number,
     costCents: number,
     retryCount: number,

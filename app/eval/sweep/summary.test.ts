@@ -19,13 +19,20 @@
 // the persisted records, first-try is a pass at iteration 1, and `loopPassGoldenFail` -
 // the bugs our own testbench missed - is surfaced on its own line rather than buried.
 
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
+import { countsInPassAtK } from '../instrument-control.js';
+import type { InstrumentDefectCode, InstrumentUncheckedReason } from '../instrument-control.js';
 import type { MutationOperatorId, MutationSampleCounts } from '../mutation-control.js';
 import type { NoVerdictCause } from '../no-verdict-cause.js';
 
 import { renderSummary, summarizeRecords, type SweepSummary } from './summary.js';
-import { RESULTS_SCHEMA_VERSION, type SweepSampleRecord } from './results-log.js';
+import {
+  instrumentVerdictOf,
+  RESULTS_SCHEMA_VERSION,
+  type SweepSampleRecord,
+} from './results-log.js';
 
 /**
  * Summarize a clean results file: no corruption and no stale-schema lines.
@@ -72,6 +79,9 @@ function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
     // is a validated number.
     instrumentValidity: 'valid',
     instrumentDefect: null,
+    // The default is a CHECKED instrument, so there is no unchecked reason to carry. A test
+    // about `unchecked` sets `instrumentValidity` and this field together.
+    instrumentUncheckedReason: null,
     // The default carries a PROBED negative control that killed every VALID mutant, so a test
     // which says nothing about mutation still exercises the current, full standard: the sample
     // is admissible because BOTH controls passed.
@@ -87,6 +97,10 @@ function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
       goldenErroredCount: 0,
       elapsedMs: 4_000,
     },
+    // The default sample's testbench passed on the first draft, so there is no repair to
+    // report. A test about the repair fields sets both explicitly.
+    repairAttempted: false,
+    repairAccepted: false,
     durationMs: 1_000,
     completedAtMs: 1_000,
     failureNote: null,
@@ -864,6 +878,78 @@ describe('summarizeRecords - the pass@k denominator invariant', () => {
     expect(renderSummary(summary).join('\n')).toContain('instrument-unchecked: 1');
   });
 
+  it('reports the per-reason breakdown beside the instrument-unchecked count', () => {
+    const summary = summarize(
+      [
+        pass({ problemId: 'p1', sampleIndex: 0 }),
+        record({
+          problemId: 'p1',
+          sampleIndex: 1,
+          instrumentValidity: 'unchecked',
+          instrumentUncheckedReason: 'no-testbench',
+        }),
+        record({
+          problemId: 'p1',
+          sampleIndex: 2,
+          instrumentValidity: 'unchecked',
+          instrumentUncheckedReason: 'no-testbench',
+        }),
+        record({
+          problemId: 'p1',
+          sampleIndex: 3,
+          instrumentValidity: 'unchecked',
+          instrumentUncheckedReason: 'control-resource-exhausted',
+        }),
+      ],
+      [1],
+      'cfg1',
+    );
+
+    const arm = summary.arms[0];
+    expect(arm?.uncheckedReasonCounts).toEqual([
+      { reason: 'no-testbench', count: 2 },
+      { reason: 'control-resource-exhausted', count: 1 },
+    ]);
+    const text = renderSummary(summary).join('\n');
+    expect(text).toContain('of these: no-testbench x2');
+    expect(text).toContain('control-resource-exhausted x1');
+  });
+
+  it('reports the instrument-refused count and its no-repair caveat (Req 5.11, 5.12)', () => {
+    const summary = summarize(
+      [
+        pass({ problemId: 'p1', sampleIndex: 0 }),
+        record({
+          problemId: 'p1',
+          sampleIndex: 1,
+          outcomeStatus: 'instrument-refused',
+          iterations: 0,
+          noVerdictCause: 'instrument-refused',
+          goldenVerdict: 'passed',
+          goldenFailureCount: 0,
+        }),
+      ],
+      [1],
+      'cfg1',
+    );
+
+    const arm = summary.arms[0];
+    expect(arm?.statusCounts['instrument-refused']).toBe(1);
+    const text = renderSummary(summary).join('\n');
+    expect(text).toContain('instrument-refused: 1');
+    expect(text).toContain('FIRST candidate with NO repair');
+    // The golden pass@k block carries its own comparability caveat too (Req 5.12).
+    expect(text).toContain('NO CLAIM OF COMPARABILITY');
+  });
+
+  it('prints no instrument-refused line and no comparability caveat when none occurred', () => {
+    const summary = summarize([pass({ problemId: 'p1', sampleIndex: 0 })], [1], 'cfg1');
+
+    const text = renderSummary(summary).join('\n');
+    expect(text).not.toContain('instrument-refused');
+    expect(text).not.toContain('NO CLAIM OF COMPARABILITY');
+  });
+
   it('falls back to the verdict-bearing estimate and labels it UNVALIDATED with no control', () => {
     const summary = summarize(
       [
@@ -1244,5 +1330,157 @@ describe('summarizeRecords - an older record schema is REFUSED, never migrated',
 
     expect(summary.refusedStaleSchema).toBe(false);
     expect(summary.arms).toHaveLength(1);
+  });
+});
+
+describe('summarizeArm - the reconciliation invariants (unchecked-reason and denominator)', () => {
+  // instrument-precheck-and-attribution: summary reconciliation invariants (task 9.6, no
+  // property number assigned - Requirements 3.7, 5.11 ask for the two counts a
+  // Sweep_Summary reports about an arm's samples, and this property is the arithmetic
+  // check that ties each breakdown back to the population it was drawn from, rather than
+  // pinning one hand-picked example the way the tests above it do).
+  //
+  // Two invariants, both restated independently of the aggregator under test rather than
+  // by calling it a second time (the same discipline `golden-judge.test.ts`'s Property 2
+  // uses for its own five-way partition):
+  //
+  //   1. `uncheckedReasonCounts` tallies ONLY the `unchecked` records, one bucket per
+  //      reason, so its counts must sum to exactly the number of records whose
+  //      `instrumentValidity` is `'unchecked'` - never more (a reason leaking a
+  //      non-unchecked record in) and never less (a reason silently dropping one).
+  //   2. `instrument.countedSamples` is the pass@k-eligible subset of the arm
+  //      (`countsInPassAtK`, see `../instrument-control.ts`); every record NOT in that
+  //      subset is, by construction, "excluded" from the denominator for some reason
+  //      (no oracle verdict, an invalid instrument, or an unchecked one). So counted plus
+  //      excluded must equal the arm's own `sampleCount` - the arm can neither gain nor
+  //      lose a sample when it is partitioned this way.
+  //
+  // Validates: Requirements 3.7, 5.11
+
+  /** Every member of the closed InstrumentUncheckedReason set (mirrors results-log.test.ts). */
+  const uncheckedReasonArbitrary: fc.Arbitrary<InstrumentUncheckedReason> = fc.constantFrom(
+    'control-absent',
+    'no-testbench',
+    'no-reference',
+    'testbench-unsubmittable',
+    'control-unavailable',
+    'no-mutants-generated',
+    'no-valid-mutants',
+    'no-golden-killed-mutants',
+    'mutation-probe-unavailable',
+    'control-resource-exhausted',
+  );
+
+  /** Every member of the closed InstrumentDefectCode set. */
+  const defectArbitrary: fc.Arbitrary<InstrumentDefectCode> = fc.constantFrom(
+    'TESTBENCH_FAILED_REFERENCE',
+    'TESTBENCH_REFERENCE_UNBUILDABLE',
+    'CONTROL_RUN_ERRORED',
+    'TESTBENCH_SURVIVED_MUTANTS',
+  );
+
+  /**
+   * The three instrument-validity shapes a record can carry, each internally consistent with
+   * the `instrumentDefect` / `instrumentUncheckedReason` fields it does or does not carry -
+   * the same shape discipline `outcomeShapeArbitrary` in `results-log.test.ts` applies to the
+   * outcome fields, applied here to the instrument fields instead.
+   */
+  const instrumentShapeArbitrary: fc.Arbitrary<
+    Pick<SweepSampleRecord, 'instrumentValidity' | 'instrumentDefect' | 'instrumentUncheckedReason'>
+  > = fc.oneof(
+    fc.constant({
+      instrumentValidity: 'valid' as const,
+      instrumentDefect: null,
+      instrumentUncheckedReason: null,
+    }),
+    defectArbitrary.map((defect) => ({
+      instrumentValidity: 'invalid' as const,
+      instrumentDefect: defect,
+      instrumentUncheckedReason: null,
+    })),
+    uncheckedReasonArbitrary.map((reason) => ({
+      instrumentValidity: 'unchecked' as const,
+      instrumentDefect: null,
+      instrumentUncheckedReason: reason,
+    })),
+  );
+
+  /** Every `SampleOutcomeStatus`, so the verdict-bearing/no-verdict split is fully exercised. */
+  const outcomeStatusArbitrary: fc.Arbitrary<SweepSampleRecord['outcomeStatus']> = fc.constantFrom(
+    'verified',
+    'unverified',
+    'blocked',
+    'setup-failed',
+    'instrument-refused',
+    'runner-error',
+  );
+
+  /**
+   * One arbitrary, internally-consistent record for a single arm.
+   *
+   * `problemId` and `sampleIndex` are fixed to distinct-enough values per draw so a
+   * generated batch cannot collapse two records onto the same sample slot and silently
+   * shrink the population `summarizeArm` reads; `armName` and `configHash` are held
+   * constant so every generated record lands in the ONE arm this property inspects.
+   */
+  const recordArbitrary: fc.Arbitrary<SweepSampleRecord> = fc
+    .tuple(instrumentShapeArbitrary, outcomeStatusArbitrary, fc.nat({ max: 1000 }))
+    .map(([instrumentShape, outcomeStatus, sampleIndex]) =>
+      record({
+        armName: 'the-arm',
+        configHash: 'cfg1',
+        problemId: 'p1',
+        sampleIndex,
+        outcomeStatus,
+        passed: outcomeStatus === 'verified',
+        ...instrumentShape,
+      }),
+    );
+
+  it('sums the per-reason unchecked counts to exactly the unchecked record count', () => {
+    fc.assert(
+      fc.property(fc.array(recordArbitrary, { minLength: 0, maxLength: 60 }), (records) => {
+        const arm = summarize(records, [1], 'cfg1').arms[0];
+        const totalUnchecked = records.filter(
+          (candidate) => candidate.instrumentValidity === 'unchecked',
+        ).length;
+
+        if (totalUnchecked === 0) {
+          expect(arm === undefined ? [] : arm.uncheckedReasonCounts).toEqual([]);
+          return;
+        }
+
+        const summedReasonCounts =
+          arm?.uncheckedReasonCounts.reduce((sum, entry) => sum + entry.count, 0) ?? 0;
+        expect(summedReasonCounts).toBe(totalUnchecked);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it("sums counted plus excluded to the arm's recorded sample count", () => {
+    fc.assert(
+      fc.property(fc.array(recordArbitrary, { minLength: 1, maxLength: 60 }), (records) => {
+        const arm = summarize(records, [1], 'cfg1').arms[0];
+        if (arm === undefined) {
+          throw new Error('expected one arm for a non-empty record batch');
+        }
+
+        // Restated from the records directly through the exported predicate, never by
+        // reading `arm.instrument.countedSamples` twice, so this cannot pass merely
+        // because both sides read the same cached field.
+        const excluded = records.filter(
+          (candidate) =>
+            !countsInPassAtK({
+              outcomeStatus: candidate.outcomeStatus,
+              instrument: instrumentVerdictOf(candidate),
+            }),
+        ).length;
+
+        expect(arm.instrument.countedSamples + excluded).toBe(arm.sampleCount);
+        expect(arm.sampleCount).toBe(records.length);
+      }),
+      { numRuns: 200 },
+    );
   });
 });

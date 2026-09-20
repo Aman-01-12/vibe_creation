@@ -11,3 +11,5 @@ export { IcarusSimulatorAdapter, assembleSimulateJob, interpretSandboxResult } f
 export type { SimulationVerdict, SimulatorAdapter } from './adapter.js';
 export { readCheckSignals } from './check-signalling.js';
 export type { CheckSignalReading } from './check-signalling.js';
+export { classifyRunFailure, MAX_ATTRIBUTION_LINES } from './failure-attribution.js';
+export type { RunFailureAttribution, RunFailureCause } from './failure-attribution.js';

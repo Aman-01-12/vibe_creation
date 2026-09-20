@@ -36,8 +36,10 @@
 
   "_arms": [
     "Each arm is one point in the bake-off. Use \"model\" for one id across every role, or",
-    "\"roleModels\" to permute per role (generation, repair, orchestration, teaching,",
-    "hard-planning). Model ids are NOT validated against a catalog - the upstream catalog",
+    "\"roleModels\" to permute per role (generation, testbench, repair, orchestration,",
+    "teaching, hard-planning). \"testbench\" is its own role because writing the measuring",
+    "instrument is a different capability from writing the RTL, so the two can be permuted",
+    "independently. Model ids are NOT validated against a catalog - the upstream catalog",
     "moves - so a typo shows up as that arm failing, which is visible in the summary.",
     "Reachable ids on this host are listed in app/eval/sweep/model-catalog.ts."
   ],
@@ -48,6 +50,7 @@
       "name": "glm5-gen-qwen30b-repair",
       "roleModels": {
         "generation": "zai.glm-5",
+        "testbench": "zai.glm-5",
         "repair": "qwen.qwen3-coder-30b-a3b-instruct",
         "orchestration": "zai.glm-5",
         "teaching": "zai.glm-5",

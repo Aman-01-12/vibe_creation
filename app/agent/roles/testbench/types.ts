@@ -15,10 +15,18 @@
 // agent and the Generation_Agent: each field below is read-only and sourced only
 // from the Spec, the intent, and the Knowledge_Retriever. Property 4 (task 13.4)
 // states directly over this type and the model input assembled from it.
+//
+// `RepairTestbenchModelInput` and `RepairTestbenchRequest` (Req 2.8, 2.9) extend the
+// identical guarantee to a repair attempt. RTL is structurally unrepresentable there
+// too: the fields are the approved Spec, OUR OWN previously-generated testbench
+// source, and a sanitized Repair_Hint (`../../orchestrator/repair-hint.js`) - never a
+// candidate module, never the reference design's observed behaviour or source. See
+// `repair-hint.ts` for why the hint itself cannot carry that content either.
 
 import type { Spec, Testbench, Ulid } from '@app/core';
 import type { KnowledgePassage } from '@app/knowledge';
 
+import type { RepairHint } from '../../orchestrator/repair-hint.js';
 import type { ModelRouterFailure } from '../../model-router/index.js';
 
 /**
@@ -51,6 +59,49 @@ export interface GenerateTestbenchRequest {
   readonly spec: Spec;
   /** The Student-confirmed restated intent from S0, for grounding context. */
   readonly intentSummary: string;
+  /** Optional explicit Testbench id; a fresh ULID is generated when omitted. */
+  readonly testbenchId?: Ulid;
+}
+
+/**
+ * The complete, closed set of inputs from which a Testbench REPAIR is generated
+ * (Req 2.8, 2.9).
+ *
+ * RTL is structurally unrepresentable here, for the identical reason it is
+ * unrepresentable in `TestbenchGenerationInput`: there is no field for a
+ * candidate module, generated source, implementation, or a shared conversation
+ * with the Generation_Agent. This is the repair sibling of
+ * `TestbenchGenerationInput`, with the same three-field discipline - `spec`,
+ * `previousSource`, `hint` - and deliberately no OKF re-retrieval, since the
+ * model already has a testbench to revise rather than a blank page.
+ * `previousSource` is OUR OWN previously-generated testbench text, never RTL.
+ */
+export interface RepairTestbenchModelInput {
+  /** The approved Spec: the sole source of truth for expected behavior. */
+  readonly spec: Spec;
+  /** Our own previously-generated testbench source, for the model to revise. */
+  readonly previousSource: string;
+  /** The sanitized Repair_Hint: never the reference's observed value or source. */
+  readonly hint: RepairHint;
+}
+
+/**
+ * The request to repair a previously-generated Testbench for an approved Spec
+ * (Req 2.8, 2.9, 8.2).
+ *
+ * Like `GenerateTestbenchRequest`, this request has no field that can carry
+ * RTL: the caller supplies only the session, the approved Spec, our own prior
+ * testbench source, and a sanitized Repair_Hint. The agent assembles the
+ * repair model input internally with no OKF re-retrieval.
+ */
+export interface RepairTestbenchRequest {
+  readonly sessionId: Ulid;
+  /** The approved Spec to derive the repaired Testbench from. */
+  readonly spec: Spec;
+  /** Our own previously-generated testbench source, for the model to revise. */
+  readonly previousSource: string;
+  /** The sanitized Repair_Hint driving this repair attempt. */
+  readonly hint: RepairHint;
   /** Optional explicit Testbench id; a fresh ULID is generated when omitted. */
   readonly testbenchId?: Ulid;
 }

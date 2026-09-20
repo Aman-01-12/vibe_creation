@@ -77,6 +77,10 @@ const UNRECOGNIZED_REFUSAL = 'blocked: the generation gate refused admission';
  *   - `unverified`: the oracle DID reach a verdict, and the record's own `stopReason`
  *     and `iterations` already say how the session ended. A note here would duplicate
  *     two fields a consumer can already read and group by.
+ *
+ * `instrument-refused` DOES get a note, unlike `unverified`: it carries no `stopReason`
+ * and no `iterations` a consumer could read instead, so `reason` is the only place the
+ * cause lives.
  */
 export function failureNoteOf(outcome: VerificationOutcome): string | null {
   switch (outcome.status) {
@@ -87,6 +91,8 @@ export function failureNoteOf(outcome: VerificationOutcome): string | null {
       return boundNote(`${outcome.reason}: ${outcome.detail}`);
     case 'blocked':
       return boundNote(describeRefusal(outcome.refusal));
+    case 'instrument-refused':
+      return boundNote(`instrument-refused: ${outcome.reason}`);
     default: {
       const unreachable: never = outcome;
       return unreachable;

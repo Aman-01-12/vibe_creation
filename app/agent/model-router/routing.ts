@@ -16,16 +16,22 @@
 //   `{provider, modelId}`, and the router hands the model id to the vendor transport.
 //
 // Defaults follow `product-ece/ECE-TECH-DECISIONS.md` Q1 and the design's routing
-// defaults: generation and repair -> DeepSeek V4; orchestration and teaching ->
-// Gemini Flash; escalated hard planning -> Claude class. Every non-Claude task
-// escalates to Claude on failure; hard planning (already Claude) retries Claude
+// defaults: generation, testbench, and repair -> DeepSeek V4; orchestration and
+// teaching -> Gemini Flash; escalated hard planning -> Claude class. Every non-Claude
+// task escalates to Claude on failure; hard planning (already Claude) retries Claude
 // once. The whole table is data, so models stay swappable per task.
+//
+// `testbench` shares `generation`'s default route because writing a testbench is a
+// code-generation-class task, but it is its OWN role so a bake-off can move it off
+// that route independently: testbench quality is measured as instrument validity,
+// which is a separate capability from the RTL pass@k `generation` is scored on.
 
 import type { ModelSelection, ModelTask, ProviderName } from './contract.js';
 
 /** Every `ModelTask`, in a stable order, so diagnostics and policies stay exhaustive. */
 export const MODEL_TASKS: readonly ModelTask[] = [
   'generation',
+  'testbench',
   'repair',
   'orchestration',
   'teaching',
@@ -72,6 +78,7 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   taskRoute: {
     generation: [defaultSelection('deepseek'), defaultSelection('claude')],
+    testbench: [defaultSelection('deepseek'), defaultSelection('claude')],
     repair: [defaultSelection('deepseek'), defaultSelection('claude')],
     orchestration: [defaultSelection('gemini'), defaultSelection('claude')],
     teaching: [defaultSelection('gemini'), defaultSelection('claude')],

@@ -15,6 +15,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
+import { NO_REPAIR } from '@app/agent';
 import type { SetupFailureCause, VerificationOutcome, VerificationSetupFailed } from '@app/agent';
 import {
   makePort,
@@ -155,6 +156,7 @@ function verifiedOutcome(iterations: number, rtl: string): VerificationOutcome {
     status: 'verified',
     iterations,
     moduleVersion: { rtl },
+    repairProvenance: NO_REPAIR,
   } as unknown as VerificationOutcome;
 }
 
@@ -165,6 +167,7 @@ function verifiedWithTestbench(iterations: number, rtl: string): VerificationOut
     iterations,
     moduleVersion: { rtl },
     testbench: { source: 'module tb; endmodule' },
+    repairProvenance: NO_REPAIR,
   } as unknown as VerificationOutcome;
 }
 
@@ -509,7 +512,10 @@ describe('SweepRunner - per-sample artifact capture', () => {
       goldenFailureCount: null,
       instrumentValidity: 'unchecked',
       instrumentDefect: null,
+      instrumentUncheckedReason: 'control-absent',
       mutation: null,
+      repairAttempted: false,
+      repairAccepted: false,
       durationMs: 10,
       completedAtMs: 10,
       failureNote: null,
@@ -640,7 +646,10 @@ describe('SweepRunner - resume never re-pays', () => {
       goldenFailureCount: null,
       instrumentValidity: 'unchecked',
       instrumentDefect: null,
+      instrumentUncheckedReason: 'control-absent',
       mutation: null,
+      repairAttempted: false,
+      repairAccepted: false,
       durationMs: 10,
       completedAtMs: 10,
       failureNote: null,
@@ -686,7 +695,10 @@ describe('SweepRunner - resume never re-pays', () => {
       goldenFailureCount: null,
       instrumentValidity: 'unchecked',
       instrumentDefect: null,
+      instrumentUncheckedReason: 'control-absent',
       mutation: null,
+      repairAttempted: false,
+      repairAccepted: false,
       durationMs: 10,
       completedAtMs: 10,
       failureNote: null,

@@ -13,7 +13,7 @@
 // WHY THE EXPECTED VALUE IS A LITERAL, NOT A RECOMPUTATION
 //   Asserting `digest(prompt) === digest(prompt)` proves nothing: it passes no
 //   matter how the prompt changes. The expected string below is the digest observed
-//   for `TESTBENCH_PROMPT_VERSION = 2`'s prompt output, typed in as a constant. A
+//   for `TESTBENCH_PROMPT_VERSION = 3`'s prompt output, typed in as a constant. A
 //   real prompt change requires a human to look at the diff, decide it is (or is
 //   not) a rule change, and only then update this literal alongside a version bump.
 
@@ -134,17 +134,19 @@ function promptDigest(): Promise<string> {
 }
 
 /**
- * The digest pinned for `TESTBENCH_PROMPT_VERSION = 2`.
+ * The digest pinned for `TESTBENCH_PROMPT_VERSION = 3`.
  *
  * Recompute and update this literal ONLY as part of a deliberate prompt-rule
  * change, together with bumping `TESTBENCH_PROMPT_VERSION` in `prompt-version.ts`.
+ * It last moved when the Verilog-2001 dialect rule and the RTL concurrency rule were
+ * added (version 2 -> 3).
  */
-const PINNED_PROMPT_DIGEST_V2 = 'f781f7a40956068567507aaa7ebec08144ff3371d06ee0c1f7ab9dac080aeab9';
+const PINNED_PROMPT_DIGEST_V3 = 'f7c633e88fd8ee8423f46d0f933f9f610cf0bf693192ec00ce2d6841d96322d0';
 
 describe('Testbench_Agent prompt digest is pinned to the prompt version (Req 11.6)', () => {
   it('given the canonical fixture Spec when the prompt is assembled then its digest matches the value pinned for the current prompt version', async () => {
-    expect(TESTBENCH_PROMPT_VERSION).toBe(2);
-    await expect(promptDigest()).resolves.toBe(PINNED_PROMPT_DIGEST_V2);
+    expect(TESTBENCH_PROMPT_VERSION).toBe(3);
+    await expect(promptDigest()).resolves.toBe(PINNED_PROMPT_DIGEST_V3);
   });
 
   it('given two builds for the same canonical fixture Spec when digested then the digest is deterministic', async () => {

@@ -23,12 +23,17 @@
 //   probe that could not read a version records `null`, which reads as "unknown" and
 //   not as "some default".
 //
-// THE PROMPT VERSION IS PINNED THE SAME WAY THE CORPUS COMMIT IS
+// THE PROMPT VERSION AND THE INSTRUMENT POLICY VERSION ARE PINNED THE SAME WAY THE
+// CORPUS COMMIT IS
 //   `testbenchPromptVersion` is read directly from `TESTBENCH_PROMPT_VERSION`, exactly
 //   like `corpus.pinnedCommit` is read directly from the pinned corpus constant, rather
 //   than being threaded in through `ManifestFacts` or accepted as a parameter. A prompt
 //   change is a different experiment from the one before it, and a manifest that could be
 //   handed a version number would let a run claim a prompt it never ran.
+//   `instrumentPolicyVersion` is read directly from `INSTRUMENT_POLICY_VERSION` for the
+//   identical reason: a manifest must not be able to claim a policy the run did not
+//   actually use. `testbenchRepairPolicyVersion` is read directly from
+//   `TESTBENCH_REPAIR_POLICY_VERSION` following the same discipline.
 //
 // WHAT IS DELIBERATELY ABSENT
 //   No credential, obviously - but also no hostname and no absolute paths. A machine
@@ -36,7 +41,13 @@
 //   the platform, architecture, and runtime version already do. This module is pure:
 //   every fact is injected, so manifest assembly is unit-tested with no host at all.
 
-import { MODEL_TASKS, TESTBENCH_PROMPT_VERSION, type ModelTask } from '@app/agent';
+import {
+  INSTRUMENT_POLICY_VERSION,
+  MODEL_TASKS,
+  TESTBENCH_PROMPT_VERSION,
+  TESTBENCH_REPAIR_POLICY_VERSION,
+  type ModelTask,
+} from '@app/agent';
 
 import { RTLLM_PINNED_COMMIT } from '../corpus/pinned-source.js';
 import {
@@ -140,6 +151,24 @@ export interface SweepManifest {
    * manifest must not be able to claim a prompt version the run did not actually use.
    */
   readonly testbenchPromptVersion: number;
+  /**
+   * The Verification_Loop's instrument-admission policy version that ran for every sample
+   * in this run.
+   *
+   * Read directly from `INSTRUMENT_POLICY_VERSION`, the same way `testbenchPromptVersion`
+   * is read directly from its own constant: a manifest must not be able to claim a policy
+   * the run did not actually use.
+   */
+  readonly instrumentPolicyVersion: number;
+  /**
+   * The testbench-repair-loop's repair-attempt policy version that ran for every sample
+   * in this run.
+   *
+   * Read directly from `TESTBENCH_REPAIR_POLICY_VERSION`, the same way
+   * `instrumentPolicyVersion` is read directly from its own constant: a manifest must not
+   * be able to claim a policy the run did not actually use.
+   */
+  readonly testbenchRepairPolicyVersion: number;
   readonly reproducibility: ReproducibilityConfig;
   readonly toolchain: ManifestToolchain;
   readonly host: ManifestHost;
@@ -199,6 +228,8 @@ export function assembleManifest(input: ManifestInput): SweepManifest {
       quarantined: STAGE0_QUARANTINE.map(toExclusion),
     },
     testbenchPromptVersion: TESTBENCH_PROMPT_VERSION,
+    instrumentPolicyVersion: INSTRUMENT_POLICY_VERSION,
+    testbenchRepairPolicyVersion: TESTBENCH_REPAIR_POLICY_VERSION,
     reproducibility: config.reproducibility,
     toolchain: facts.toolchain,
     host: facts.host,

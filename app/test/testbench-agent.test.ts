@@ -161,7 +161,7 @@ function routed(outputText: string): Result<RoutedModelResult, ModelRouterFailur
   return {
     ok: true,
     value: {
-      task: 'generation',
+      task: 'testbench',
       provider: 'deepseek',
       modelId: routedModelIdFor('deepseek'),
       outputText,
@@ -176,6 +176,8 @@ function routed(outputText: string): Result<RoutedModelResult, ModelRouterFailur
 /** A fake Model_Router: returns a scripted result and captures each prompt. */
 class FakeModelRouter implements ModelRouter {
   readonly prompts: string[] = [];
+  /** The role each call routed under, so a test can pin WHICH model role was asked. */
+  readonly tasks: ModelTask[] = [];
 
   constructor(private readonly script: Result<RoutedModelResult, ModelRouterFailure>) {}
 
@@ -184,7 +186,7 @@ class FakeModelRouter implements ModelRouter {
     request: ModelRequest,
     budget: SessionBudgetHandle,
   ): Promise<Result<RoutedModelResult, ModelRouterFailure>> {
-    void task;
+    this.tasks.push(task);
     this.prompts.push(request.prompt);
     budget.charge({ tokens: 1, costCents: 0, wallClockMs: 1 });
     return Promise.resolve(this.script);
@@ -378,6 +380,23 @@ describe('TestbenchAgent generation from the Spec (Req 7.1, 7.3, 7.7)', () => {
     });
   });
 
+  it('routes under the testbench role, not the generation role', async () => {
+    // GIVEN a Testbench_Agent over a scripted router.
+    const spec = approvedCounterSpec();
+    const { agent, router } = agentReturning(
+      routed(JSON.stringify({ source: sourceCovering(requiredChecks(spec)) })),
+    );
+
+    // WHEN it generates.
+    await agent.generateTestbench(request(spec), generousBudget());
+
+    // THEN the call was billed to `testbench`, its OWN routable role - so a bake-off can
+    // serve testbench generation from a different model than RTL generation. Nothing else
+    // in the suite would notice this regressing to 'generation': the routed model is a
+    // fake, so the role is only observable here.
+    expect(router.tasks).toEqual(['testbench']);
+  });
+
   it('returns coverage-incomplete and produces no Testbench when a check line is missing', async () => {
     const spec = approvedCounterSpec();
     const checks = requiredChecks(spec);
@@ -450,7 +469,7 @@ describe('TestbenchAgent fails closed (Req 7.1, untrusted output)', () => {
   it('fails safe when the Model_Router gives up', async () => {
     const failure: Result<RoutedModelResult, ModelRouterFailure> = {
       ok: false,
-      error: { code: 'ALL_PROVIDERS_FAILED', task: 'generation', attempts: 2 },
+      error: { code: 'ALL_PROVIDERS_FAILED', task: 'testbench', attempts: 2 },
     };
     const { agent } = agentReturning(failure);
 

@@ -21,6 +21,7 @@ import {
 /** Realistic bedrock-mantle catalog ids, one distinct id per role. */
 const PER_ROLE_MODELS: EvalRoleModels = {
   generation: 'qwen.qwen3-coder-480b-a35b-instruct',
+  testbench: 'qwen.qwen3-coder-30b-a3b-instruct',
   repair: 'deepseek.v3.2',
   orchestration: 'zai.glm-5',
   teaching: 'moonshotai.kimi-k2.5',
@@ -36,7 +37,7 @@ describe('evalRoutingPolicy - per-role mapping', () => {
   it('routes every model task to bedrock-mantle with that role own model id', () => {
     const policy = evalRoutingPolicy({ taskModel: PER_ROLE_MODELS });
 
-    expect(MODEL_TASKS).toHaveLength(5);
+    expect(MODEL_TASKS).toHaveLength(6);
     for (const task of MODEL_TASKS) {
       expect(primarySelectionFor(policy, task)).toEqual({
         provider: 'bedrock-mantle',

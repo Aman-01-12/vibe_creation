@@ -21,11 +21,18 @@ export type ProviderName = 'deepseek' | 'gemini' | 'claude' | 'bedrock-mantle';
 
 /**
  * The task a model call serves. The router maps each task to a chain of
- * `{provider, modelId}` selections: generation/repair -> DeepSeek V4,
+ * `{provider, modelId}` selections: generation/testbench/repair -> DeepSeek V4,
  * orchestration/teaching -> Gemini Flash, escalated hard planning -> Claude class
  * (design: Routing defaults; Req 12.2-12.4).
+ *
+ * `testbench` is deliberately SEPARATE from `generation` even though both default to
+ * the same route. Writing an independent, spec-derived testbench is a different
+ * capability from writing RTL - it is measured as instrument validity, not as pass@k -
+ * so the per-role bake-off must be able to assign the two roles different models and
+ * ship the winning mix.
  */
-export type ModelTask = 'generation' | 'repair' | 'orchestration' | 'teaching' | 'hard-planning';
+export type ModelTask =
+  'generation' | 'testbench' | 'repair' | 'orchestration' | 'teaching' | 'hard-planning';
 
 /**
  * One concrete model choice: which provider serves the call, and which of that

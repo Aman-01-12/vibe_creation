@@ -18,7 +18,7 @@
 // seeded `VerificationLoop` and calls `verify`.
 
 import type { ResourceLimits } from '@app/tools';
-import type { SessionBudgetHandle, VerificationOutcome } from '@app/agent';
+import type { InstrumentAdmission, SessionBudgetHandle, VerificationOutcome } from '@app/agent';
 
 import type { EvalProblem } from './problem.js';
 
@@ -51,6 +51,11 @@ export interface EvalSampleRequest {
   readonly budget: SessionBudgetHandle;
   /** The sandbox resource limits, identical to a student session (Req 15.6). */
   readonly limits: ResourceLimits;
+  /**
+   * The per-sample Instrument_Admission adapter, or absent when the runner should
+   * validate the instrument only after the loop returns (Req 4.10, 4.14).
+   */
+  readonly instrumentAdmission?: InstrumentAdmission;
 }
 
 /**

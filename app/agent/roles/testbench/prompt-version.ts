@@ -14,4 +14,14 @@
 //   this by hand is a deliberate act - "this changed what the model is told to do" -
 //   and task 9.2 pins a digest of the assembled prompt against this exact value, so a
 //   rule change without a matching bump still fails loudly rather than silently.
-export const TESTBENCH_PROMPT_VERSION = 2;
+//
+// HISTORY
+//   1 - the prompt as first assembled.
+//   2 - the expected-value, state-anchoring, timing, input-window, and
+//       stimulus-adequacy rules.
+//   3 - two rules added from the stage1-screen-v2 campaign (495 samples): the
+//       Verilog-2001 DIALECT rule, aimed at the ~25% of instrument-invalid samples
+//       whose testbench never compiled, and the RTL CONCURRENCY rule, aimed at the
+//       ~60% that compiled and then rejected the reference design. See
+//       `chipAgent/_inbox/gotcha-stage1-screen-v2-dialect-and-concurrency-are-the-two-instrument-defects.md`.
+export const TESTBENCH_PROMPT_VERSION = 3;

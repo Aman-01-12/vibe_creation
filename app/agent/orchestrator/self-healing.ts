@@ -581,6 +581,10 @@ function toolFailureVerdict(): SimulationVerdict {
     stderr: '',
     exitCode: null,
     resourceUsage: { wallMs: 0, maxMemMb: 0, cpuMs: 0 },
+    // No SandboxResult ever existed to classify: the simulator threw before the
+    // oracle produced one, so there is no cause to name beyond "the tool failed".
+    failureCause: 'tool-failed',
+    attributedFiles: [],
   };
 }
 
