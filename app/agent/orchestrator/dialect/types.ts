@@ -21,7 +21,20 @@ export type DialectDeclineCause =
   | 'would-shadow-module-scope' //  Req 5.4
   | 'unbalanced-block' //  `begin` with no matching `end` inside the scanned region
   | 'declaration-not-relocatable' //  `genvar`: rejected as a block item at ANY position
+  | 'rewrite-context-not-established' //  `#8'd-1`: the VALUE is plain, the ADJACENCY is not cleared
   | 'reported-only'; //  prose-as-statement: detected by contract, never rewritten
+
+// WHY `rewrite-context-not-established` IS A SEPARATE CAUSE FROM `value-not-determinable`
+//   The two answer different questions, and collapsing them would make the report say something
+//   false. `value-not-determinable` is a claim about the SITE'S OWN TEXT: `9'di` carries no
+//   intended value, so no rewrite exists to perform. A `#`-preceded `8'd-1` carries an entirely
+//   plain value; what the rule has not established is that emitting the parenthesized form is
+//   safe in THAT ADJACENCY. Filing the second under the first would report "we could not tell
+//   what this meant" about a literal whose meaning is unambiguous, and the per-reason decline
+//   counts Requirements 1 through 3 exist to make trustworthy would then mis-attribute why the
+//   transform stood down. The name is phrased as "not established" rather than "would create an
+//   ambiguity" because the hazard is what this transform has not cleared, not a property the
+//   toolchain was measured to have (see `sized-literal.ts`'s `#` guard for that measurement).
 
 /** One thing a rule did, or refused to do, at one place in the source. */
 export interface DialectFinding {

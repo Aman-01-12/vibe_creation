@@ -62,4 +62,25 @@
 //   `WIDTH`), which removes a class of false `would-shadow-module-scope` declines. A
 //   sample normalized under version 2 therefore carries a materially different
 //   transform than one normalized under version 3, so their samples must never pool.
-export const NORMALIZER_VERSION = 3;
+//
+// WHY 3 -> 4 (testbench-dialect-normalization group 16, Req 8.1, 8.7)
+//   The SET OF REWRITES changed, on one narrow axis: the sized-literal rule now PRESERVES the
+//   signed-base marker it previously captured and dropped, so `16'sd-1` normalizes to
+//   `(-16'sd1)` where version 3 emitted `(-16'd1)`. That is not cosmetic - measured under `vvp`,
+//   `(-16'sd1) < 0` is 1 while `(-16'd1) < 0` is 0 and reads as 65535 - so a signed literal a
+//   version-3 run silently unsigned could have flipped a check's verdict, and a sample carrying
+//   an `s` form is not poolable across the boundary.
+//
+//   Two further changes ride this bump because one bump covers a set, and both are RECORDED here
+//   rather than given their own constant because neither moves what the transform rewrites.
+//   First, a `#`-preceded decimal literal is now REPORTED when it is declined: version 3 returned
+//   `null` for that branch, which is also what it returned for "not a site", so the decline
+//   produced no `DialectFinding` and the per-class decline count undercounted. The source was
+//   byte-identical before and after this change; only the report gained the site, under a new
+//   `rewrite-context-not-established` cause rather than a `value-not-determinable` one that would
+//   have claimed the value was unreadable when it was `-1`. Second, that guard's doc comment was
+//   corrected: it described the rule as declining "inside a parameter/delay override" when the
+//   code declines where a rewrite would CREATE `#(`, which are different rules. `iverilog -g2012`
+//   was re-measured on both sides of the guard and the guard's BEHAVIOUR was left unchanged, so
+//   this one is documentation only and moves nothing a sample could see.
+export const NORMALIZER_VERSION = 4;

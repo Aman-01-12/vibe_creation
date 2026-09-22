@@ -70,11 +70,15 @@ describe('planSizedLiteralRewrites', () => {
   });
 
   it('declines rather than rewrites when the literal is immediately preceded by #', () => {
-    // `#` directly before the literal is a delay/parameter-override context where a
-    // parenthesized rewrite is ambiguous, so the rule must leave it untouched.
+    // A rewrite here would CREATE a `#(` the input did not have, so the rule stands down - and
+    // REPORTS the decline through a zero-width edit, because a decline that returns nothing is
+    // invisible to the report. `sized-literal.test.ts` owns the measured detail.
     const source = "#8'd-1 foo();";
     const edits = planSizedLiteralRewrites({ source, mask: scanSource(source) });
-    expect(edits).toHaveLength(0);
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.finding.action).toBe('declined');
+    expect(edits[0]?.finding.declinedBecause).toBe('rewrite-context-not-established');
+    expect(applyEdits(source, edits)).toBe(source);
   });
 
   it('never treats a literal-shaped string inside $display as a site', () => {
