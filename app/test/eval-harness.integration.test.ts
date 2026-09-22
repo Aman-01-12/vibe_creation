@@ -95,6 +95,7 @@ import {
 } from '@app/agent';
 import {
   FIXED_EVAL_SUBSET,
+  VALID_INSTRUMENT,
   createEvalHarness,
   makeReproducibilityConfig,
   sampleSeed,
@@ -102,7 +103,12 @@ import {
   type EvalProblem,
   type EvalRunReport,
   type EvalSampleRequest,
+  type GoldenJudge,
+  type InstrumentControl,
+  type InstrumentControlResult,
+  type RecordedGoldenVerdict,
   type ReproducibilityConfig,
+  type SampleResult,
   type StudentSessionCaps,
 } from '@app/eval';
 
@@ -880,3 +886,164 @@ describe.skipIf(!PROBE.available)(
     );
   },
 );
+
+// -- Check_Name_Visibility_Signal on a real harness run (task 7.9) -----------
+//
+// testbench-dialect-normalization Req 5.8 and 5.11. The property test
+// (`dialect-check-name-visibility.property.test.ts`, Property 18) asserts the signal's
+// exact conjunction over a generated space. This is the one END-TO-END run: a fake loop
+// runner producing a CHANGED source, a `valid` Positive_Control verdict, and a control
+// stdout missing EXACTLY ONE pre-normalization check name - the shape the signal exists
+// to catch, which is a testbench that was desugared, then passed the reference design,
+// while quietly no longer emitting a check it was generated to emit.
+//
+// The "no verdict field moved" half is asserted DIFFERENTIALLY, against the identical
+// fixture whose control stdout reports EVERY name. That is the only input which moves the
+// signal, so a verdict field that moved with it would be reading the signal - which
+// Req 5.11 forbids. Comparing against a hand-written expected value would only restate
+// this test's own assumptions; comparing two runs that differ in exactly one input does
+// not.
+/** The pre-normalization check names the fake loop's testbench was generated against. */
+const VISIBILITY_CHECK_NAMES: readonly string[] = Object.freeze([
+  'ac1_sum_is_correct',
+  'ac2_carry_is_correct',
+  'ac3_reset_clears',
+]);
+
+/** The one name the control's stdout omits: the silently-dropped check the signal names. */
+const DROPPED_CHECK_NAME = 'ac3_reset_clears';
+
+/** A `verified` outcome carrying a CHANGED normalization and its pre-normalization names. */
+function normalizedOutcome(changed: boolean): VerificationOutcome {
+  return {
+    status: 'verified',
+    iterations: 1,
+    moduleVersion: { rtl: 'module vis_dut; endmodule' },
+    testbench: { source: 'module vis_dut_tb; endmodule' },
+    normalization: {
+      report: { normalizerVersion: 3, changed, findings: [], refusedWholeSource: null },
+      preNormalizationCheckNames: VISIBILITY_CHECK_NAMES,
+    },
+  } as unknown as VerificationOutcome;
+}
+
+/** A loop runner that returns one already-built outcome, charging one modeled call. */
+class VisibilityLoopRunner implements EvalLoopRunner {
+  readonly #outcome: VerificationOutcome;
+  constructor(outcome: VerificationOutcome) {
+    this.#outcome = outcome;
+  }
+  runSample(request: EvalSampleRequest): Promise<VerificationOutcome> {
+    request.budget.charge({ tokens: 1, costCents: MODEL_CALL_CENTS, wallClockMs: 1 });
+    return Promise.resolve(this.#outcome);
+  }
+}
+
+/** A positive control reporting `valid` plus the given `CHECK <name> PASS` lines. */
+class VisibilityControl implements InstrumentControl {
+  readonly #result: InstrumentControlResult;
+  constructor(reportedNames: readonly string[]) {
+    this.#result = {
+      verdict: VALID_INSTRUMENT,
+      stdout: reportedNames.map((name) => `CHECK ${name} PASS`).join('\n'),
+      stderr: '',
+      exitCode: 0,
+      mutation: null,
+    };
+  }
+  check(): Promise<InstrumentControlResult> {
+    return Promise.resolve(this.#result);
+  }
+}
+
+/** A judge reporting one fixed golden verdict, so a move in it would be visible. */
+class VisibilityJudge implements GoldenJudge {
+  judge(): Promise<RecordedGoldenVerdict> {
+    return Promise.resolve({ kind: 'passed', failureCount: 0 });
+  }
+}
+
+/** Run one sample end to end through a real `EvalHarness` with the visibility fakes. */
+async function runVisibilitySample(input: {
+  readonly changed: boolean;
+  readonly reportedNames: readonly string[];
+}): Promise<SampleResult> {
+  const config = makeReproducibilityConfig({ seed: 5, temperature: 0, sampleCount: 1 });
+  if (!config.ok) {
+    throw new Error(`invalid reproducibility config: ${config.error.message}`);
+  }
+  const problem = FIXED_EVAL_SUBSET[0];
+  if (problem === undefined) {
+    throw new Error('the fixed eval subset is empty');
+  }
+  const built = createEvalHarness({
+    loopRunner: new VisibilityLoopRunner(normalizedOutcome(input.changed)),
+    instrumentControl: new VisibilityControl(input.reportedNames),
+    goldenJudge: new VisibilityJudge(),
+    caps: CAPS,
+    limits: LIMITS,
+    config: config.value,
+    costEnvelopeCents: COST_ENVELOPE_CENTS,
+  });
+  if (!built.ok) {
+    throw new Error(`invalid harness configuration: ${built.error.code}`);
+  }
+  const report = await built.value.run([problem]);
+  const sample = report.problems[0]?.samples[0];
+  if (sample === undefined) {
+    throw new Error('the harness produced no sample');
+  }
+  return sample;
+}
+
+describe('Eval_Harness integration - Check_Name_Visibility_Signal (Req 5.8, 5.11)', () => {
+  it('sets the signal for a changed source whose control stdout drops one check name', async () => {
+    const reported = VISIBILITY_CHECK_NAMES.filter((name) => name !== DROPPED_CHECK_NAME);
+    // The fixture really does drop exactly one name, so the assertion below is about the
+    // conjunction rather than about an accidentally empty report.
+    expect(reported).toHaveLength(VISIBILITY_CHECK_NAMES.length - 1);
+
+    const signalled = await runVisibilitySample({ changed: true, reportedNames: reported });
+
+    expect(signalled.checkNameVisibilitySignal).toBe(true);
+    // The signal is an early warning, not a verdict: the sample still passed, the instrument
+    // is still valid, and the independent judge still agreed.
+    expect(signalled.passed).toBe(true);
+    expect(signalled.outcomeStatus).toBe('verified');
+    expect(signalled.instrumentVerdict).toEqual(VALID_INSTRUMENT);
+    expect(signalled.goldenVerdict).toEqual({ kind: 'passed', failureCount: 0 });
+  });
+
+  it('moves no verdict field relative to the same run whose control reports every name', async () => {
+    const reported = VISIBILITY_CHECK_NAMES.filter((name) => name !== DROPPED_CHECK_NAME);
+    const signalled = await runVisibilitySample({ changed: true, reportedNames: reported });
+    const intact = await runVisibilitySample({
+      changed: true,
+      reportedNames: VISIBILITY_CHECK_NAMES,
+    });
+
+    // The one input that moves the signal moved it, and nothing else.
+    expect(signalled.checkNameVisibilitySignal).toBe(true);
+    expect(intact.checkNameVisibilitySignal).toBe(false);
+    expect(intact.passed).toBe(signalled.passed);
+    expect(intact.outcomeStatus).toBe(signalled.outcomeStatus);
+    expect(intact.instrumentVerdict).toEqual(signalled.instrumentVerdict);
+    expect(intact.goldenVerdict).toEqual(signalled.goldenVerdict);
+    expect(intact.iterations).toBe(signalled.iterations);
+    expect(intact.noVerdictCause).toBe(signalled.noVerdictCause);
+    expect(intact.stopReason).toBe(signalled.stopReason);
+    expect(intact.costCents).toBe(signalled.costCents);
+  });
+
+  it('stays quiet when the normalizer changed nothing, however the control reported', async () => {
+    const reported = VISIBILITY_CHECK_NAMES.filter((name) => name !== DROPPED_CHECK_NAME);
+    const unchanged = await runVisibilitySample({ changed: false, reportedNames: reported });
+
+    // The first conjunct is load-bearing: a dropped check name on an UNNORMALIZED source is
+    // the Testbench_Agent's own omission, not something this transform could have caused, so
+    // attributing it here would be a false alarm against the normalizer.
+    expect(unchanged.checkNameVisibilitySignal).toBe(false);
+    expect(unchanged.passed).toBe(true);
+    expect(unchanged.instrumentVerdict).toEqual(VALID_INSTRUMENT);
+  });
+});

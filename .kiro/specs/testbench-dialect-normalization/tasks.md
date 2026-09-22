@@ -51,7 +51,7 @@ Two facts carried forward from the vault, still true here:
 Gate commands are run INDIVIDUALLY at every checkpoint, never chained, because chained gate commands time out in this workspace.
 The test baseline immediately before this spec's changes is 1710 passed / 6 skipped / 0 failed.
 The measured state with groups 1 through 13 and task 14.1 complete is 1717 passed / 6 skipped / 0 failed.
-The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and the whole of the net rise is task 14.2's fixture suite; the chain including every deletion is recorded in task 17.
+The final measured state at task 18 is 1883 passed / 6 skipped / 0 failed, and the dominant part of the net rise is task 14.2's fixture suite; the chain including every deletion is recorded in task 18.
 
 ## Tasks
 
@@ -258,13 +258,13 @@ The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and t
     - Compute it AFTER every verdict field of `sample` is already decided, write it only to the record and the artifact, and read it back nowhere, so it changes neither the Verification_Loop's oracle verdict nor the Golden_Judge's verdict for any sample
     - _Requirements: 5.8, 5.11_
 
-  - [ ]* 7.2 Write the property test for non-code spans
+  - [x]* 7.2 Write the property test for non-code spans
     - **Property 1: Non-code spans are never rewritten**
     - Create `app/test/dialect-noncode-spans.property.test.ts`; the arbitrary MUST plant `begin`, `end`, `integer i;`, and a full `CHECK name PASS;` inside a line comment, inside a block comment, AND inside a `$display` string in the same source, so the property holds even when the input LOOKS like the thing being forbidden
     - **Validates: Requirements 4.12, 5.3**
     - _Requirements: 4.12, 5.3_
 
-  - [ ]* 7.3 Write the property test for the preserved lexical content and the one thing that may move
+  - [x]* 7.3 Write the property test for the preserved lexical content and the one thing that may move
     - **Property 2: The lexical content is preserved, and only a declaration moves**
     - This description was REWRITTEN when Requirement 5.3 was amended. The earlier form asserted that deleting the reported rewritten spans from both input and output leaves two byte-identical strings, which held for free while every rule only inserted. The `unnamed-begin-declaration` rule now MOVES a declaration within its own block, so the claim is asserted as a MULTISET rather than as a span-deletion identity
     - Create `app/test/dialect-span-preservation.property.test.ts`, asserting the output's code-token multiset equals the input's plus exactly the block labels the report says were generated, the comment multiset is unchanged, and the subsequence of EXECUTABLE statements is identical in order before and after
@@ -273,42 +273,44 @@ The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and t
     - **Validates: Requirements 4.12, 5.2, 5.3, 5.13, 5.14**
     - _Requirements: 4.12, 5.2, 5.3, 5.13, 5.14_
 
-  - [ ]* 7.4 Write the property test for check-name preservation
+  - [x]* 7.4 Write the property test for check-name preservation
     - **Property 5: The check-name set is preserved**
     - Create `app/test/dialect-check-name-preservation.property.test.ts`, asserting the set of names for which `sourceEmitsCheck` holds is identical before and after the transform, so no rewrite adds, removes, or renames a check
     - **Validates: Requirements 5.1, 9.9**
     - _Requirements: 5.1, 9.9_
 
-  - [ ]* 7.5 Write the property test for block naming and non-collision
+  - [x]* 7.5 Write the property test for block naming and non-collision
     - **Property 6: An unnamed declaring block is named, with a name that collides with nothing in the input**
     - Create `app/test/dialect-block-naming.property.test.ts`; the arbitrary MUST include sources already containing `tbnorm_blk_1`, `tbnorm_blk_2`, and `tbnorm_blk_1` inside a comment, or "collides with nothing" is never exercised against a real collision
     - Assert every inserted name is absent from the set of all identifier-shaped tokens in the INPUT text and that all names inserted in one call are pairwise distinct
     - **Validates: Requirements 4.9, 5.5**
     - _Requirements: 4.9, 5.5_
 
-  - [ ]* 7.6 Write the property test for literal width and value preservation
+  - [x]* 7.6 Write the property test for literal width and value preservation
     - **Property 7: A determinable malformed literal is rewritten, preserving its width and its value**
     - Create `app/test/dialect-sized-literal.property.test.ts`; the arbitrary MUST generate widths and magnitudes that are not round numbers, plus the four measured forms verbatim (`16'd(-15)`, `8'd-1`, `9'di`, `{1'b0, 64{1'b1}}`)
     - Assert the output's size token and magnitude digits are the identical character runs the input's were
     - **Validates: Requirements 4.10, 5.6**
     - _Requirements: 4.10, 5.6_
 
-  - [ ]* 7.7 Write the property test for declining rather than guessing
+  - [x]* 7.7 Write the property test for declining rather than guessing
     - **Property 8: A rewrite the transform cannot establish is declined and reported, never attempted**
     - Create `app/test/dialect-decline-and-report.property.test.ts`, generating at least one case through EACH of the eight declined causes in one run's worth of cases: an unterminated block comment, an unterminated string literal, an unbalanced `begin`, a base followed by a non-digit, a decimal number followed by `{`, a block whose declaration would shadow a module-scope name, a block whose only block-item declaration is a `genvar` (`declaration-not-relocatable`), and a literal immediately preceded by `#`
     - Assert the transform returns without throwing, the returned source is byte-identical to the input at every declined site, and every declined site appears in the report under its `DialectClass` with a `declinedBecause` cause
+    - This test went RED against the shipped code and its `hash-preceded-literal` row is why: version 3 declined that site by returning `null`, which produced NO finding at all, so the row's "appears in the report" half failed outright. Group 16 fixed the code rather than the assertion, and the row now demands the STRICTER, true cause - `rewrite-context-not-established` rather than any cause claiming the value was undeterminable, because at a `#`-preceded site the value is `-1` in the plainest possible text
+    - Now GREEN. Two of the three defects it surfaced were reachable by nothing else in this plan: no committed fixture carries the malformed signed-negative shape, and a silent decline produces no output difference for a fixture to assert on
     - Include sources the Testbench_Precheck would have ADMITTED unchanged as well as sources it would have refused, so meaning preservation is asserted over every input rather than over failing ones
     - **Validates: Requirements 4.11, 4.13, 4.14, 5.4, 5.7, 5.12, 9.8, 9.11**
     - _Requirements: 4.11, 4.13, 4.14, 5.4, 5.7, 5.12, 9.8, 9.11_
 
-  - [ ]* 7.8 Write the property test for the visibility signal's exact conjunction
+  - [x]* 7.8 Write the property test for the visibility signal's exact conjunction
     - **Property 18: The Check_Name_Visibility_Signal fires on exactly the stated conjunction and changes nothing**
     - Create `app/test/dialect-check-name-visibility.property.test.ts`; the arbitrary MUST generate control stdout reporting a SUBSET of the pre-normalization names, not only the full set or the empty set
     - Assert the signal is `true` if and only if the normalizer changed the source AND the Positive_Control reported the sample valid AND at least one pre-normalization name is absent from the control's reported names, and that the oracle verdict, the golden verdict, and the Recorded_Instrument_Verdict are each identical to the value they would hold with the signal never computed
     - **Validates: Requirements 5.8, 5.11**
     - _Requirements: 5.8, 5.11_
 
-  - [ ]* 7.9 Write the integration test for the signal on a real harness run
+  - [x]* 7.9 Write the integration test for the signal on a real harness run
     - In `app/test/eval-harness.integration.test.ts`, add one run over a fake loop runner producing a changed source, a `valid` control verdict, and a control stdout missing exactly one pre-normalization check name, asserting the signal is set and that no verdict field moved
     - _Requirements: 5.8, 5.11_
 
@@ -608,7 +610,7 @@ The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and t
     - Token preservation is now a MEASURED claim rather than a free one: with the move applied, the code-token multiset of output equals input for 29 of 29 (sole addition the inserted labels) and the comment multiset is unchanged for 29 of 29. A same-line trailing comment travels with its declaration; a comment line PRECEDING a declaration does not travel and can end up describing whatever statement now follows, which is cosmetic with no parse effect
     - _Requirements: 4.9, 5.2, 5.3, 5.13, 5.14, 9.5_
 
-  - [ ]* 15.6 Write the property test for the move's meaning preservation
+  - [x]* 15.6 Write the property test for the move's meaning preservation
     - **Property 27: A relocated declaration stays in its own block, ahead of that block's first statement, in its original relative order**
     - Create `app/test/dialect-declaration-move.property.test.ts`, asserting every relocated declaration appears ahead of its block's first executable statement and inside the same `begin ... end` extent it was declared in, that the relative order of the declarations relocated within one block is unchanged, and that a block whose declarations already precede its first statement comes back byte-identical
     - The arbitrary MUST include a nested block, a block with more than one declaration, a preceding statement carrying no word token, a `for`-header declaration, and a `genvar`, or the property passes for the wrong reason - which is precisely the reading that hid this defect for a whole task cycle
@@ -636,8 +638,59 @@ The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and t
     - Append a line to each constant's history comment naming this spec and the one constant that moved (`NORMALIZER_VERSION` going 2 to 3), following the entries the two constants already carry
     - _Requirements: 8.2, 8.3, 8.5, 8.6_
 
-- [x] 16. Correct the vault note that records this campaign
-  - [x] 16.1 Rewrite `gotcha-testbench-repair-loop-measured-near-zero-2-of-259-locobs-condition.md`
+- [x] 16. The three defects the OPTIONAL Property 8 test found in the sized-literal rule, and the comment it disproved
+  - This group exists because task 7.7 - a property test marked `*`, skippable for a faster first cut - went RED against shipped code and surfaced three real defects in `app/agent/orchestrator/dialect/sized-literal.ts`. That is the strongest argument this spec carries for having written the optional tests at all: two of the three defects are invisible to every fixture in group 14 (no committed fixture carries the malformed signed-negative shape, and a silent decline produces no output difference to assert on), so nothing else in the plan was positioned to find them
+  - The fail-before half is `app/agent/orchestrator/dialect/sized-literal.test.ts`, 9 known-answer cases carrying the measurement table, every one of which failed before the fixes and passes after
+  - Every verdict in this group was MEASURED with `iverilog -g2012` (Icarus 13.0), each case compiled ALONE, and run under `vvp` wherever meaning rather than syntax was the question. Do not re-derive them and do not weaken an assertion because a probe is inconvenient to repeat
+  - A FOURTH finding rode along and is a CORRECTION rather than a fix, recorded as such in task 16.4: the `#` guard's stated rationale did not survive re-measurement, and the guard's behaviour was nonetheless left unchanged - only its comment and its reporting moved
+
+  - [x] 16.1 Stop declining a `#`-preceded literal SILENTLY, and reserve `null` for "this is not a site"
+    - `planOneLiteral` returned `null` for the `#`-preceded branch, which is also what it returns for a well-formed literal that is not a site at all. A `DialectFinding` is only ever produced by a returned `SpanEdit`, so the decline reached no report and the per-class decline count UNDERCOUNTED. The source was correctly byte-identical before and after; the report simply never mentioned the site
+    - That is structurally the same defect as the 211-style accounting bug this spec was written to fix, one layer down: a decline that produces no record is indistinguishable from a decline that never happened, and Requirements 1 through 3 exist to make those per-class counts trustworthy
+    - Return a zero-width `SpanEdit` (`start === end`, empty replacement) carrying the `declined` finding, so applying it leaves the source byte-identical while the site still reaches the report. `declineFinding` is the single owner of that shape and the `value-not-determinable` branches use it too
+    - State in the module that `null` is now strictly "this is not a site", because the two are not interchangeable: only one of them is counted
+    - _Requirements: 4.11, 4.14, 5.7, 5.12_
+
+  - [x] 16.2 Add `rewrite-context-not-established` to `DialectDeclineCause`, rather than reuse `value-not-determinable`
+    - The value at a `#`-preceded site IS determinable - it is `-1`, in the plainest possible text - so filing the decline under `value-not-determinable` would make the report say something FALSE about why the transform stood down, and the per-reason decline breakdown would mis-attribute it
+    - The two causes answer different questions and the report keeps them apart: `value-not-determinable` is a claim about the SITE'S OWN TEXT (`9'di` carries no intended value, so no rewrite exists to perform), while `rewrite-context-not-established` is a claim about the ADJACENCY the rule has not cleared
+    - Name it "not established" rather than "would create an ambiguity", because the measurement in task 16.4 does NOT support an ambiguity claim: the hazard is what this transform has not cleared, not a property `iverilog` was measured to have
+    - Record the distinction in `types.ts` beside the vocabulary, so the next reader tempted to collapse the two members finds the reason before the edit
+    - _Requirements: 4.11, 4.14, 5.7_
+
+  - [x] 16.3 Re-emit the signed-base marker the rewrite captured and then dropped
+    - `SIZE_PREFIX_PATTERN` captured the optional `[sS]` run in its second capture group and the replacement never used it, so `16'sd-1` became `(-16'd1)` and lost its signedness. This is a MEANING change, not a cosmetic one: measured under `vvp`, `(-16'sd1) < 0` is 1 and `$signed(-16'sd1)` prints -1, while `(-16'd1) < 0` is 0 and the value reads as 65535 - so a dropped marker can flip a check's verdict, which is the one failure mode a transform on the measuring instrument must not have
+    - Re-emit the captured run VERBATIM rather than canonicalising it. All four spellings of `[sS][dD]` were measured legal and measured signed (`(-16'Sd1)`, `(-16'sD1)`, `(-16'SD1)` all compile and all compare signed), so verbatim is safe and is the only spelling that preserves the input's character runs, which is what makes Requirement 5.6 a textual guarantee rather than an arithmetic claim
+    - The marker is COPIED, never invented: `16'd-1` still becomes `(-16'd1)` with no `s`, asserted directly so the fix cannot drift into adding signedness the input did not carry
+    - Fix both input forms, the bare `16'sd-1` and the parenthesized `16'sd(-15)`, since both read the prefix through the same captured groups
+    - _Requirements: 4.10, 5.6_
+
+  - [x] 16.4 Correct the `#` guard's doc comment against a re-measurement, and leave the guard's BEHAVIOUR unchanged
+    - The comment claimed the parenthesized rewrite would be ambiguous with a parameter override. `iverilog -g2012` does NOT exhibit that: `#(-8'd1) acc = 1;` compiles and DELAYS (simulation time 0 -> 255), because a parameter override only follows a module name, so `#(` after a statement boundary is unambiguously a delay control. And there is no legal bare `#<sized literal>` in ANY position - `dut #8'd1 u0();` is rejected as an instantiation and `and #8'd1 g0(y,a,b);` is rejected as a gate delay - so the input the guard declines never compiles today and no working meaning can be flipped by rewriting it
+    - The comment also described a different rule than the code implements. `precedingCodeCharacter` is read at the LITERAL'S start, so the guard fires where a rewrite would CREATE `#(`, not "inside a parameter/delay override"
+    - The guard's behaviour was deliberately LEFT UNCHANGED, on the conservative side of what is now a MEASURED-BUT-UNDECIDED question. Removing it would change the SET OF REWRITES, which is its own `NORMALIZER_VERSION` decision and its own config-hash consequence, and it is not this group's remit
+    - Record the resolution honestly: the code was on the defensible side, the comment named a mechanism the toolchain does not exhibit, and the fix was DOCUMENTATION PLUS REPORTING rather than the behaviour change the comment seemed to invite. The generalizable rule is that when a guard's comment and its code disagree, MEASURE before believing either
+    - Record the measured other side too, because it shows the guard's non-firing case is a repair rather than a disturbance: `dut #(8'd-1) u0();` is REJECTED today (`Syntax error in parameter value assignment list`), and the rewritten `dut #((-8'd1)) u0();` compiles and delivers the same -1 that the hand-written `dut #(-8'd1) u0();` does. The extra paren nests inside an override that was already there rather than creating one
+    - Put the full measurement table in the module header, so a future reader does not have to re-run it to know why these bytes
+    - _Requirements: 4.11, 5.7_
+
+  - [x] 16.5 Bump `NORMALIZER_VERSION` from 3 to 4 and append the reason to its comment
+    - Change the constant in `app/agent/orchestrator/normalizer-version.ts` from 3 to 4, because the SET OF REWRITES changed: a signed literal that version 3 silently unsigned is now re-emitted signed, so a sample carrying an `s` form is not poolable across the boundary
+    - State in the comment that the two reporting-only changes (task 16.1's counted decline and task 16.2's new cause) RIDE this bump because one bump covers a set, and that task 16.4's correction moves nothing a sample could see. A reader must be able to tell which of the three changed the transform and which two changed only the report
+    - Append the reason in the established form; task 4.1 recorded the constant's stated contract as "must change whenever the set of rewrites changes", and this is the third exercise of that obligation after tasks 13.4 and 15.8
+    - This task is EXPECTED to fail the two pinned hash assertions in `app/eval/sweep/manifest.test.ts`; that failure is the input to task 16.6 and must not be worked around here
+    - _Requirements: 8.1, 8.7_
+
+  - [x] 16.6 Re-pin `SMOKE_RUN_CONFIG_HASH` and `TBSLICE_RUN_CONFIG_HASH` from OBSERVED values, the FOURTH re-pin, by the discipline tasks 12.2, 13.5, and 15.9 used
+    - Run `npx vitest run app/eval/sweep/manifest.test.ts` and read the ACTUAL hashes out of the failure output; never reuse a number from any prior report, never derive one by inspection, and never pre-compute one, because both are the first 16 hex characters of a SHA-256 over canonical JSON and a hand-invented value produces a test whose obvious "fix" is to paste whatever the code printed, which passes even if the bump silently did not happen
+    - The values this task replaces are `f7a172ae94c67954` for `SMOKE_RUN_CONFIG_HASH` and `fa9ec5a014b07e0f` for `TBSLICE_RUN_CONFIG_HASH`, the pair task 15.9 pinned. OBSERVED and pinned: `966bf684a2ddcb65` and `cd12d948960492ce`
+    - Add the `.not.toBe('f7a172ae94c67954')` and `.not.toBe('fa9ec5a014b07e0f')` assertions in the established form, naming each old value in the assertion, so a bump that failed to move the hash is a test failure rather than a silent pass. Each constant now carries four such assertions, one per re-pin
+    - Append a line to each constant's history comment naming this spec and the one constant that moved (`NORMALIZER_VERSION` going 3 to 4), following the entries the two constants already carry, and state the signed-marker measurement in it so the entry says why a sample cannot pool across the boundary rather than only that it cannot
+    - The 40 fixture pins did NOT move: 25 of 29, 3 of 7, and 0 of 4 all held. The reason corrects an earlier claim and is worth recording - the fixtures DO contain `s` forms (`9'sd` 50 times and `17'sd` 8 times, across 2 files), but none in the malformed signed-negative shape, which is the only shape task 16.3 touches. "No `s` form in the population" and "no `s` form the rewrite touches" are different claims and only the second is true
+    - _Requirements: 8.2, 8.3, 8.5, 8.6_
+
+- [x] 17. Correct the vault note that records this campaign
+  - [x] 17.1 Rewrite `gotcha-testbench-repair-loop-measured-near-zero-2-of-259-locobs-condition.md`
     - The note at `chipAgent/_inbox/gotcha-testbench-repair-loop-measured-near-zero-2-of-259-locobs-condition.md` is factually wrong on two counts and must be corrected before another session reads it as a record of what happened
     - First, it frames the 48 hint-less samples as a no-feedback placebo condition ("~19% of repairs fired as the literal placebo condition (a \"fix it\" with no signal)"); they in fact carry a VERBATIM iverilog diagnostic. The defect was that the `Repair_Hint` was built as a local in `#repairPrecheckFailure` and never PERSISTED, so `repairHint: null` on disk records a persistence gap, not an absent signal. Remove the placebo framing.
     - Second, it repeats the invalid 259/2 denominator. Correct it: 259 is a count of ADMISSIBLE REVISIONS PRODUCED, not of attempts, because every declined path returned `wasRepaired: false` and `#runSample` wrote `repairProvenance: wasRepaired ? {...} : precheckProvenance`. Report the two arms separately: 48 precheck-triggered attempts with 0 accepted, and 211 control-arm records with 2 accepted, both of which still recorded `passed: false` and `outcomeStatus: instrument-refused`, for 0 net verified artifacts recovered.
@@ -651,7 +704,7 @@ The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and t
     - Run `npm run vault:manifest` afterwards so the catalog stays accurate, and confirm `npm run vault:check` passes
     - _Requirements: 8.10_
 
-- [x] 17. Final checkpoint - the merge gate, and the honest test count
+- [x] 18. Final checkpoint - the merge gate, and the honest test count
   - Ensure all tests pass, ask the user if questions arise.
   - Run each command INDIVIDUALLY, never chained, because chained gate commands time out in this workspace:
     - `npx tsc -b --force`
@@ -662,16 +715,17 @@ The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and t
   - Also run `npx eslint app scripts --max-warnings=0` as its own separate command, because Requirement 10.2 names the wider form, and confirm no import-boundary violation for any module added by this spec
   - Assert no `app/agent` file imports `app/eval`, and that the four `dialect/` modules and `normalizer-version.ts` reach the scanner through `@app/tools`
   - Compare the final passing count against the 1710 passed / 6 skipped / 0 failed baseline AND against the pre-retirement and post-retirement counts recorded in tasks 10.1 and 11, and against the 1717 passed / 6 skipped / 0 failed measured with groups 1 through 13 and task 14.1 complete. State all four numbers.
-  - MEASURED at this checkpoint: **1862 passed / 6 skipped / 0 failed**, 151 test files passed and 1 skipped. The chain is 1710 baseline -> 1719 once the normalizer and its wiring landed -> 1718 after task 10.2 deleted a control-path test -> 1711 after task 10.3's narrowing deleted 7 -> 1717 after group 13's comment-as-whitespace regression assertions added 6 -> 1847 after task 14.2's fixture suite added 130 -> 1862 after group 15.
+  - MEASURED at this checkpoint: **1883 passed / 6 skipped / 0 failed**. The chain is 1710 baseline -> 1719 once the normalizer and its wiring landed -> 1718 after task 10.2 deleted a control-path test -> 1711 after task 10.3's narrowing deleted 7 -> 1717 after group 13's comment-as-whitespace regression assertions added 6 -> 1847 after task 14.2's fixture suite added 130 -> 1862 after group 15, which is where 151 test files passed and 1 skipped was read -> 1873 after the optional property cluster added 11, one of its twelve tests being RED (task 7.7's Property 8) -> 1883 after group 16, which is +1 for Property 8 flipping green and +9 for the new `app/agent/orchestrator/dialect/sized-literal.test.ts`.
   - The net is positive only because the fixture suite in task 14.2 and the three regression assertions in task 13.1 add more cases than the retirement in task 10.3 removed. Say that explicitly, so a dropped count is never mistaken for progress and a net-positive count is never read as evidence that nothing was deleted.
-  - The four deletions the net positive conceals, named: `app/eval/testbench-repair.ts` and its test file, `app/agent/orchestrator/testbench-repair.ts`, one `describe` block in `app/eval/harness.test.ts`, and `app/test/repair-hint-real-measured-case.test.ts`. The arithmetic is 8 tests deleted (1 at task 10.2, 7 at task 10.3) against 160 added (+9 normalizer and wiring, +6 group 13, +130 task 14.2, +15 group 15), so 1710 - 8 + 160 = 1862. The fixture suite is 130 of those 160 and is the dominant reason the total rose; a reader who sees only the +152 net learns nothing about the 8 that went.
+  - The four deletions the net positive conceals, named: `app/eval/testbench-repair.ts` and its test file, `app/agent/orchestrator/testbench-repair.ts`, one `describe` block in `app/eval/harness.test.ts`, and `app/test/repair-hint-real-measured-case.test.ts`. The arithmetic is 8 tests deleted (1 at task 10.2, 7 at task 10.3) against 181 added (+9 normalizer and wiring, +6 group 13, +130 task 14.2, +15 group 15, +11 the property cluster, +10 group 16), so 1710 - 8 + 181 = 1883. The fixture suite is 130 of those 181 and is the dominant reason the total rose; a reader who sees only the +173 net learns nothing about the 8 that went.
+  - The 11 the property cluster added is a PASSING count, not a written count: twelve tests landed in that cluster and one of them was red, so the twelfth is the +1 group 16 collected when task 7.7's Property 8 turned green. A red test is written work that the passing count does not yet carry, and the distinction is what makes group 16 legible as a fix rather than as new tests.
   - State the per-class fixed counts the fixture suite pins as of this checkpoint. All three are now MEASURED against the real toolchain: 25 of 29 `unnamed-begin-declaration` (4 declined, 3 `unbalanced-block` and 1 `declaration-not-relocatable`), 3 of 7 `malformed-sized-literal` (4 declined `value-not-determinable`), and 0 of 4 `prose-as-statement`, which is correct and permanent. That is **28 of 40 committed fixtures**, or 28 of the 45-sample classified population. The earlier conditional 36 of 45 is superseded and optimistic by 8; see the Notes.
   - Confirm the 6 skips are the same environmental skips as the previous baseline
   - CONFIRMED at this checkpoint: the 6 skips are the same environmental skips as the baseline - 1 for netlistsvg/yosys not on PATH (`app/test/netlistsvg-schematic.integration.test.ts`) and 5 for the gVisor `runsc` runtime not being registered with docker (`app/tools/sandbox/sandbox-containment.integration.test.ts`). Nothing new is skipped. No `app/agent` source file imports `app/eval`, and the `dialect/` modules and `normalizer-version.ts` reach the scanner through `@app/tools`. `npm run vault:check` passes at 102 notes.
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7_
 
-- [ ] 18. Re-measure the transform against a real slice
-  - [ ]* 18.1 Re-run the stage1-screen slice into a fresh output directory and compare
+- [ ] 19. Re-measure the transform against a real slice
+  - [ ]* 19.1 Re-run the stage1-screen slice into a fresh output directory and compare
     - **This task SPENDS REAL MONEY against a hosted provider and MUST NOT be run without explicit approval from the founder**, following the precedent of `testbench-repair-loop` task 12.1
     - Run the same `stage1-screen` slice, or an equivalent smaller slice, into a NEW `outputDir`, because v11-and-earlier records are refused by design
     - Record, without adjusting any of them: the `testbench-build-failed` precheck refusal count, the per-arm repair-attempted count with every declined attempt included, the per-reason declined breakdown, the Check_Name_Visibility_Signal count, the instrument-valid total decomposed into "no repair" and "after repair", and the golden denominator size
@@ -686,14 +740,15 @@ The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and t
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for a faster first cut.
-  Every one of them is a test, with one exception: task 18.1, the real-money eval campaign, which is optional because it is a tracked measurement rather than a deterministic change.
+  Every one of them is a test, with one exception: task 19.1, the real-money eval campaign, which is optional because it is a tracked measurement rather than a deterministic change.
+  "Optional" means skippable for a faster first cut, never low-value: task 7.7 is marked `*` and it is what found all three defects group 16 fixed, two of which no fixture in group 14 could have reached.
   Task 13.1 is deliberately NOT optional: it is the fail-before half of a correctness fix, and without it task 13.2 cannot be shown to have changed anything.
   Task 14.2 is likewise NOT optional, and for the same reason one step removed: its pinned 0-of-29 count is the fail-before half of group 15, and without it the move cannot be shown to have changed anything.
-- **Task 17 is the merge gate. Task 18.1 is a tracked follow-up and does NOT block merge.**
+- **Task 18 is the merge gate. Task 19.1 is a tracked follow-up and does NOT block merge.**
   The specific damage this spec could cause is structural: a transform that changes what a testbench means, or a second testbench measured alongside the first.
   Both are caught deterministically and offline by Properties 1, 2, 5, 6, 7, 8, and 10, and by checkpoints 6 and 8.
-  Task 18.1 costs real model spend against a hosted provider, and holding a deterministic change behind it costs more than it buys.
-  Task 18.1 still runs, still records every number it records, and a failed comparison is still grounds to revert.
+  Task 19.1 costs real model spend against a hosted provider, and holding a deterministic change behind it costs more than it buys.
+  Task 19.1 still runs, still records every number it records, and a failed comparison is still grounds to revert.
 - The ordering in this plan is a correctness constraint, not a preference.
   Requirements 1, 2, and 3 land in group 1, before any normalizer work, per `clarification-answers.md` Q1 Answer A: nothing else in this spec is measurable until they do.
   The scanner move in task 3.1 lands before the rules in group 4, so every rule is written against one owner of the span-classification safety claim rather than two.
@@ -707,8 +762,9 @@ The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and t
 - Requirements 10.1 to 10.4 are the existing tooling gate, enforced at the checkpoints rather than by a new property, matching the design's own Coverage note.
 - Requirement 8.7 ("the version changes whenever the rewrite set changes") is a process obligation on a constant.
   It is enforced by review and by task 14.2's pinned fixed-fixture counts failing when behaviour moves without the constant, not by a property test.
-  Task 13.4 is the first exercise of that obligation and task 15.8 is the second: each group changes the set of rewrites, so the constant moves 1 -> 2 and then 2 -> 3 in the same change as the behaviour.
-  Each bump forces its own config-hash re-pin, read from its own observed failure (tasks 12.2, 13.5, 15.9), because the values move on every intervening change and a number quoted from a prior report is already stale.
+  Task 13.4 is the first exercise of that obligation, task 15.8 the second, and task 16.5 the third: each group changes the set of rewrites, so the constant moves 1 -> 2, then 2 -> 3, then 3 -> 4 in the same change as the behaviour.
+  Each bump forces its own config-hash re-pin, read from its own observed failure (tasks 12.2, 13.5, 15.9, 16.6 - four re-pins, not one), because the values move on every intervening change and a number quoted from a prior report is already stale.
+  Group 16 is also where the obligation's OTHER half was exercised: two of its three changes move what the transform REPORTS rather than what it rewrites, and the bump covers the set while the comment states which of the three a sample could see, so the constant never claims more than it means.
 - Requirement 9.2 ("committed unedited") cannot be machine-checked against a gitignored source directory, so task 14.1 records the provenance in `index.json` and the claim is a review obligation.
 - **Every effect-size figure in this plan is now MEASURED against the real toolchain over the 40 committed fixtures, and is stated as the measured number plus its residue.**
   `unnamed-begin-declaration` is 25 of 29 fixed, 4 declined (3 `unbalanced-block`, 1 `declaration-not-relocatable`).
@@ -730,10 +786,11 @@ The final measured state at task 17 is 1862 passed / 6 skipped / 0 failed, and t
 
 Waves are arranged so that no two tasks in one wave write the same file.
 The tasks that edit `app/agent/orchestrator/verification-loop.ts` (1.1, 1.2, 5.1, 5.2, 9.2, 10.3) are therefore strictly serial, as are the tasks that edit `app/eval/harness.ts` (1.5, 1.7, 7.1, 10.2) and the tasks that edit `app/agent/orchestrator/repair-hint.ts` (9.2, 10.3).
-The tasks that edit `app/agent/orchestrator/dialect/unnamed-begin.ts` (4.2, 13.2, 13.3, 15.1, 15.2, 15.3, 15.4, 15.5) are likewise serial, as are the three tasks that edit `app/eval/sweep/manifest.test.ts` (12.2, 13.5, 15.9) and the two that edit `app/test/dialect-fixtures.integration.test.ts` (14.2, 15.7).
+The tasks that edit `app/agent/orchestrator/dialect/unnamed-begin.ts` (4.2, 13.2, 13.3, 15.1, 15.2, 15.3, 15.4, 15.5) are likewise serial, as are the four tasks that edit `app/eval/sweep/manifest.test.ts` (12.2, 13.5, 15.9, 16.6), the four that edit `app/agent/orchestrator/dialect/sized-literal.ts` (4.3, 16.1, 16.3, 16.4), and the two that edit `app/test/dialect-fixtures.integration.test.ts` (14.2, 15.7).
 The mandated orderings are encoded as wave order rather than only as prose: the whole of group 1 precedes 3.1, 3.1 precedes every rule in group 4, group 4 precedes group 5, group 5 precedes group 7, group 10 precedes 12.1, 12.1 precedes 12.2, 13.1 precedes 13.2 and 13.3, 13.4 precedes 13.5, and the whole of group 13 precedes 14.1, because a fixture copied from a normalizer with a confirmed false rewrite would freeze that rewrite as expected behaviour.
 Group 15 is ordered AFTER 14.2 for the opposite reason: 14.2 pins the measured 0 of 29 as a known-failing state, and 15.7 flips that pin, so the suite is the regression test for the move rather than a claim about it.
 Within group 15, 15.1 through 15.4 precede 15.5 because each is a correctness precondition of the move (a false decline, a destructive false rewrite, a mis-read "already first", and an unmovable keyword), 15.5 precedes 15.7, and 15.8 precedes 15.9 because the bump is EXPECTED to fail the two pinned hash assertions and that failure is the source of the new values.
+Within group 16 the same shape repeats one scale down: 16.2 precedes 16.1 because the new decline cause must exist before a branch can report under it, 16.1, 16.3, and 16.4 are serial because all three edit `sized-literal.ts`, and 16.5 precedes 16.6 for the identical bump-then-read-the-failure reason tasks 12.1/12.2, 13.4/13.5, and 15.8/15.9 each already encode.
 
 ```json
 {
@@ -775,8 +832,13 @@ Within group 15, 15.1 through 15.4 precede 15.5 because each is a correctness pr
     { "id": 34, "tasks": ["15.5"] },
     { "id": 35, "tasks": ["15.6", "15.7"] },
     { "id": 36, "tasks": ["15.8"] },
-    { "id": 37, "tasks": ["15.9", "16.1"] },
-    { "id": 38, "tasks": ["18.1"] }
+    { "id": 37, "tasks": ["15.9", "16.2"] },
+    { "id": 38, "tasks": ["16.1"] },
+    { "id": 39, "tasks": ["16.3"] },
+    { "id": 40, "tasks": ["16.4"] },
+    { "id": 41, "tasks": ["16.5"] },
+    { "id": 42, "tasks": ["16.6", "17.1"] },
+    { "id": 43, "tasks": ["19.1"] }
   ]
 }
 ```

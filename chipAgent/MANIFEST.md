@@ -20,9 +20,9 @@ Reading `status`: `trusted` = eval-gated, may steer generation. `candidate` = no
 still authoritative as a record of what happened (what was tried, what the oracle said, what
 failed), but not as a correctness claim.
 
-Notes catalogued: 102.
+Notes catalogued: 106.
 
-## Gotchas and dead-ends - read these before debugging anything in their area (56)
+## Gotchas and dead-ends - read these before debugging anything in their area (59)
 
 - candidate: Display_Layer fail-closed invariants differ from the Trust_Labeler's [display-layer, trust, fail-closed, property-based, app-web, testing] -> `chipAgent/_inbox/display-layer-fail-closed-invariants.md`
 - candidate: The eval gate's "equal-to-baseline never blocks" needs a structural floor < baseline invariant [typescript, domain-modelling, invariants, eval-gate, ci, core] -> `chipAgent/_inbox/eval-gate-floor-below-baseline-invariant.md`
@@ -42,6 +42,7 @@ Notes catalogued: 102.
 - candidate: Destructuring dirname/resolve from a dynamic import('node:path') trips @typescript-eslint/unbound-method [eslint, typescript, testing, node-api] -> `chipAgent/_inbox/gotcha-eslint-unbound-method-node-path-destructure.md`
 - candidate: A generated testbench can assume a reset the interface never declared, and then fail the reference design -> `chipAgent/_inbox/gotcha-generated-testbench-assumes-a-reset-that-does-not-exist.md`
 - candidate: Widening a status union left an existing property test vacuously passing on the new member [testing, property-based, fast-check, non-vacuous, golden-judge, sample-outcome-status] -> `chipAgent/_inbox/gotcha-golden-denominator-property-test-was-vacuous-for-new-status.md`
+- candidate: A '#'-preceded sized literal is declined SILENTLY - no finding, so the per-class decline count undercounts [gotcha, dialect-normalizer, sized-literal, accounting, decline-reporting, property-based, undercount, app-agent] -> `chipAgent/_inbox/gotcha-hash-preceded-sized-literal-is-declined-silently-with-no-finding.md`
 - candidate: buildInterfaceStub's non-ANSI ports had no direction keyword, so Icarus refused every stub it ever built -> `chipAgent/_inbox/gotcha-interface-stub-non-ansi-ports-missing-direction-keyword.md`
 - candidate: Legacy .kiro.hook files never fire, and an empty MOC makes the whole vault invisible [kiro, hooks, steering, knowledge-vault, retrieval, tooling] -> `chipAgent/_inbox/gotcha-legacy-kiro-hook-format-never-fires.md`
 - candidate: Narrowing RepairHint to one member broke an undocumented consumer in prompt.ts that neither the task text nor design.md's end-state sketch mentioned [dead-code-retirement, type-narrowing, cascading-break, prompt-ts, repair-hint] -> `chipAgent/_inbox/gotcha-narrowing-repairhint-broke-an-undocumented-consumer-in-prompt-ts.md`
@@ -55,6 +56,7 @@ Notes catalogued: 102.
 - candidate: A Testbench_Agent prompt change does not change the config identity, so a resumed campaign pools two experiments -> `chipAgent/_inbox/gotcha-prompt-version-absent-from-experiment-identity.md`
 - candidate: app/test's propertyTag hardcodes FEATURE_TAG to hdl-creation-loop, so a later spec's property tests must not call it [testing, property-based, fast-check, conventions, app-test, multi-spec] -> `chipAgent/_inbox/gotcha-property-tag-feature-slug-is-hardcoded-to-hdl-creation-loop.md`
 - candidate: readiness-slice ran BEFORE the hardening commits were dated - prove code version by schemaVersion 9 fields, not by git dates [eval, measurement, provenance, integrity, git, readiness-slice] -> `chipAgent/_inbox/gotcha-readiness-slice-predates-commit-dates-prove-by-schema.md`
+- candidate: Renaming a sweep campaign moves its config-identity hash - runName and outputDir ARE identity-bearing, and only captureArtifacts is excluded [eval, sweep, config-identity, resume, campaign-comparison, gotcha] -> `chipAgent/_inbox/gotcha-renaming-a-sweep-campaign-moves-its-config-identity-hash.md`
 - candidate: repairProvenanceOf's missing defensive fallback surfaced at a NEW call site (mergeRepairProvenance) - fixed at the reader, not the caller [hdl, verification, eval, testing, silent-failure, repair-loop, app-eval] -> `chipAgent/_inbox/gotcha-repairprovenanceof-defensive-fallback-added-task-1-5.md`
 - candidate: repairProvenanceOf throws on stale runner.test.ts fixtures - it never got the defensive-fallback fix captureSampleArtifacts already got [hdl, verification, eval, testing, silent-failure, repair-loop, app-eval] -> `chipAgent/_inbox/gotcha-repairprovenanceof-throws-on-stale-runner-test-fixtures-lacking-defensive-fallback.md`
 - candidate: SandboxResult collapses timeout/infra/missing-output into one 'error' verdict [tools, sandbox, eda-adapter, error-handling] -> `chipAgent/_inbox/gotcha-sandbox-result-collapses-error-causes.md`
@@ -65,6 +67,7 @@ Notes catalogued: 102.
 - candidate: A stale "wired in task 6.4" comment outlived its own task and hid four terminal outcomes hardcoding repairProvenance to NO_REPAIR [verification-loop, repair-loop, accounting, stale-comment, regression, checkpoint-gap] -> `chipAgent/_inbox/gotcha-stale-wired-in-task-comment-hid-repairprovenance-hardcoded-no-repair.md`
 - candidate: tbslice-v1 measured - the Testbench_Agent is the bottleneck, 1 of 12 testbenches passes its reference design -> `chipAgent/_inbox/gotcha-tbslice-v1-testbench-generator-is-the-bottleneck-1-of-12.md`
 - candidate: The testbench repair loop measured 2 of 259 - the cause is two MECHANICAL dialect classes plus two accounting defects, not weak repair feedback (counts CORRECTED to 29 / 7 / 4 of 45; three comment-adjacency defects conf… -> `chipAgent/_inbox/gotcha-testbench-repair-near-zero-is-two-mechanical-dialect-classes-not-a-feedback-problem.md`
+- candidate: The '#' guard in sized-literal.ts declines on the right side, but for a reason iverilog does NOT confirm - and the signed marker it dropped was a real meaning change [gotcha, dialect-normalizer, sized-literal, iverilog, measured, decline-reporting, signedness, app-agent] -> `chipAgent/_inbox/gotcha-the-hash-guard-in-sized-literal-declines-correctly-for-a-reason-its-comment-got-wrong.md`
 - candidate: Three Testbench_Agent defect classes that fail the reference design - precomputed literals, assumed timing, and an unjustified known-answer block -> `chipAgent/_inbox/gotcha-three-testbench-defect-classes-that-fail-the-reference-design.md`
 - candidate: A test that a date parser refuses a zone-less date is vacuous on half the world's machines [testing, non-vacuous, timezone, date-parsing, untrusted-input, model-router, retry-after] -> `chipAgent/_inbox/gotcha-timezone-guard-test-is-vacuous-on-half-the-machines.md`
 - candidate: tsc -b app/test is package-wide and fails on unrelated in-progress sibling test files [typescript, testing, monorepo, parallel-waves, verification] -> `chipAgent/_inbox/gotcha-tsc-b-app-test-fails-on-incomplete-siblings.md`
@@ -125,13 +128,14 @@ Notes catalogued: 102.
 - candidate: Real-oracle integration tests - shared skip harness + dual real/fake trajectory [integration-tests, oracle, iverilog, skip, non-vacuous, verification-loop, test-harness] -> `chipAgent/_inbox/real-oracle-integration-dual-trajectory-pattern.md`
 - candidate: Shared property-based test harness conventions (fast-check + Hypothesis) [testing, property-based, fast-check, hypothesis, conventions] -> `chipAgent/_inbox/shared-pbt-harness-conventions.md`
 
-## Verification recipes - how to independently test a class of design (7)
+## Verification recipes - how to independently test a class of design (8)
 
 - candidate: Tool_Runner sandbox - fixed isolation constant + capture-all-or-error delegating to core verdict [sandbox, gvisor, security, tool-runner, verdict, seam, ajv] -> `chipAgent/_inbox/sandbox-isolation-and-capture-all-or-error-recipe.md`
 - candidate: Re-pinning a config-identity hash must observe live, every time - a prior sub-agent's reported value goes stale the moment another identity-moving task lands on top of it [config-identity, hash-pin, verification-recipe, sweep, resume-safety] -> `chipAgent/_inbox/verification-recipe-config-hash-repin-must-reobserve-live-never-reuse-a-prior-reports-number.md`
 - candidate: The intra-block declaration MOVE lifts unnamed-begin from 0 of 29 to 25 of 29 - position, not the label, is the discriminator [verification-recipe, dialect-normalizer, iverilog, verilog, declaration-move, fixtures, unnamed-begin] -> `chipAgent/_inbox/verification-recipe-declaration-move-lifts-unnamed-begin-from-0-to-25-of-29.md`
 - candidate: Dialect fixtures verified by compiling each ALONE through SimulatorAdapter - pins 0/29, 3/7, 0/4 [verification, verification-recipe, dialect-normalizer, integration-tests, iverilog, fixtures, parse-level, check-signalling] -> `chipAgent/_inbox/verification-recipe-dialect-fixtures-parse-alone-through-simulatoradapter-pins-0-of-29.md`
 - candidate: PrecheckDiagnostic verified against the actual campaign artifact - names line 66, not the line-72 iverilog cascade [verification-loop, precheck, diagnostic, iverilog, verification-recipe, evidence] -> `chipAgent/_inbox/verification-recipe-precheck-diagnostic-fixes-the-line-66-vs-72-cascade-against-real-artifact.md`
+- candidate: Property-testing a meaning-preserving transform that MOVES text - multiset plus statement-order, with no parser [verification, verification-recipe, property-based, fast-check, dialect-normalizer, non-vacuity, structured-generator, app-test, tokenizer] -> `chipAgent/_inbox/verification-recipe-property-testing-a-transform-that-moves-text-not-just-inserts.md`
 - candidate: testbench-dialect-normalization checkpoint 2 - RC-1 and RC-2 (repair accounting) fixed and gate-clean at 1710/6/0 [eval, repair-loop, verification-recipe, accounting, testbench-repair-loop, checkpoint] -> `chipAgent/_inbox/verification-recipe-testbench-dialect-normalization-checkpoint-2-accounting-fixed.md`
 - candidate: testbench-repair-loop spec cleared its final gate at 1709 passed / 6 skipped / 0 failed, build clean [hdl, verification, eval, repair-loop, gate, milestone] -> `chipAgent/_inbox/verification-recipe-testbench-repair-loop-final-gate-clean-at-1709.md`
 

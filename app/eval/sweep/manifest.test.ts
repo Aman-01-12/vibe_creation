@@ -108,8 +108,19 @@ import { assembleManifest, finalizeManifest, type ManifestFacts } from './manife
  *     misread as a declared name. A sample normalized under version 2 therefore carries a
  *     materially different transform than one normalized under version 3, so their samples
  *     must never pool - the identical reason recorded for every prior move above.
+ *   - when `NORMALIZER_VERSION` went 3 -> 4 (testbench-dialect-normalization group 16).
+ *     That ONE constant moved and nothing else in the identity did. The set of rewrites
+ *     changed on one narrow axis: the sized-literal rule now PRESERVES the signed-base
+ *     marker it previously captured and dropped, so `16'sd-1` normalizes to `(-16'sd1)`
+ *     where version 3 emitted `(-16'd1)`. Measured under `vvp`, `(-16'sd1) < 0` is 1 while
+ *     `(-16'd1) < 0` is 0 and reads as 65535, so a version-3 run could have flipped a
+ *     signed check's verdict, and a sample carrying an `s` form is not poolable across the
+ *     boundary. Two reporting-only changes ride the same bump: a `#`-preceded literal's
+ *     decline is now REPORTED (version 3 declined it silently, undercounting the class)
+ *     under a new `rewrite-context-not-established` cause, and that guard's doc comment was
+ *     corrected against a re-measurement of `iverilog -g2012` with its behaviour unchanged.
  */
-const SMOKE_RUN_CONFIG_HASH = 'f7a172ae94c67954';
+const SMOKE_RUN_CONFIG_HASH = '966bf684a2ddcb65';
 
 /**
  * The config hash the committed campaign-readiness slice config currently produces.
@@ -164,8 +175,17 @@ const SMOKE_RUN_CONFIG_HASH = 'f7a172ae94c67954';
  *     Testbench_Agent, and the normalizer runs on every testbench it produces, so pooling
  *     across a change of that size would average the instrument under one transform with
  *     the instrument under another.
+ *   - when `NORMALIZER_VERSION` went 3 -> 4 (testbench-dialect-normalization group 16) -
+ *     the identical reason recorded in `SMOKE_RUN_CONFIG_HASH`'s history above. That ONE
+ *     constant moved and nothing else in the identity did: the sized-literal rule now
+ *     PRESERVES the signed-base marker it used to drop, so `16'sd-1` normalizes to
+ *     `(-16'sd1)` rather than to the unsigned `(-16'd1)` a `vvp` run showed compares
+ *     against zero the other way. This slice exists to measure the Testbench_Agent, and the
+ *     normalizer runs on every testbench it produces, so pooling across a change that can
+ *     flip a signed comparison would average the instrument under one transform with the
+ *     instrument under another.
  */
-const TBSLICE_RUN_CONFIG_HASH = 'fa9ec5a014b07e0f';
+const TBSLICE_RUN_CONFIG_HASH = 'cd12d948960492ce';
 
 /** Lowercase hex SHA-256, the digest the CLI injects. */
 function sha256Hex(text: string): string {
@@ -459,6 +479,12 @@ describe('the config identity that scopes a resume', () => {
     // These guards STACK rather than replace - every superseded value stays a test failure,
     // so a bump that failed to reach the identity can never read as a silent pass.
     expect(SMOKE_RUN_CONFIG_HASH).not.toBe('832f0bff098e4469');
+    // And once more: `f7a172ae94c67954` is the hash under NORMALIZER_VERSION 3. This one also
+    // guards a specific way to get the 3 -> 4 re-pin wrong - vitest resolves `@app/agent`
+    // through `dist/`, so a source-only bump is invisible until `tsc -b` rebuilds, and a pin
+    // taken from that run would write this value back (see
+    // `chipAgent/_inbox/gotcha-a-build-constant-bump-is-invisible-to-vitest-until-tsc-b-rebuilds-dist.md`).
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('f7a172ae94c67954');
   });
 
   it('still matches the committed campaign-readiness slice config, so its recorded samples stay resumable', async () => {
@@ -494,6 +520,10 @@ describe('the config identity that scopes a resume', () => {
     // These guards STACK rather than replace - every superseded value stays a test failure,
     // so a bump that failed to reach the identity can never read as a silent pass.
     expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('7ae7c413d6a8b221');
+    // And once more: `fa9ec5a014b07e0f` is the hash under NORMALIZER_VERSION 3, which is also
+    // the value a pin taken before `tsc -b` rebuilt `dist/` would have written back, since
+    // vitest resolves `@app/agent` through the compiled output rather than the source.
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('fa9ec5a014b07e0f');
   });
 });
 

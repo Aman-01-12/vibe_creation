@@ -382,6 +382,7 @@ export type DialectDeclineCause =
   | 'would-shadow-module-scope' //  Req 5.4
   | 'unbalanced-block' //  `begin` with no matching `end` inside the scanned region
   | 'declaration-not-relocatable' //  `genvar`: rejected as a block item at ANY position
+  | 'rewrite-context-not-established' //  `#8'd-1`: the VALUE is plain, the ADJACENCY is not cleared
   | 'reported-only'; //  prose-as-statement: detected by contract, never rewritten
 
 /** What the transform did to one source, under which version (Req 4.14). */
@@ -414,6 +415,18 @@ export interface NormalizerOutcome {
  */
 export function normalizeDialect(source: string): NormalizerOutcome;
 ```
+
+**Why `rewrite-context-not-established` is a separate cause and cannot be collapsed into `value-not-determinable`.**
+The two answer different questions, and collapsing them would make the report say something false.
+`value-not-determinable` is a claim about the SITE'S OWN TEXT: `9'di` carries no intended value, so no rewrite exists to perform at all.
+A `#`-preceded `8'd-1` carries an entirely plain value - it is `-1` - and what the rule has not established is that emitting the parenthesized form is safe in THAT ADJACENCY.
+Filing the second under the first would report "we could not tell what this meant" about a literal whose meaning is unambiguous, and the per-reason decline counts Requirements 1 through 3 exist to make trustworthy would then mis-attribute why the transform stood down.
+The name is "not established" rather than "would create an ambiguity" because the hazard is what this transform has not cleared, not a property the toolchain was measured to have; Component 4's measurement table is what settles that, and it does NOT support an ambiguity claim.
+
+**Every decline rides an edit, because a decline that returns nothing is not counted.**
+A `DialectFinding` is only ever produced by a returned `SpanEdit`, so a rule that returns `null` for a site it recognised and chose not to rewrite declines SILENTLY and the per-class decline count undercounts - structurally the same accounting defect Requirements 1 through 3 remove one layer up.
+A recognised-but-declined site therefore rides a ZERO-WIDTH `SpanEdit` with an empty replacement, which leaves the source byte-identical while still reaching the report, and `null` means strictly "this is not a site".
+The two are not interchangeable, because only one of them is counted.
 
 **What this deliberately does not understand, and what it does about it.**
 
@@ -540,17 +553,47 @@ The rule reads only code spans, and only literals whose base is a decimal base (
 | --- | --- | --- |
 | `16'd(-15)` | `(-16'd15)` | the parenthesized sign is the measured form; the size `16` and the magnitude `15` are copied character for character |
 | `8'd-1` | `(-8'd1)` | same rewrite, unparenthesized input form |
+| `16'sd-1` | `(-16'sd1)` | the signed-base marker is part of the copied text, not an incidental capture; see below |
 | `9'di` | unchanged, reported | `i` is not a digit in any base, and `x`/`z` ARE legal digits, so "not a digit" is a decidable test and "what the model meant" is not in the text |
 | `{1'b0, 64{1'b1}}` | unchanged, reported | see below |
+| `#8'd-1` | unchanged, reported | declined under `rewrite-context-not-established`, and counted; see the `#` guard below |
 
 `(-W'dV)` denotes the W-bit two's-complement negation of V under the toolchain's numeric semantics, which is exactly what the malformed forms were reaching for, and the width is preserved because the size token `W` is copied, not recomputed.
 Value preservation is therefore textual: `W` and `V` appear in the output as the identical character runs they were in the input, and the only added characters are `(`, `-`, `)`.
 
+**The signed-base marker is preserved, and dropping it was a meaning change rather than a cosmetic one.**
+The size-prefix pattern is `<size> ' [sS]? [dD]`, and the optional `[sS]` run is RE-EMITTED, not merely matched: `16'sd-1` becomes `(-16'sd1)`, not `(-16'd1)`.
+Measured under `vvp`, `(-16'sd1) < 0` is 1 and `$signed(-16'sd1)` prints -1, while `(-16'd1) < 0` is 0 and the value reads as 65535.
+A signed literal silently becoming unsigned can therefore flip a check's verdict, which is exactly the failure mode a transform on the measuring instrument must not have, so this is a Requirement 5.6 violation and not a formatting detail.
+The captured run is re-emitted VERBATIM rather than canonicalised: all four spellings of `[sS][dD]` were measured legal and measured signed, so verbatim is safe and is the only spelling that preserves the input's character runs.
+The marker is copied, never invented - `16'd-1` still becomes `(-16'd1)` with no `s`.
+
 **Why the output is parenthesized rather than the bare `-16'd15` the calibration table recorded.**
 A bare unary minus binds tighter than every operator except `**`, so `8'd-1 ** 2` would rewrite to `-8'd1 ** 2`, which parses as `-(8'd1 ** 2)` and is a different value from the `(8'hFF) ** 2` the input meant.
 Parentheses are legal wherever a primary is legal - in a range, in a concatenation, as a case item, as a port connection, as a parameter default - so the parenthesized form is accepted everywhere the original token sequence could have appeared, and it is precedence-proof.
-The one context where parentheses are NOT interchangeable is immediately after `#`, where `#(...)` is ambiguous with a parameter override, so the rule DECLINES when the preceding non-whitespace code character is `#`.
-That single guard removes the only known hazard the parenthesized form introduces, which is why parentheses are the cheaper of the two risks.
+The one context the rule declines in is immediately after `#`, so the guard removes the only hazard the parenthesized form was thought to introduce, which is why parentheses are the cheaper of the two risks.
+
+**The `#` guard declines where a rewrite would CREATE `#(`, which is not the same rule as "inside a parameter override" - and the original rationale did not survive measurement.**
+The preceding-code-character read happens at the LITERAL'S start, so the guard fires on `#8'd-1`, where the rewrite's output `#(-8'd1)` would create a `#(` the input did not have, and does NOT fire on `dut #(8'd-1) u0();`, where `#(` is already present and the rewrite only nests a paren inside it.
+An earlier version of this section described the guard as declining because `#(...)` is ambiguous with a parameter override.
+`iverilog -g2012` (Icarus 13.0) does not exhibit that, and the re-measurement is recorded here rather than left as an assumption - each case compiled ALONE, and run under `vvp` wherever meaning rather than syntax was the question:
+
+| source | context | verdict |
+| --- | --- | --- |
+| `#8'd-1 acc = 1;` | delay | REJECTED (`Syntax in assignment statement l-value`) |
+| `#(-8'd1) acc = 1;` | delay | compiles; DELAYS, simulation time 0 -> 255. NOT read as an override |
+| `#(8'd-1) acc = 1;` | delay | REJECTED |
+| `dut #(8'd-1) u0();` | override | REJECTED (`Syntax error in parameter value assignment list`) |
+| `dut #((-8'd1)) u0();` | override | compiles; parameter receives -1 |
+| `dut #(-8'd1) u0();` | override | compiles; parameter receives -1 - IDENTICAL to the rewritten form |
+| `dut #8'd1 u0();` | instantiation | REJECTED - no legal bare `#<sized literal>` instantiation form |
+| `and #8'd1 g0(y,a,b);` | gate delay | REJECTED - nor a legal bare gate delay |
+
+So an override only follows a module name, which makes `#(` after a statement boundary unambiguously a delay control, and there is no legal bare `#<sized literal>` in ANY position - so the input the guard declines never compiles today and no working meaning can be flipped by rewriting it.
+The guard's BEHAVIOUR is retained anyway, on the conservative side of what is now a measured-but-undecided question: removing it would change the SET OF REWRITES, which is its own Normalizer_Version decision with its own config-hash consequence, and it is recorded in the rejected-alternatives table as MEASURED BUT NOT DECIDED rather than as rejected.
+What did change is that the decline is now REPORTED, under `rewrite-context-not-established` rather than under a cause that would claim the value was undeterminable when it is `-1` in the plainest possible text.
+The guard's non-firing side was already right and repairs rather than disturbs: `dut #(8'd-1) u0();` is rejected today, and the rewritten `dut #((-8'd1)) u0();` compiles and delivers the same -1 the hand-written `dut #(-8'd1) u0();` does, because the extra paren nests inside an override that was already there rather than creating one.
+The generalizable rule this adds: when a guard's comment and its code disagree, MEASURE before believing either - here the code was on the defensible side and the comment named a mechanism the toolchain does not exhibit, so the resolution was documentation plus reporting rather than the behaviour change the comment seemed to invite.
 
 **`{1'b0, 64{1'b1}}` is out of scope for rewriting, and that is a decision, not an omission.**
 Both literals in it are well-formed; the defect is a missing `{` around the replication.
@@ -1213,9 +1256,14 @@ Hoisting a declaration OUT of its block stays forbidden, because it widens scope
 
 ### Property 8: A rewrite the transform cannot establish is declined and reported, never attempted
 
-*For any* source text - including one with an unterminated block comment, an unterminated string literal, an unbalanced `begin`, a base followed by a non-digit, a decimal number followed by `{`, a block whose declaration would shadow a module-scope name, a block whose only block-item declaration is a `genvar`, or a literal immediately preceded by `#` - the transform returns without throwing, the returned source is byte-identical to the input at every site it declined, and every declined site appears in the report under its `DialectClass` with a `declinedBecause` cause.
+*For any* source text - including one with an unterminated block comment, an unterminated string literal, an unbalanced `begin`, a base followed by a non-digit, a decimal number followed by `{`, a block whose declaration would shadow a module-scope name, a block whose only block-item declaration is a `genvar`, or a literal immediately preceded by `#` - the transform returns without throwing, the returned source is byte-identical to the input at every site it declined, and every declined site appears in the report under its `DialectClass` with a `declinedBecause` cause that names the actual reason the transform stood down.
 
 **Validates: Requirements 4.11, 4.13, 4.14, 5.4, 5.7, 5.12, 9.8, 9.11**
+
+The statement is unchanged in substance and was not weakened; what changed is that the code now satisfies it.
+This property went RED against shipped code on its `#`-preceded row, because that branch declined by returning nothing and produced no finding at all, so the "appears in the report" half failed outright - and that single red row surfaced three defects in the sized-literal rule, two of which no fixture in the Dialect_Fixture suite could have reached (no committed fixture carries the malformed signed-negative shape, and a silent decline produces no output difference to assert on).
+The `#`-preceded row now demands the STRICTER, true cause: `rewrite-context-not-established`, never a cause claiming the value was undeterminable, because at that site the value is `-1` in the plainest possible text.
+This is the clearest case in the spec for writing the optional property tests rather than skipping them.
 
 ### Property 9: The transform is model-free, RTL-blind, and side-effect-free
 
@@ -1353,6 +1401,7 @@ Requirements 10.1 through 10.4 are the existing tooling gate.
 | **Keep the label alone, which is what shipped** | Measured at 0 of 29 fixtures fixed. The rule fires on 25 of 29 and the first `syntax error` lands on the identical line before and after, because the label was never the discriminator - position is. Retained ALONGSIDE the move for IEEE 1364 conformance only. |
 | **Drop the label and move only** | Genuinely competitive: it fixes the same 25 of 29, with zero disagreement fixture by fixture, so the oracle cannot tell the two apart. Rejected on IEEE 1364 conformance alone - the standard requires a named block for block-item declarations and iverilog is merely lenient - and that conformance argument is stated as the label's ONLY remaining justification rather than dressed up as an acceptance gain. |
 | **Emit the bare `-16'd15` the calibration table records** | Correct in the calibrated context and wrong under `**`, where a bare unary minus would rebind `8'd-1 ** 2` to `-(8'd1 ** 2)`. The parenthesized form is precedence-proof and legal in every context a primary is legal; its one hazard, `#(...)`, is removed by a single guard. |
+| **Remove the `#` guard, since every input it declines is already rejected by the toolchain** | **MEASURED BUT NOT DECIDED - recorded here as an open question, not as a rejected one.** The guard's stated rationale does not survive measurement: Component 4's table shows `#(-8'd1) acc = 1;` compiles and DELAYS rather than being read as an override, and there is no legal bare `#<sized literal>` in ANY position, so the declined input never compiles today and no working meaning can be flipped by rewriting it. Removing the guard would nonetheless change the SET OF REWRITES, which is its own Normalizer_Version decision with its own config-hash consequence, so the behaviour was LEFT UNCHANGED on the conservative side and only the comment and the reporting moved. Note the semantics if it is ever removed: `#(-8'd1)` delays **255**, not 1 and not -1, because `-8'd1` is an 8-bit UNSIGNED negation; the same bit pattern reads as -1 in an override only because the receiving parameter is declared `signed`. The interpretation is the receiving context's, not the transform's, which is what makes textual preservation the consistent answer in both positions and what a future decision here has to weigh. |
 | **Rewrite `{1'b0, 64{1'b1}}`** | The intended value is not in the text: `{64{1'b1}}` and a concatenation of `64` with `{1'b1}` are both readable from it. Requirement 5.7 requires a decline, and a guessed replication width would be the manufactured evidence this instrument exists to prevent. |
 | **Synthesize a `$display` for a Prose_As_Statement** | It would fabricate a check the model never wrote, and print `PASS` from prose. The whole asymmetry of this spec is that the normalizer may desugar what the model meant and may never invent what the model failed to write. |
 | **Normalize the candidate RTL too** | Rejected by three of five council reviewers, and correctly: rewriting the artifact under test would break the oracle, because a verdict would then be about a source neither the model nor the reader wrote. |
@@ -1379,7 +1428,8 @@ Every new failure path degrades to the behaviour that existed before this spec, 
 | a block-local name is referenced from outside the block and module scope does not declare it | the output fails to elaborate; the precheck reports `testbench-build-failed` | identical to the pre-transform outcome, so no pass is manufactured and nothing is misattributed |
 | a literal's base is followed by a non-digit (`9'di`) | declined with `value-not-determinable`, reported under `malformed-sized-literal` | the intended value is not in the text, and `x`/`z` being legal digits is what makes "not a digit" decidable |
 | a decimal number is followed by `{` | declined and reported, never rewritten | two readings exist; a guess would fabricate a width |
-| a rewritable literal is immediately preceded by `#` | declined | `#(...)` is ambiguous with a parameter override, the one context the parenthesized form is not interchangeable in |
+| a rewritable literal is immediately preceded by `#` | declined with `rewrite-context-not-established`, reported under `malformed-sized-literal`, and COUNTED - the decline rides a zero-width edit rather than returning nothing | the value is plain (`-1`); what is not established is that the parenthesized form is safe in that adjacency. The original "ambiguous with a parameter override" rationale did not survive re-measurement (Component 4's table), so the guard is retained as MEASURED BUT NOT DECIDED and the cause names the adjacency rather than claiming the value was unreadable |
+| a signed-base literal (`16'sd-1`) is rewritten | the `[sS]` run is re-emitted verbatim, so the output is `(-16'sd1)` | measured under `vvp`, `(-16'sd1) < 0` is 1 while `(-16'd1) < 0` is 0 and reads as 65535, so dropping the marker can flip a check's verdict - a meaning change, not a formatting one |
 | a Prose_As_Statement is present | reported, never rewritten | synthesizing the check would fabricate evidence |
 | `normalizeDialect` is handed any input at all | returns; it has no throw path | a transform that can throw can end a campaign with hours invested in it, and would do so at the one seam every sample passes through |
 | the Precheck_Diagnostic finds no line naming the testbench | `firstError: null`, `sourceLine: null`, and `noDiagnosticCaptured` set when the outcome was build-failed with nothing captured | an empty diagnostic is indistinguishable from an unrun precheck, which Requirement 6.5 forbids |
@@ -1413,7 +1463,7 @@ Non-vacuity, because several of these properties pass trivially under a weak gen
 - Property 1's arbitrary MUST plant `begin`, `end`, `integer i;`, and a full `CHECK name PASS;` INSIDE a line comment, inside a block comment, and inside a `$display` string in the same source. This is also the example-based test the requirement implies directly: the normalizer must not touch `begin`/`end`/declaration-looking text inside comments and strings, and the property must hold even when the input LOOKS like the thing being forbidden, because the forbidding is structural rather than textual.
 - Property 6's arbitrary MUST include sources already containing `tbnorm_blk_1`, `tbnorm_blk_2`, and `tbnorm_blk_1` inside a comment, or "collides with nothing" is never exercised against a real collision.
 - Property 7's arbitrary MUST generate widths and magnitudes that are not round numbers, plus the four measured forms verbatim (`16'd(-15)`, `8'd-1`, `9'di`, `{1'b0, 64{1'b1}}`).
-- Property 8 MUST generate at least one case through EACH of the eight declined causes in one run's worth of cases, the eighth being a block whose only block-item declaration is a `genvar`.
+- Property 8 MUST generate at least one case through EACH of the eight declined CASES in one run's worth of cases (eight cases across six causes: an unterminated block comment, an unterminated string literal, an unbalanced `begin`, a base followed by a non-digit, a decimal number followed by `{`, a would-shadow declaration, a `genvar`-only block, and a `#`-preceded literal). The `#`-preceded row is not padding: it is the row that went red against shipped code and surfaced three defects, and it demands `rewrite-context-not-established` specifically rather than any cause that would claim the value was undeterminable.
 - Property 12 MUST generate all six generator replies, or the branch-to-reason mapping is asserted only over the branches that happen to be sampled.
 - Property 15's arbitrary MUST produce streams where a cascade line PRECEDES no syntax error and where it FOLLOWS one, and must include the measured shape (a `syntax error` at line 66 and a `Malformed statement` at line 72), or "never a cascade when an earlier syntax error exists" is never tested against the defect it was written for.
 - Property 18 MUST generate control stdout that reports a SUBSET of the pre-normalization names, not only the full set or the empty set.
@@ -1479,8 +1529,9 @@ The upgrade path is the count assertion the suite also carries: the number of fi
 ### Regression pins
 
 - `SMOKE_RUN_CONFIG_HASH` and `TBSLICE_RUN_CONFIG_HASH` updated to the values the changed identity produces, READ FROM THE OBSERVED RUN, each with the reason appended to its history comment, and each asserted to differ from the value it held before this spec (Req 8.6).
-  Three re-pins, not one: `NORMALIZER_VERSION` arriving, then 1 -> 2 for the comment-as-whitespace fix, then 2 -> 3 for the declaration move.
+  Four re-pins, not one: `NORMALIZER_VERSION` arriving, then 1 -> 2 for the comment-as-whitespace fix, then 2 -> 3 for the declaration move, then 3 -> 4 for the signed-base marker.
   Each set of values is read from its own observed failure, because the values move on every intervening change and a number quoted from a prior report is already stale.
+  The 3 -> 4 re-pin moved no fixture pin: 25 of 29, 3 of 7, and 0 of 4 all held, because while the fixtures do contain `s` forms, none of them is in the malformed signed-negative shape the marker fix touches - which are two different claims, and only the second is true.
 - The per-class fixed counts in the Dialect_Fixture suite: pinned at 0 of 29, 3 of 7, and 0 of 4 for one task cycle, and re-pinned from the observed run once the declaration move landed, to the MEASURED 25 of 29, 3 of 7, and 0 of 4 - 28 of 40 fixtures.
 - The existing passing/skipped gate holds at no fewer passing tests than measured immediately before this spec's changes began, with the retirement's deletions and the fixture suite's additions both recorded in the task that closes the gate (Req 10.4).
 - `npx tsc -b`, `npx eslint app scripts --max-warnings=0`, `npx prettier --check .`, `npx vitest run` (Req 10.1-10.3, 10.5).
@@ -1544,11 +1595,11 @@ All 112 acceptance criteria are traced, the two most recent being Requirement 5.
 | 4.7 | 2 (referential transparency) | Property 3 |
 | 4.8 | 3, 4 (each rule's site predicate is falsified by its own rewrite) | Property 4 |
 | 4.9 | 3 (`planUnnamedBeginLabels`, the label plus the intra-block move) | Properties 6, 27 |
-| 4.10 | 4 (`planSizedLiteralRewrites`) | Property 7 |
-| 4.11 | 4 (`value-not-determinable`) | Property 8 |
+| 4.10 | 4 (`planSizedLiteralRewrites`, width, magnitude, and the signed-base marker all copied verbatim) | Property 7 |
+| 4.11 | 4 (`value-not-determinable` for the site's own text, `rewrite-context-not-established` for an uncleared adjacency) | Property 8 |
 | 4.12 | 2 (only two rules produce edits) | Properties 1, 2, 26 |
 | 4.13 | 5 (detector cannot produce a `SpanEdit`) | Properties 8, 17 |
-| 4.14 | 2 (`NormalizerReport`, findings per class and action) | Property 8 |
+| 4.14 | 2 (`NormalizerReport`, findings per class and action; every decline rides a zero-width edit so none is silent) | Property 8 |
 | 4.15 | 2 (module location), 1 (the scanner reached through `@app/tools`) | Property 24 |
 | 4.16 | 2 (not referenced from any repair-trigger path) | call-site example |
 | 4.17 | 9 (one `Testbench` value, built from the normalized source) | Property 10 |
@@ -1564,8 +1615,8 @@ All 112 acceptance criteria are traced, the two most recent being Requirement 5.
 | 5.3 | 1 (offset-preserving mask), 2 (right-to-left splice of reported spans) | Properties 1, 2, 26 |
 | 5.4 | 3 (`would-shadow-module-scope`) | Property 8 |
 | 5.5 | 3 (the identifier-superset non-collision scheme) | Property 6 |
-| 5.6 | 4 (size and magnitude copied character for character) | Property 7 |
-| 5.7 | 2 (decline is a first-class action; never throws) | Property 8 |
+| 5.6 | 4 (size, magnitude, AND the signed-base marker copied character for character - the marker is what makes the output denote the same value, since `(-16'sd1)` and `(-16'd1)` compare against zero the other way) | Property 7, the known-answer signedness cases |
+| 5.7 | 2 (decline is a first-class action, carried on a zero-width edit so it is reported rather than silent; never throws) | Property 8 |
 | 5.8 | 10 (`checkNameVisibilitySignalOf`), 9 (`preNormalizationCheckNames`) | Property 18 |
 | 5.9 | 15 (reported separately from `validNoRepair` / `validAfterRepair`) | Property 23 |
 | 5.10 | 13 (`checkNameVisibilitySignal` field) | Property 18, round-trip example |
