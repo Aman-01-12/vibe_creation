@@ -74,6 +74,7 @@ const MEASURED: SampleResult = {
   instrumentVerdict: { validity: 'unchecked', reason: 'no-testbench' },
   mutationProbe: null,
   repairProvenance: NO_REPAIR,
+  checkNameVisibilitySignal: false,
 };
 
 /** A `setup-failed` outcome whose coverage-gap fields are supplied by the caller. */

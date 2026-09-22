@@ -16,6 +16,17 @@
 //     pre-repair-testbench.v the testbench source a Testbench_Repair replaced (HEAD kept
 //                            when long); present only when a repair was accepted, and
 //                            distinct from both `testbench.v` and `rejected-testbench.v`
+//     pre-normalization-testbench.v
+//                            the testbench source the Dialect_Normalizer changed (HEAD
+//                            kept when long); present only when the transform changed
+//                            this sample's testbench, and distinct from every other
+//                            testbench-shaped file above
+//     normalizer-report.json what the Dialect_Normalizer did to this sample's testbench:
+//                            which rules fired, which sites were rewritten or declined
+//     precheck-diagnostic.txt
+//                            the shaped Precheck_Diagnostic for a `testbench-build-failed`
+//                            precheck outcome: the first real error and the source line
+//                            it names, never the toolchain's raw cascade
 //     simulator-stdout.txt   the oracle run's stdout (TAIL kept when long)
 //     simulator-stderr.txt   the oracle run's stderr (TAIL kept when long)
 //     control-stdout.txt     the POSITIVE CONTROL's stdout: our testbench versus the
@@ -27,9 +38,6 @@
 //   design's samples sit together, then by sample index. A file that is ABSENT was never
 //   produced (a `blocked` or `setup-failed` sample has no RTL and no testbench); absence
 //   is the record, and `outcome.json` names exactly which files exist.
-//
-//   `precheck-stderr.txt` is a RESERVED filename, not yet written by anything: see the
-//   comment on `ARTIFACT_FILENAMES.precheckStderr` below.
 //
 //   The control's files sit deliberately BESIDE `testbench.v`: when the instrument is
 //   invalid, the evidence for that finding and the testbench that caused it are in the same
@@ -51,6 +59,7 @@
 // Pure: no clock, no I/O, no randomness.
 
 import type { BudgetStopReason } from '@app/core';
+import type { NormalizerReport, RepairDeclineReason } from '@app/agent';
 import type { RunFailureCause } from '@app/tools';
 
 import type {
@@ -121,8 +130,21 @@ export const ARTIFACTS_DIRNAME = 'artifacts';
  * Testbench_Repair capability did not exist when it was written, so there is no honest default -
  * the same "two new fields, not a redefinition" character as the v10 -> v11 results bump, not a
  * redefinition of a field that already existed.
+ *
+ * v8 -> v9: the document now carries `normalizerReport`, `precheckDiagnostic`,
+ * `repairDeclineReason`, and `checkNameVisibilitySignal`, mirroring what the results record
+ * gained in the v11 -> v12 bump of `RESULTS_SCHEMA_VERSION`. Two new sibling artifact files
+ * join `pre-repair-testbench.v`: `pre-normalization-testbench.v`, written when the
+ * Dialect_Normalizer changed this sample's testbench, and `precheck-diagnostic.txt`, written
+ * for a `testbench-build-failed` precheck outcome - which FINALLY populates the
+ * `precheckStderr` slot this comment reserved but never wrote to, under a new name, because
+ * the file now holds a shaped diagnostic rather than raw stderr and keeping the old name would
+ * make a reader expect the cascade `PrecheckDiagnostic` exists to stop reporting. A v8 document
+ * cannot say whether the testbench it holds was desugared before it was built, because the
+ * Dialect_Normalizer did not exist when it was written, so there is no honest default for its
+ * absence - the same "new fields, not a redefinition" character as the v7 -> v8 bump above.
  */
-export const ARTIFACT_DOCUMENT_SCHEMA_VERSION = 8;
+export const ARTIFACT_DOCUMENT_SCHEMA_VERSION = 9;
 
 /** The filenames one sample's directory may hold. */
 export const ARTIFACT_FILENAMES = Object.freeze({
@@ -141,13 +163,36 @@ export const ARTIFACT_FILENAMES = Object.freeze({
   controlStdout: 'control-stdout.txt',
   controlStderr: 'control-stderr.txt',
   /**
-   * RESERVED, NOT YET POPULATED: the Testbench_Precheck's own simulate call reduces its
-   * result to a bare `PrecheckOutcome` enum (`../../agent/orchestrator/testbench-precheck.js`)
-   * with no stderr passthrough, so nothing in the outcome chain reaching this layer carries a
-   * precheck-specific stderr today. The slot is reserved here for a future task or spec that
-   * threads that diagnostic through; `planArtifactFiles` below plans no file for it yet.
+   * The Testbench source the Dialect_Normalizer changed, before it changed it; never the
+   * accepted `testbench.v`, and distinct from both `rejected-testbench.v` and
+   * `pre-repair-testbench.v` for the identical reason those two are distinct from each
+   * other and from `testbench.v`: each names a DIFFERENT prior draft. Present only when
+   * `outcome.json`'s `normalizerReport.changed` is `true` - a sample the transform left
+   * untouched has no second copy of a source byte-identical to `testbench.v`.
    */
-  precheckStderr: 'precheck-stderr.txt',
+  preNormalizationTestbench: 'pre-normalization-testbench.v',
+  /**
+   * What the Dialect_Normalizer did to this sample's ONE measured Testbench: which rules
+   * fired, which sites were rewritten, and which were declined and why. A structured
+   * sibling to `outcome.json` rather than a field inside it, because a finding list can
+   * carry line numbers for every site the transform touched or considered, which is
+   * per-sample detail the same way the mutation survivor list already is.
+   */
+  normalizerReport: 'normalizer-report.json',
+  /**
+   * The Precheck_Diagnostic for a `testbench-build-failed` precheck outcome, rendered
+   * through `describePrecheckDiagnostic`.
+   *
+   * This is the slot `precheckStderr` reserved without ever writing to: the
+   * Testbench_Precheck's own simulate call used to reduce its result to a bare
+   * `PrecheckOutcome` enum with no stderr passthrough, so nothing in the outcome chain
+   * reaching this layer carried a precheck-specific diagnostic at all. The name changes
+   * with the content: this file holds a SHAPED diagnostic - the first real error and the
+   * source line it names, never the toolchain's raw cascade - and keeping the old
+   * `precheck-stderr.txt` name would make a reader expect exactly the cascade this
+   * diagnostic exists to stop reporting.
+   */
+  precheckDiagnostic: 'precheck-diagnostic.txt',
   outcome: 'outcome.json',
 });
 
@@ -236,12 +281,56 @@ export function planArtifactFiles(artifacts: EvalSampleArtifacts): readonly Arti
     sourcePlan(ARTIFACT_FILENAMES.testbench, artifacts.testbenchSource),
     sourcePlan(ARTIFACT_FILENAMES.rejectedTestbench, artifacts.rejectedTestbenchDraft),
     sourcePlan(ARTIFACT_FILENAMES.preRepairTestbench, artifacts.rejectedPreRepairTestbench),
+    sourcePlan(ARTIFACT_FILENAMES.preNormalizationTestbench, artifacts.preNormalizationTestbench),
+    normalizerReportPlan(artifacts.normalizerReport),
+    diagnosticsPlan(
+      ARTIFACT_FILENAMES.precheckDiagnostic,
+      textCapture(artifacts.precheckDiagnostic),
+    ),
     diagnosticsPlan(ARTIFACT_FILENAMES.simulatorStdout, simulation?.stdout ?? null),
     diagnosticsPlan(ARTIFACT_FILENAMES.simulatorStderr, simulation?.stderr ?? null),
     diagnosticsPlan(ARTIFACT_FILENAMES.controlStdout, artifacts.controlStdout),
     diagnosticsPlan(ARTIFACT_FILENAMES.controlStderr, artifacts.controlStderr),
   ];
   return planned.filter((plan): plan is ArtifactFilePlan => plan !== null);
+}
+
+/**
+ * A bare, already-bounded string as a `CapturedText`, for a value this layer never
+ * truncates further.
+ *
+ * `precheckDiagnostic` is already capped at `ARTIFACT_CAPS.maxPrecheckDiagnosticChars` by
+ * `../artifact-sink.js` before it reaches here, so `truncated` is always `false` and
+ * `originalChars` is the capped length itself - the same "nothing left to cut" reading
+ * `diagnosticsPlan` already gives any value under its cap.
+ */
+function textCapture(value: string | null): CapturedText | null {
+  return value === null
+    ? null
+    : { text: value, truncated: false, originalChars: value.length, keptEnd: 'tail' };
+}
+
+/**
+ * The `normalizer-report.json` file, or `null` when the sample carries no
+ * `NormalizerReport` to write.
+ *
+ * Pretty-printed like `outcome.json`, and never truncated: `EvalSampleArtifacts` already
+ * bounds `findings` at `ARTIFACT_CAPS.maxNormalizerFindings` before this layer sees it, so
+ * there is nothing left here to cut.
+ */
+function normalizerReportPlan(
+  report: EvalSampleArtifacts['normalizerReport'],
+): ArtifactFilePlan | null {
+  if (report === null) {
+    return null;
+  }
+  const contents = `${JSON.stringify(report, null, 2)}\n`;
+  return {
+    filename: ARTIFACT_FILENAMES.normalizerReport,
+    contents,
+    truncated: false,
+    originalChars: contents.length,
+  };
 }
 
 /** A Verilog source file, banner-commented when truncated so it stays valid Verilog. */
@@ -360,6 +449,32 @@ export interface ArtifactDocument {
    * `missingCheckNames` already follows for `rejected-testbench.v`.
    */
   readonly repairHint: string | null;
+  /**
+   * The Precheck_Diagnostic for this sample's `testbench-build-failed` precheck outcome,
+   * rendered through `describePrecheckDiagnostic`, or `null` when the precheck never
+   * failed the build; see `EvalSampleArtifacts.precheckDiagnostic`. Also written to the
+   * sibling `precheck-diagnostic.txt`, embedded here too because the text is small and
+   * bounded, unlike the source files this index deliberately never repeats.
+   */
+  readonly precheckDiagnostic: string | null;
+  /**
+   * WHICH stage declined this sample's repair attempt, or `null` when no attempt was
+   * declined; see `EvalSampleArtifacts.repairDeclineReason`.
+   */
+  readonly repairDeclineReason: RepairDeclineReason | null;
+  /**
+   * Whether the pre-normalization source's required checks are all still visible in the
+   * control's stdout; see `EvalSampleArtifacts.checkNameVisibilitySignal`.
+   */
+  readonly checkNameVisibilitySignal: boolean;
+  /**
+   * What the Dialect_Normalizer did to this sample's ONE measured Testbench, or `null`
+   * when the outcome carries no `NormalizationProvenance` to read it from; see
+   * `EvalSampleArtifacts.normalizerReport`. The pre-normalization SOURCE itself is never
+   * repeated here - it lives only in the sibling `pre-normalization-testbench.v`, the
+   * same convention `missingCheckNames` already follows for `rejected-testbench.v`.
+   */
+  readonly normalizerReport: NormalizerReport | null;
   /** Files written for this sample; a filename ABSENT here was never produced. */
   readonly files: Readonly<Record<string, ArtifactFileNote>>;
 }
@@ -412,6 +527,10 @@ export function artifactDocument(
     repairAttempted: artifacts.repairProvenance.attempted,
     repairAccepted: artifacts.repairProvenance.accepted,
     repairHint: artifacts.repairHint,
+    precheckDiagnostic: artifacts.precheckDiagnostic,
+    repairDeclineReason: artifacts.repairDeclineReason,
+    checkNameVisibilitySignal: artifacts.checkNameVisibilitySignal,
+    normalizerReport: artifacts.normalizerReport,
     files: fileNotes(files),
   };
 }

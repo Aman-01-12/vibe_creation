@@ -41,10 +41,182 @@
 
 import type { ModuleInterface } from '@app/core';
 import { expectedInterfacePorts, type PortSignature } from '../roles/generation/index.js';
-import type { ResourceLimits, SimulatorAdapter, SourceFile } from '@app/tools';
+import {
+  MAX_ATTRIBUTION_LINES,
+  scanSource,
+  sourceLineAt,
+  type ResourceLimits,
+  type SimulatorAdapter,
+  type SourceFile,
+} from '@app/tools';
+import type { DialectClass } from './dialect/normalizer.js';
+import { findProseAsStatements } from './dialect/prose-as-statement.js';
 
 /** The stub module name; distinct from any Spec module so it never clashes with the DUT. */
 const INTERFACE_STUB_MODULE = 'testbench_precheck_stub' as const;
+
+/**
+ * The cap on `PrecheckDiagnostic.firstError` and `DiagnosticSourceLine.text`
+ * (Req 6.6).
+ *
+ * A generated testbench's diagnostic line or source line can be arbitrarily
+ * long; this bound keeps a single reported field's size independent of that,
+ * the same discipline `MAX_ATTRIBUTION_LINES` already applies to line COUNT
+ * rather than line LENGTH.
+ */
+const MAX_DIAGNOSTIC_FIELD_CHARS = 500;
+
+/** `text`, cut to at most `MAX_DIAGNOSTIC_FIELD_CHARS` characters. */
+function capField(text: string): string {
+  return text.length > MAX_DIAGNOSTIC_FIELD_CHARS
+    ? text.slice(0, MAX_DIAGNOSTIC_FIELD_CHARS)
+    : text;
+}
+
+/**
+ * Extracts the final path segment, matching how the toolchain names a file.
+ *
+ * The identical comparison `failure-attribution.ts`'s `attributedFilesIn`
+ * already performs - reimplemented here rather than imported, because that
+ * function is private to its module and this call is a decision about a path
+ * THIS call constructed (`testbench.path`), never a re-derivation from
+ * untrusted diagnostic text (design.md Component 7, "membership, not
+ * extraction").
+ */
+function basename(path: string): string {
+  const lastSlash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return lastSlash === -1 ? path : path.slice(lastSlash + 1);
+}
+
+/** Whether `line` names `path` at a `<basename>:<line>`-shaped source location. */
+function namesFile(line: string, path: string): boolean {
+  return line.includes(`${basename(path)}:`);
+}
+
+/** The source line a diagnostic line names, read only from `contents` at that index. */
+export interface DiagnosticSourceLine {
+  readonly lineNumber: number;
+  /** The line's text, capped at `MAX_DIAGNOSTIC_FIELD_CHARS`. */
+  readonly text: string;
+}
+
+/**
+ * What the Testbench_Precheck can say about a build failure, as a closed shape
+ * (Req 6.1-6.9, 6.11).
+ *
+ * Closed rather than a string so Req 6.11 is a compile-time fact: there is no
+ * field here a reference observation, a diff, or an expected-versus-observed
+ * comparison could occupy, so this diagnostic introduces no class of fact
+ * `testbench-repair-loop` Req 2.4-2.6 forbid.
+ */
+export interface PrecheckDiagnostic {
+  /**
+   * The FIRST `syntax error` line naming the Testbench file, or - when the
+   * captured diagnostics hold no `syntax error` line naming it - the first
+   * line naming it (Req 6.1, 6.4). `null` when no line names the Testbench
+   * file at all, including when nothing was captured.
+   */
+  readonly firstError: string | null;
+  /** The Testbench source line `firstError` names (Req 6.2), or `null`. */
+  readonly sourceLine: DiagnosticSourceLine | null;
+  /**
+   * Dialect_Classes detected in the submitted source, `[]` when none.
+   *
+   * Carried so a `prose-as-statement` source is reported by name (Req 6.9) even
+   * though the toolchain's own message for it is an ordinary syntax error.
+   */
+  readonly dialectClasses: readonly DialectClass[];
+  /**
+   * `true` when the outcome was `testbench-build-failed` and NO diagnostics
+   * were captured (Req 6.5), so a reader can tell "the build failed and said
+   * nothing" from "the precheck never ran" - which an empty string cannot.
+   */
+  readonly noDiagnosticCaptured: boolean;
+}
+
+/** A `PrecheckDiagnostic` for an `undecided` outcome: nothing to report. */
+const NO_DIAGNOSTIC: PrecheckDiagnostic = {
+  firstError: null,
+  sourceLine: null,
+  dialectClasses: [],
+  noDiagnosticCaptured: false,
+};
+
+/**
+ * Select the line `PrecheckDiagnostic.firstError` reports, by MEMBERSHIP over
+ * the captured text rather than extraction (Req 6.1, 6.3, 6.4, 6.7).
+ *
+ * Scans at most `MAX_ATTRIBUTION_LINES` lines. Among the lines naming
+ * `testbenchPath`, the first containing `syntax error` wins; if none of those
+ * lines contains it, the first line naming `testbenchPath` wins instead - so a
+ * later cascade line (`Malformed statement`, reported past the real defect)
+ * is never preferred over an earlier genuine `syntax error` naming the same
+ * file.
+ */
+function selectFirstError(stderr: string, testbenchPath: string): string | null {
+  const lines = stderr.split('\n').slice(0, MAX_ATTRIBUTION_LINES);
+  let firstNamingFile: string | null = null;
+  for (const line of lines) {
+    if (!namesFile(line, testbenchPath)) {
+      continue;
+    }
+    if (line.includes('syntax error')) {
+      return line;
+    }
+    firstNamingFile ??= line;
+  }
+  return firstNamingFile;
+}
+
+/** The `<line>` a `<basename>:<line>` diagnostic line names, or `null` if absent/unparsable. */
+function parseLineNumber(line: string, testbenchPath: string): number | null {
+  const marker = `${basename(testbenchPath)}:`;
+  const afterMarker = line.slice(line.indexOf(marker) + marker.length);
+  const match = /^(\d+)/.exec(afterMarker);
+  if (match?.[1] === undefined) {
+    return null;
+  }
+  return Number.parseInt(match[1], 10);
+}
+
+/**
+ * The Testbench source line `firstError` names, read ONLY as an index into
+ * `testbench.contents` (Req 6.2, 6.8) - never from any path the diagnostic text
+ * itself might mention.
+ */
+function sourceLineFor(firstError: string, testbench: SourceFile): DiagnosticSourceLine | null {
+  const lineNumber = parseLineNumber(firstError, testbench.path);
+  if (lineNumber === null) {
+    return null;
+  }
+  const text = sourceLineAt(testbench.contents, lineNumber);
+  return text === null ? null : { lineNumber, text: capField(text) };
+}
+
+/**
+ * The distinct Dialect_Classes the submitted Testbench source exhibits, for
+ * this diagnostic's own reporting (Req 6.9) - NOT the full `normalizeDialect`
+ * pass, which already ran in `#setup`. Only the prose-as-statement detector
+ * runs here, so this call adds no second full-transform cost to every precheck
+ * (design.md Component 7).
+ */
+function dialectClassesOf(source: string): readonly DialectClass[] {
+  const mask = scanSource(source);
+  const findings = findProseAsStatements({ source, mask });
+  return [...new Set(findings.map((finding) => finding.dialectClass))];
+}
+
+/** Build the `PrecheckDiagnostic` for a `testbench-build-failed` outcome (Req 6.1-6.9). */
+function diagnoseBuildFailure(stderr: string, testbench: SourceFile): PrecheckDiagnostic {
+  const dialectClasses = dialectClassesOf(testbench.contents);
+  if (stderr.trim().length === 0) {
+    return { firstError: null, sourceLine: null, dialectClasses, noDiagnosticCaptured: true };
+  }
+  const selected = selectFirstError(stderr, testbench.path);
+  const firstError = selected === null ? null : capField(selected);
+  const sourceLine = selected === null ? null : sourceLineFor(selected, testbench);
+  return { firstError, sourceLine, dialectClasses, noDiagnosticCaptured: false };
+}
 
 /** A Verilog range suffix for a port wider than one bit, or empty for width 1. */
 function rangeSuffix(width: number): string {
@@ -149,38 +321,44 @@ export class TestbenchPrecheck {
   }
 
   /**
-   * The same build-and-decide `run` performs, but also surfacing the verbatim
-   * build diagnostic (`SimulationVerdict.stderr`) from the one internal
-   * `simulate` call both methods share - so a caller building a
-   * `BuildDiagnosticHint` (task 6.4's `#admitInstrument`) reads the precheck's
-   * own captured stderr rather than re-running the build a second time.
+   * The same build-and-decide `run` performs, but also surfacing a shaped
+   * `PrecheckDiagnostic` derived from the one internal `simulate` call both
+   * methods share - so a caller building a `BuildDiagnosticHint` (task 6.4's
+   * `#admitInstrument`) reads the precheck's own captured stderr, reduced to
+   * the first real error and its source line, rather than re-running the
+   * build a second time or forwarding the toolchain's raw cascade text
+   * (Req 6.1-6.9).
    *
-   * `diagnostic` is `''` on every `undecided` row, including a thrown
-   * `simulate` call: this method never throws outward, matching `run`'s own
-   * "never throws outward" discipline (Req 1.10).
+   * `diagnostic` is `NO_DIAGNOSTIC` (every field `null`/`false`/`[]`) on every
+   * `undecided` row, including a thrown `simulate` call: this method never
+   * throws outward, matching `run`'s own "never throws outward" discipline
+   * (Req 1.10).
    */
   async runWithDiagnostic(
     testbench: SourceFile,
     moduleInterface: ModuleInterface,
     limits: ResourceLimits,
-  ): Promise<{ outcome: PrecheckOutcome; diagnostic: string }> {
+  ): Promise<{ outcome: PrecheckOutcome; diagnostic: PrecheckDiagnostic }> {
     const stub = buildInterfaceStub(moduleInterface);
     try {
       const verdict = await this.#simulator.simulate([stub], testbench, limits);
       if (verdict.failureCause !== 'build-failed') {
         // Any other cause - including `output-incomplete`, a testbench that built
         // and simply wrote no waveform - is not a build defect (Req 1.12).
-        return { outcome: 'undecided', diagnostic: '' };
+        return { outcome: 'undecided', diagnostic: NO_DIAGNOSTIC };
       }
       // Membership, not extraction: `attributedFiles` is already a filter of the
       // paths this run submitted (`SimulationVerdict.attributedFiles`), so checking
       // for the testbench's own path is a safe comparison against a value this
       // call constructed, never against untrusted diagnostic text.
       return verdict.attributedFiles.includes(testbench.path)
-        ? { outcome: 'testbench-build-failed', diagnostic: verdict.stderr }
-        : { outcome: 'undecided', diagnostic: '' };
+        ? {
+            outcome: 'testbench-build-failed',
+            diagnostic: diagnoseBuildFailure(verdict.stderr, testbench),
+          }
+        : { outcome: 'undecided', diagnostic: NO_DIAGNOSTIC };
     } catch {
-      return { outcome: 'undecided', diagnostic: '' };
+      return { outcome: 'undecided', diagnostic: NO_DIAGNOSTIC };
     }
   }
 }

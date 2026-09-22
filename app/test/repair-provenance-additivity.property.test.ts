@@ -51,14 +51,18 @@ import { describe, expect, it } from 'vitest';
 import {
   InMemorySessionBudgetHandle,
   NO_REPAIR,
+  repairAccepted,
+  repairDeclined,
   TraceActionRecorder,
   InMemoryTracePersistence,
   VerificationLoop,
+  type BuildDiagnosticHint,
   type CandidateGenerator,
   type GenerationContextOpener,
   type IndependentTestbenchGenerator,
   type ConfirmedGenerationContext,
   type GenerationAdmissionRequest,
+  type RepairDeclineReason,
   type RepairProvenance,
   type RepairTestbenchRequest,
 } from '@app/agent';
@@ -328,18 +332,28 @@ function makeLoop(
   });
 }
 
+/** A stand-in hint for the structural-half property below; its content is not asserted. */
+const BUILD_DIAGNOSTIC_HINT: BuildDiagnosticHint = {
+  kind: 'build-diagnostic',
+  diagnostic: 'stand-in diagnostic for the structural property',
+};
+
 /** The three trajectory shapes this property drives, over pass / fail / build-failure. */
 type Trajectory = 'pass-first-iteration' | 'fail-to-exhaustion' | 'testbench-build-failed';
 
 /**
- * The `RepairProvenance` each trajectory's terminal outcome must carry exactly.
- * Only `testbench-build-failed` reaches the precheck-path repair trigger task 6.4
+ * The `RepairProvenance` each trajectory's terminal outcome must carry, checked by
+ * its narrowed discriminant fields rather than full-object equality: since task
+ * 1.1 widened `RepairProvenance` into a discriminated union, the declined member
+ * also carries a `hint` and a `declineReason` this fixture cannot predict without
+ * duplicating `#repairPrecheckFailure`'s own diagnostic text. Only
+ * `testbench-build-failed` reaches the precheck-path repair trigger task 6.4
  * wires in; the other two never attempt a repair at all.
  */
 const EXPECTED_PROVENANCE: Readonly<Record<Trajectory, RepairProvenance>> = {
   'pass-first-iteration': NO_REPAIR,
   'fail-to-exhaustion': NO_REPAIR,
-  'testbench-build-failed': { attempted: true, accepted: false },
+  'testbench-build-failed': repairDeclined(BUILD_DIAGNOSTIC_HINT, 'no-admissible-revision'),
 };
 
 describe(PROPERTY, () => {
@@ -395,7 +409,18 @@ describe(PROPERTY, () => {
             // `testbench-build-failed` precheck now attempts and (per this
             // fixture's always-declining `repairTestbench`) fails to repair,
             // while the other two trajectories never reach that trigger at all.
-            expect(outcome.repairProvenance).toStrictEqual(EXPECTED_PROVENANCE[trajectory]);
+            // Compared by discriminant fields, not full-object equality: the
+            // declined member also carries a `hint` this fixture does not predict.
+            const expected = EXPECTED_PROVENANCE[trajectory];
+            expect(outcome.repairProvenance.attempted).toBe(expected.attempted);
+            expect(outcome.repairProvenance.accepted).toBe(expected.accepted);
+            if (expected.attempted && !expected.accepted) {
+              expect(outcome.repairProvenance).toMatchObject({
+                attempted: true,
+                accepted: false,
+                declineReason: expected.declineReason,
+              });
+            }
           } else {
             throw new Error(`unexpected outcome status for this trajectory: ${outcome.status}`);
           }
@@ -405,22 +430,31 @@ describe(PROPERTY, () => {
     );
   });
 
-  it('accepted implies attempted, for any RepairProvenance-shaped value (the permanent structural half)', () => {
-    // Direct object construction, not derived from a loop run: this half of the
-    // property needs no real repair logic to exist, since it is a fact about the
-    // SHAPE, checkable in isolation today and unaffected by whatever tasks 6.4/8.3
-    // later wire in.
+  it('accepted implies attempted, for every member of the RepairProvenance union (the permanent structural half)', () => {
+    // Generated over the three ACTUAL union members (task 1.1), not over two raw
+    // booleans: the widened type makes `accepted: true, attempted: false`
+    // unrepresentable, so this property is now a fact a type checker already
+    // enforces at every construction site. It stays here as a runtime check over
+    // values built through the real constructors, rather than being deleted,
+    // because a future loosening of the union (e.g. reintroducing a flat shape)
+    // would still be caught here even though `tsc` would no longer catch it.
+    const member = fc.oneof(
+      fc.constant(NO_REPAIR),
+      fc
+        .constantFrom<RepairDeclineReason>(
+          'no-admissible-revision',
+          'coverage-validation-failed',
+          'recheck-failed',
+          'port-threw',
+          'port-unavailable',
+        )
+        .map((reason) => repairDeclined(BUILD_DIAGNOSTIC_HINT, reason)),
+      fc.constant(repairAccepted(BUILD_DIAGNOSTIC_HINT, 'module byte_reg_tb; endmodule')),
+    );
     fc.assert(
-      fc.property(fc.boolean(), fc.boolean(), (attempted, accepted) => {
-        const provenance: RepairProvenance = { attempted, accepted };
+      fc.property(member, (provenance) => {
         const impliesAttempted = !provenance.accepted || provenance.attempted;
-
-        // The only combination this implication rules out is accepted-without-attempted.
-        if (attempted === false && accepted === true) {
-          expect(impliesAttempted).toBe(false);
-        } else {
-          expect(impliesAttempted).toBe(true);
-        }
+        expect(impliesAttempted).toBe(true);
       }),
       propertyParameters(),
     );

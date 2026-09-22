@@ -79,6 +79,7 @@ import type {
   GeneratedCandidate,
   GenerationInput,
 } from '../roles/generation/index.js';
+import { sourceEmitsCheck } from '../roles/testbench/index.js';
 import type {
   GenerateTestbenchRequest,
   RepairTestbenchRequest,
@@ -86,14 +87,15 @@ import type {
   TestbenchGenerationOutcome,
 } from '../roles/testbench/index.js';
 
+import { normalizeDialect, type NormalizerReport } from './dialect/normalizer.js';
 import type {
   ConfirmedGenerationContext,
   GenerationAdmissionRequest,
   GenerationGateRefusal,
 } from './generation-gate.js';
 import type { InstrumentAdmission, InstrumentAdmissionDecision } from './instrument-admission.js';
-import { buildRepairHint } from './repair-hint.js';
-import { TestbenchPrecheck } from './testbench-precheck.js';
+import { buildRepairHint, describePrecheckDiagnostic, type RepairHint } from './repair-hint.js';
+import { TestbenchPrecheck, type PrecheckDiagnostic } from './testbench-precheck.js';
 
 /** The Trace `stageOrTool` name recorded for every oracle verdict this loop runs. */
 const VERIFICATION_STAGE = 'Verification_Loop' as const;
@@ -220,27 +222,97 @@ export interface TeachModeHandoff {
 }
 
 /**
- * Whether this sample's testbench reached a Testbench_Repair attempt, and whether
- * that attempt produced the testbench the final verdict was decided from.
+ * The closed vocabulary naming the STAGE at which a Testbench_Repair attempt
+ * declined (Req 3.1). Nothing wider: a decline recorded at the precheck trigger
+ * point and a decline recorded at the control trigger point must be comparable
+ * without translation (Req 3.10), which only holds if both draw from this one list.
+ */
+export type RepairDeclineReason =
+  | 'no-admissible-revision'
+  | 'coverage-validation-failed'
+  | 'recheck-failed'
+  | 'port-threw'
+  | 'port-unavailable';
+
+/**
+ * Whether this sample's testbench reached a Testbench_Repair attempt, what hint
+ * that attempt was built from, and either the source it replaced or the stage at
+ * which it declined.
  *
  * A first-class, closed shape - never free text folded into an existing note or
  * diagnostic (Req 4.2). Required (not optional) on every outcome that can reach a
  * repairable point: an optional field defaults to absent at every existing
  * construction site, and absent would have to be read as "not repaired" - a claim
  * a future reader could not verify unless it were stated everywhere.
+ *
+ * A discriminated union rather than two parallel optional fields, so the illegal
+ * states have no representation: `attempted` and `accepted` stay readable on
+ * EVERY member (so `artifact-sink.ts`, `summary.ts`, and the record encoder keep
+ * their existing two reads compiling unchanged), while `hint`, `declineReason`,
+ * and `replacedSource` are reachable only after narrowing. An accepted attempt has
+ * no `declineReason` field to set (Req 3.3), and a not-attempted provenance has
+ * neither that nor a `hint` (Req 3.4) - both facts a type checker enforces rather
+ * than a validation.
  */
-export interface RepairProvenance {
-  /** Whether a Testbench_Repair was attempted for this sample, at EITHER trigger point. */
-  readonly attempted: boolean;
-  /**
-   * Whether the attempt's revised testbench is the one the final verdict was
-   * decided from (passed its re-check). `false` whenever `attempted` is `false`.
-   */
-  readonly accepted: boolean;
+export type RepairProvenance =
+  | { readonly attempted: false; readonly accepted: false }
+  | {
+      readonly attempted: true;
+      readonly accepted: false;
+      readonly hint: RepairHint;
+      readonly declineReason: RepairDeclineReason;
+    }
+  | {
+      readonly attempted: true;
+      readonly accepted: true;
+      readonly hint: RepairHint;
+      /** The pre-repair source the accepted revision replaced (Req 2.4). */
+      readonly replacedSource: string;
+    };
+
+/** The unrepaired baseline every outcome starts from; unchanged in value. */
+export const NO_REPAIR: RepairProvenance = Object.freeze({ attempted: false, accepted: false });
+
+/** The only way to build a declined provenance: a reason is not optional (Req 3.2). */
+export function repairDeclined(hint: RepairHint, reason: RepairDeclineReason): RepairProvenance {
+  return { attempted: true, accepted: false, hint, declineReason: reason };
 }
 
-/** The unrepaired baseline every outcome starts from. */
-export const NO_REPAIR: RepairProvenance = Object.freeze({ attempted: false, accepted: false });
+/** The only way to build an accepted one (Req 3.3). */
+export function repairAccepted(hint: RepairHint, replacedSource: string): RepairProvenance {
+  return { attempted: true, accepted: true, hint, replacedSource };
+}
+
+/** Total reader for the record encoder; `null` for both non-declined members (Req 3.11). */
+export function repairDeclineReasonOf(provenance: RepairProvenance): RepairDeclineReason | null {
+  return provenance.attempted && !provenance.accepted ? provenance.declineReason : null;
+}
+
+/**
+ * What the Dialect_Normalizer did to the ONE Testbench source measured for this
+ * sample, and the pre-normalization evidence needed to detect a silently emptied
+ * instrument (Req 4.14, 4.18, 5.8).
+ *
+ * Required (not optional) on every outcome that reaches a normalized Testbench, for
+ * the same reason `RepairProvenance` is required rather than optional (see that
+ * type's own comment): an absent field would default to absent at every existing
+ * construction site and would have to be read as "not normalized", a claim no
+ * future reader could verify unless it were stated everywhere. `preNormalizationSource`
+ * is present only `WHERE report.changed`, so a sample the transform left untouched
+ * carries no second copy of a source that is byte-identical to `testbench.source`.
+ */
+export interface NormalizationProvenance {
+  readonly report: NormalizerReport;
+  /** The pre-normalization source; present only when `report.changed` is `true`. */
+  readonly preNormalizationSource: string | null;
+  /**
+   * Which of the run's REQUIRED check names the PRE-normalization source actually
+   * emitted (Req 5.8), computed here because Loop_Setup is the only place the
+   * pre-normalization text exists at all - `#iterate` and everything downstream
+   * of it read the single post-normalization source through `testbenchSourceOf`.
+   */
+  readonly preNormalizationCheckNames: readonly string[];
+}
 
 /** The module reached a passing oracle verdict and was labeled `Verified` (Req 8.3). */
 export interface VerifiedModule {
@@ -257,6 +329,8 @@ export interface VerifiedModule {
   readonly iterations: number;
   /** Whether a Testbench_Repair was attempted/accepted for this sample (Req 4.2, 4.3). */
   readonly repairProvenance: RepairProvenance;
+  /** What the Dialect_Normalizer did to this sample's ONE measured Testbench (Req 4.14). */
+  readonly normalization: NormalizationProvenance;
 }
 
 /** The loop exhausted its budget without a pass; the module is `Unverified` (Req 8.5). */
@@ -275,6 +349,8 @@ export interface UnverifiedModule {
   readonly teachMode: TeachModeHandoff;
   /** Whether a Testbench_Repair was attempted/accepted for this sample (Req 4.2, 4.3). */
   readonly repairProvenance: RepairProvenance;
+  /** What the Dialect_Normalizer did to this sample's ONE measured Testbench (Req 4.14). */
+  readonly normalization: NormalizationProvenance;
 }
 
 /** The generation gate refused admission (intent unconfirmed / spec unapproved). */
@@ -359,10 +435,18 @@ interface InstrumentAdmissionResult {
     readonly attributedFiles: readonly string[];
   } | null;
   readonly repairProvenance: RepairProvenance;
-  /** Present only when `repairProvenance.accepted` is `true`. */
+  /**
+   * Present only when `repairProvenance.accepted` is `true`.
+   *
+   * `normalization` is the REVISED source's own report (Req 4.3): the first
+   * draft's report is superseded once a repair is accepted, because the revised
+   * testbench is the one the verdict will be decided from, and the first draft's
+   * own (already-normalized) source survives separately as `repairProvenance.replacedSource`.
+   */
   readonly revisedTestbench?: {
     readonly testbench: Testbench;
     readonly testbenchFile: SourceFile;
+    readonly normalization: NormalizationProvenance;
   };
 }
 
@@ -389,6 +473,8 @@ export interface InstrumentRefusedModule {
   readonly attributedFiles: readonly string[];
   /** Whether a Testbench_Repair was attempted/accepted for this sample (Req 4.2, 4.3). */
   readonly repairProvenance: RepairProvenance;
+  /** What the Dialect_Normalizer did to this sample's ONE measured Testbench (Req 4.14). */
+  readonly normalization: NormalizationProvenance;
 }
 
 /** The terminal result of a Verification_Loop run. */
@@ -413,6 +499,12 @@ type SetupResult =
        * reports two of its three checks - both passing - reads as a full pass.
        */
       readonly requiredCheckNames: readonly string[];
+      /**
+       * The Dialect_Normalizer's report for this sample's ONE Testbench, computed
+       * once here (Req 4.1, 4.2) - the only place the pre-normalization source
+       * exists before it is discarded.
+       */
+      readonly normalization: NormalizationProvenance;
     }
   | { readonly ok: false; readonly outcome: VerificationSetupFailed; readonly detail: string };
 
@@ -548,11 +640,25 @@ export class VerificationLoop {
         outcome: { status: 'setup-failed', reason: 'generation-unavailable', detail, cause },
       };
     }
+    const requiredCheckNames = testbench.checks.map((check) => check.name);
+    const normalized = normalizeDialect(testbench.testbench.source);
     return {
       ok: true,
       firstCandidate: candidate.value,
-      testbench: testbench.testbench,
-      requiredCheckNames: testbench.checks.map((check) => check.name),
+      // Spread over the generated Testbench, not `makeTestbench`: the id, `specId`,
+      // `specVersion`, `coversCriteria`, and the `sourceAttribution: 'spec'` stamp all
+      // came from the agent's own reply and must survive untouched (Req 4.1, 4.17).
+      // This is the ONE Testbench value built for this sample - `#iterate` and every
+      // terminal outcome read this single post-normalization source from here on.
+      testbench: { ...testbench.testbench, source: normalized.source },
+      requiredCheckNames,
+      normalization: {
+        report: normalized.report,
+        preNormalizationSource: normalized.report.changed ? testbench.testbench.source : null,
+        preNormalizationCheckNames: requiredCheckNames.filter((name) =>
+          sourceEmitsCheck(testbench.testbench.source, name),
+        ),
+      },
     };
   }
 
@@ -565,7 +671,7 @@ export class VerificationLoop {
    * On a precheck build failure, attempts ONE Testbench_Repair before refusing
    * (Req 1.1, 1.3, 3.1, 3.3, 3.4, 6.1-6.3, 8.3; design.md "The precheck-path
    * sequence"): the diagnostic comes from `runWithDiagnostic`'s own captured
-   * `SimulationVerdict.stderr`, never a second simulate call, and a repair that
+   * `PrecheckDiagnostic`, never a second simulate call, and a repair that
    * produces a testbench is re-checked by the identical plain `run` a first
    * draft is held to. Every failure mode on this branch - a re-check that still
    * fails, `coverage-incomplete`/`generation-failed`, or a thrown
@@ -588,6 +694,7 @@ export class VerificationLoop {
     limits: ResourceLimits,
     context: ConfirmedGenerationContext,
     budget: SessionBudgetHandle,
+    requiredCheckNames: readonly string[],
   ): Promise<InstrumentAdmissionResult> {
     const { outcome: precheckOutcome, diagnostic } = await this.#precheck.runWithDiagnostic(
       testbenchFile,
@@ -602,6 +709,7 @@ export class VerificationLoop {
         context,
         budget,
         diagnostic,
+        requiredCheckNames,
       );
     }
     if (precheckOutcome !== 'undecided' || this.#instrumentAdmission === undefined) {
@@ -625,17 +733,31 @@ export class VerificationLoop {
 
   /**
    * Attempt ONE Testbench_Repair for a precheck build failure and re-check the
-   * revised source, or finalize the unrepaired refusal (Req 1.1, 1.3, 3.1, 3.3,
-   * 3.4, 5.1-5.3, 5.5, 6.1-6.3, 6.5, 8.3).
+   * revised source, or finalize the unrepaired refusal (Req 1.1, 1.2, 1.3, 2.1,
+   * 2.2, 3.1, 3.3, 3.4, 3.5-3.9, 5.1-5.3, 5.5, 6.1-6.3, 6.5, 8.3).
    *
    * The unrepaired refusal shape (`{ reason: 'testbench-build-failed',
-   * attributedFiles: [] }`) is identical on every path through this method: a
-   * repair that never produces a testbench, a repair call that throws (the
-   * injected `IndependentTestbenchGenerator` is a port a caller could implement
-   * to throw, even though `TestbenchAgent#repairTestbench` itself never does),
-   * and a repaired testbench that still fails its re-check. Only `accepted:
-   * true` differs in outcome shape, carrying the revised testbench forward for
-   * `#iterate` to continue with.
+   * attributedFiles: [] }`) is identical on every declined path through this
+   * method; only the `RepairDeclineReason` the provenance carries names WHICH
+   * stage declined (Req 3.5-3.9):
+   *
+   *   - no `repairTestbench` exposed on the injected port at all -> `port-unavailable`,
+   *     checked BEFORE any call is attempted, since this is an absent capability
+   *     rather than a call outcome.
+   *   - the call throws (the port is a caller-implementable interface, even
+   *     though `TestbenchAgent#repairTestbench` itself never throws) -> `port-threw`.
+   *   - the call returns `generation-failed` (no draft was produced at all) -> `no-admissible-revision`.
+   *   - the call returns `coverage-incomplete` (a draft was produced but failed
+   *     the same coverage gate a first draft is held to) -> `coverage-validation-failed`.
+   *   - a `generated` revision still reports `testbench-build-failed` on re-check -> `recheck-failed`.
+   *
+   * Only `accepted: true` differs in outcome shape, carrying the revised
+   * testbench forward for `#iterate` to continue with and the pre-repair source
+   * it replaced (Req 2.4). The hint every branch was built from rides out on the
+   * provenance for BOTH the refusal path and the accepted path (Req 2.1, 2.2), so
+   * `InstrumentAdmissionResult` can never return an attempted provenance without
+   * one. `repairTestbench` is called at most once here, whatever branch is taken
+   * (`testbench-repair-loop` Req 1.5).
    */
   async #repairPrecheckFailure(
     testbench: Testbench,
@@ -643,18 +765,31 @@ export class VerificationLoop {
     limits: ResourceLimits,
     context: ConfirmedGenerationContext,
     budget: SessionBudgetHandle,
-    diagnostic: string,
+    diagnostic: PrecheckDiagnostic,
+    requiredCheckNames: readonly string[],
   ): Promise<InstrumentAdmissionResult> {
     const unrepairedRefusal = {
       reason: 'testbench-build-failed' as const,
       attributedFiles: [] as readonly string[],
     };
-    const attemptedButDeclined: InstrumentAdmissionResult = {
-      refusal: unrepairedRefusal,
-      repairProvenance: { attempted: true, accepted: false },
-    };
 
-    const hint = buildRepairHint({ kind: 'precheck-build-failed', diagnostic });
+    const hint = buildRepairHint({
+      kind: 'precheck-build-failed',
+      diagnostic: describePrecheckDiagnostic(diagnostic),
+    });
+    const declined = (reason: RepairDeclineReason): InstrumentAdmissionResult => ({
+      refusal: unrepairedRefusal,
+      repairProvenance: repairDeclined(hint, reason),
+    });
+
+    // Capability-absence, not a call failure: an injected port that structurally
+    // satisfies `IndependentTestbenchGenerator` at the type level can still omit
+    // `repairTestbench` at runtime, and that must be checked before attempting
+    // the call rather than discovered from a throw (Req 3.9).
+    if (typeof this.#testbench.repairTestbench !== 'function') {
+      return declined('port-unavailable');
+    }
+
     const request: RepairTestbenchRequest = {
       sessionId: context.sessionId,
       spec: context.approvedSpec,
@@ -666,22 +801,46 @@ export class VerificationLoop {
     try {
       repaired = await this.#testbench.repairTestbench(request, budget);
     } catch {
-      return attemptedButDeclined;
+      return declined('port-threw');
+    }
+    if (repaired.status === 'coverage-incomplete') {
+      return declined('coverage-validation-failed');
     }
     if (repaired.status !== 'generated') {
-      return attemptedButDeclined;
+      return declined('no-admissible-revision');
     }
 
-    const revisedTestbench = repaired.testbench;
+    // The revised draft is desugared by the same unconditional rule Loop_Setup
+    // applies to a first draft (Req 4.3): the precheck re-check and every reader
+    // downstream of an accepted repair must see the identical normalized source.
+    const normalizedRevision = normalizeDialect(repaired.testbench.source);
+    const revisedTestbench: Testbench = {
+      ...repaired.testbench,
+      source: normalizedRevision.source,
+    };
     const revisedTestbenchFile = toTestbenchFile(revisedTestbench, moduleInterface.moduleName);
     const recheckOutcome = await this.#precheck.run(revisedTestbenchFile, moduleInterface, limits);
     if (recheckOutcome === 'testbench-build-failed') {
-      return attemptedButDeclined;
+      return declined('recheck-failed');
     }
     return {
       refusal: null,
-      repairProvenance: { attempted: true, accepted: true },
-      revisedTestbench: { testbench: revisedTestbench, testbenchFile: revisedTestbenchFile },
+      repairProvenance: repairAccepted(hint, testbench.source),
+      revisedTestbench: {
+        testbench: revisedTestbench,
+        testbenchFile: revisedTestbenchFile,
+        // The REVISED source's own report (Req 4.3): this is the testbench the
+        // verdict will be decided from, so the first draft's report is superseded.
+        normalization: {
+          report: normalizedRevision.report,
+          preNormalizationSource: normalizedRevision.report.changed
+            ? repaired.testbench.source
+            : null,
+          preNormalizationCheckNames: requiredCheckNames.filter((name) =>
+            sourceEmitsCheck(repaired.testbench.source, name),
+          ),
+        },
+      },
     };
   }
 
@@ -705,6 +864,12 @@ export class VerificationLoop {
     let testbenchFile = toTestbenchFile(testbench, moduleName);
     const firstCandidate = setup.firstCandidate.candidate;
 
+    // The normalization report in play for whichever testbench is currently
+    // measured; starts as the first draft's and is superseded below if a
+    // precheck-path repair is accepted (Req 4.3), so every outcome constructed
+    // from this point on names the source that actually decided its verdict.
+    let normalization = setup.normalization;
+
     const admission = await this.#admitInstrument(
       testbench,
       testbenchFile,
@@ -712,7 +877,19 @@ export class VerificationLoop {
       limits,
       context,
       budget,
+      setup.requiredCheckNames,
     );
+
+    // The repair provenance for this run's precheck-path admission step: whether
+    // no repair was ever triggered, one was attempted and declined, or one was
+    // attempted and accepted. `admission.repairProvenance` already holds the
+    // correct value for every case (Req 1.4, 1.5, 1.6) - an accepted repair's
+    // provenance is already `repairAccepted(hint, testbench.source)` from
+    // `#repairPrecheckFailure`, so it needs no reassignment on the
+    // `revisedTestbench` branch below; every terminal outcome constructed for
+    // the rest of this run carries this SAME value forward, never re-derived.
+    const repairProvenance = admission.repairProvenance;
+
     if (admission.refusal !== null) {
       const { refusal } = admission;
       yield this.#progress(
@@ -729,15 +906,17 @@ export class VerificationLoop {
         label: unverified(firstCandidate.label.artifactRef),
         candidate: firstCandidate,
         testbench,
-        // task 6.4: a repair may have been attempted (and declined) on this
-        // precheck-path refusal; report exactly what happened.
-        repairProvenance: admission.repairProvenance,
+        // A repair may have been attempted (and declined) on this precheck-path
+        // refusal; report exactly what happened.
+        repairProvenance,
+        normalization,
       };
     }
     if (admission.revisedTestbench !== undefined) {
       // Accepted precheck-path repair (Req 3.3): the rest of this run continues
-      // against the REPAIRED testbench, never the original that failed its build.
-      ({ testbench, testbenchFile } = admission.revisedTestbench);
+      // against the REPAIRED testbench, never the original that failed its build,
+      // and against THAT testbench's own normalization report (Req 4.3).
+      ({ testbench, testbenchFile, normalization } = admission.revisedTestbench);
     }
 
     let candidateEval = setup.firstCandidate;
@@ -767,10 +946,20 @@ export class VerificationLoop {
           return this.#incompleteEvidence(
             { context, candidate, testbench, simulation, span, iteration },
             unreported,
+            normalization,
+            repairProvenance,
           );
         }
         yield this.#progress(iteration, 'verified', 'oracle reported every check passing', 'pass');
-        return this.#onPass(candidate, testbench, simulation, span, iteration);
+        return this.#onPass(
+          candidate,
+          testbench,
+          simulation,
+          span,
+          iteration,
+          normalization,
+          repairProvenance,
+        );
       }
 
       if (refusedByTestbenchBuild(simulation, testbenchFile.path, `${moduleName}.v`)) {
@@ -787,9 +976,10 @@ export class VerificationLoop {
           label: unverified(candidate.label.artifactRef),
           candidate,
           testbench,
-          // A mid-run testbench-build failure never repairs (Req 3.4 covers only
-          // the precheck path once wired in task 6.4); unrepaired for now.
+          // A mid-run testbench-build failure never repairs; Requirement 3.4's
+          // precheck-path repair only ever runs before the first iteration.
           repairProvenance: NO_REPAIR,
+          normalization,
         };
       }
 
@@ -810,6 +1000,8 @@ export class VerificationLoop {
           failingCase,
           iteration,
           budget.stopReason() ?? 'max-iterations',
+          normalization,
+          repairProvenance,
         );
       }
 
@@ -843,6 +1035,8 @@ export class VerificationLoop {
           failingCase,
           iteration,
           stopReason,
+          normalization,
+          repairProvenance,
         );
       }
       candidateEval = revised.value;
@@ -861,6 +1055,8 @@ export class VerificationLoop {
     simulation: SimulationVerdict,
     span: TraceSpan,
     iteration: number,
+    normalization: NormalizationProvenance,
+    repairProvenance: RepairProvenance,
   ): VerificationOutcome {
     const built = makeVerificationResult({
       id: this.#newId(),
@@ -873,13 +1069,29 @@ export class VerificationLoop {
       oracleSpanId: span.id,
     });
     if (!built.ok) {
-      return this.#failClosed(candidate, testbench, simulation, span, iteration);
+      return this.#failClosed(
+        candidate,
+        testbench,
+        simulation,
+        span,
+        iteration,
+        normalization,
+        repairProvenance,
+      );
     }
 
     const artifactRef = candidate.label.artifactRef;
     const label = this.#trustLabeler.label(artifactRef, [{ artifactRef, result: built.value }]);
     if (label.tier !== 'Verified') {
-      return this.#failClosed(candidate, testbench, simulation, span, iteration);
+      return this.#failClosed(
+        candidate,
+        testbench,
+        simulation,
+        span,
+        iteration,
+        normalization,
+        repairProvenance,
+      );
     }
     return {
       status: 'verified',
@@ -890,8 +1102,8 @@ export class VerificationLoop {
       simulation,
       oracleSpanId: span.id,
       iterations: iteration,
-      // No repair path exists yet (wired in task 6.4); every pass today is unrepaired.
-      repairProvenance: NO_REPAIR,
+      repairProvenance,
+      normalization,
     };
   }
 
@@ -908,6 +1120,8 @@ export class VerificationLoop {
     failingCase: FailingCase | null,
     iteration: number,
     stopReason: BudgetStopReason,
+    normalization: NormalizationProvenance,
+    repairProvenance: RepairProvenance,
   ): UnverifiedModule {
     const result = nonPassResult({
       id: this.#newId(),
@@ -938,8 +1152,8 @@ export class VerificationLoop {
       stopReason,
       iterations: iteration,
       teachMode,
-      // No repair path exists yet (wired in task 6.4); every exhaustion today is unrepaired.
-      repairProvenance: NO_REPAIR,
+      repairProvenance,
+      normalization,
     };
   }
 
@@ -953,6 +1167,8 @@ export class VerificationLoop {
     simulation: SimulationVerdict,
     span: TraceSpan,
     iteration: number,
+    normalization: NormalizationProvenance,
+    repairProvenance: RepairProvenance,
   ): UnverifiedModule {
     return this.#refusePass({
       sessionId: candidate.moduleVersion.projectId,
@@ -962,6 +1178,8 @@ export class VerificationLoop {
       simulation,
       span,
       iteration,
+      normalization,
+      repairProvenance,
       failingCase: {
         checkName: 'provenance',
         description: 'A passing run could not be bound to a valid oracle provenance reference.',
@@ -998,6 +1216,8 @@ export class VerificationLoop {
       readonly iteration: number;
     },
     unreportedChecks: readonly string[],
+    normalization: NormalizationProvenance,
+    repairProvenance: RepairProvenance,
   ): UnverifiedModule {
     const named = unreportedChecks.join(', ');
     return this.#refusePass({
@@ -1008,6 +1228,8 @@ export class VerificationLoop {
       simulation: run.simulation,
       span: run.span,
       iteration: run.iteration,
+      normalization,
+      repairProvenance,
       failingCase: {
         checkName: unreportedChecks[0] ?? 'coverage',
         description: `The testbench reported no result for required check(s): ${named}.`,
@@ -1057,9 +1279,8 @@ export class VerificationLoop {
         diagnostics: refusal.diagnostics,
         stopReason: 'max-iterations',
       },
-      // A refused pass (unbindable provenance or incomplete evidence) never
-      // repairs; no repair path exists yet (wired in task 6.4).
-      repairProvenance: NO_REPAIR,
+      repairProvenance: refusal.repairProvenance,
+      normalization: refusal.normalization,
     };
   }
 
@@ -1144,6 +1365,8 @@ interface RefusedPass {
   readonly failingCase: FailingCase;
   /** Sanitized, student-facing explanation; never a path, host, or tool message. */
   readonly diagnostics: string;
+  readonly normalization: NormalizationProvenance;
+  readonly repairProvenance: RepairProvenance;
 }
 
 /** The fields for a non-passing verification result. */

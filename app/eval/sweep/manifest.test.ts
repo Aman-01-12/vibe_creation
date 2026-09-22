@@ -30,7 +30,9 @@ import { assembleManifest, finalizeManifest, type ManifestFacts } from './manife
  * Pinned so a config change that would orphan already-paid-for samples fails a test instead of
  * quietly re-running them.
  *
- * It has MOVED four times, deliberately every time, because `negativeControl` can change
+ * It has MOVED every time deliberately, and the full history is the bullet list below rather
+ * than a count (a count restated in prose goes stale on the next re-pin, and did). It moves
+ * whenever a change can move a measured number, because `negativeControl` can change
  * instrument validity and instrument validity decides the pass@k denominator - so two settings of
  * it are two experiments and must not pool samples:
  *   - when the mutation-based negative control shipped, adding the block at all;
@@ -80,8 +82,34 @@ import { assembleManifest, finalizeManifest, type ManifestFacts } from './manife
  *     prior move.
  * Nothing was orphaned in any case - the results schema bump had already refused every
  * pre-existing smoke record for the same reason.
+ *   - when `NORMALIZER_VERSION` arrived and `TESTBENCH_REPAIR_POLICY_VERSION` went 1 -> 2
+ *     (testbench-dialect-normalization) - the identical reason recorded above: a run
+ *     before the dialect normalizer existed (repair driven only by the control loop) and
+ *     a run after it (repair retired in favor of the normalizer) answer a different
+ *     question about the same testbench-generation failure, so their samples must never
+ *     pool.
+ *   - when `NORMALIZER_VERSION` went 1 -> 2 (testbench-dialect-normalization group 13).
+ *     That ONE constant moved and nothing else in the identity did. The set of rewrites
+ *     changed: with a Verilog comment now treated as the whitespace it lexically is, an
+ *     already-named block carrying a comment before its `:` label is no longer rewritten,
+ *     and a shadowing declaration written with an interior comment is now declined rather
+ *     than rewritten. A sample normalized under version 1 therefore carries a different
+ *     transform than one normalized under version 2, so their samples must never pool -
+ *     the identical reason recorded for every prior move above.
+ *   - when `NORMALIZER_VERSION` went 2 -> 3 (testbench-dialect-normalization group 15).
+ *     That ONE constant moved and nothing else in the identity did, and the rewrite-set
+ *     change is larger than the 1 -> 2 one: the `unnamed-begin-declaration` rule now MOVES
+ *     a block's declarations to the top of that block rather than only inserting a label -
+ *     position, not the label, is what the parser reads, which took the class from 0 of 29
+ *     committed fixtures fixed to 25 of 29. Four decisions moved with it: a block whose
+ *     declarations already precede its first statement is no longer touched at all, a
+ *     `genvar`-carrying block is declined `declaration-not-relocatable`, a `for`-header
+ *     declaration is no longer a block item, and a parameterized range bound is no longer
+ *     misread as a declared name. A sample normalized under version 2 therefore carries a
+ *     materially different transform than one normalized under version 3, so their samples
+ *     must never pool - the identical reason recorded for every prior move above.
  */
-const SMOKE_RUN_CONFIG_HASH = '0e45a8995706a637';
+const SMOKE_RUN_CONFIG_HASH = 'f7a172ae94c67954';
 
 /**
  * The config hash the committed campaign-readiness slice config currently produces.
@@ -90,7 +118,7 @@ const SMOKE_RUN_CONFIG_HASH = '0e45a8995706a637';
  * recorded samples (Requirement 9.6, 9.7) are keyed by this exact hash, so a config change
  * that would silently orphan them must fail a test instead of passing unnoticed.
  *
- * It has MOVED three times so far:
+ * It has MOVED every time deliberately; the full history is the bullet list, not a count:
  *   - when `INSTRUMENT_POLICY_VERSION` was folded into the identity (task 10.1 of
  *     instrument-precheck-and-attribution) - the identical reason recorded in
  *     `SMOKE_RUN_CONFIG_HASH`'s history above.
@@ -112,8 +140,32 @@ const SMOKE_RUN_CONFIG_HASH = '0e45a8995706a637';
  *     the Eval_Harness's positive-control-path repair are active is a different experiment
  *     from the one before it, and a run before the repair capability existed must never
  *     pool with a run after it.
+ *   - when `NORMALIZER_VERSION` arrived and `TESTBENCH_REPAIR_POLICY_VERSION` went 1 -> 2
+ *     (testbench-dialect-normalization) - the identical reason recorded in
+ *     `SMOKE_RUN_CONFIG_HASH`'s history above: a run before the dialect normalizer existed
+ *     (repair driven only by the control loop) and a run after it (repair retired in favor
+ *     of the normalizer) answer a different question about the same testbench-generation
+ *     failure, so their samples must never pool.
+ *   - when `NORMALIZER_VERSION` went 1 -> 2 (testbench-dialect-normalization group 13) -
+ *     the identical reason recorded in `SMOKE_RUN_CONFIG_HASH`'s history above. That ONE
+ *     constant moved and nothing else in the identity did: the set of rewrites changed,
+ *     because a comment is now treated as the whitespace it lexically is, so an
+ *     already-named block carrying a comment is no longer rewritten and a shadowing
+ *     declaration written with an interior comment is now declined rather than rewritten.
+ *     This slice exists to measure the Testbench_Agent, and the normalizer runs on every
+ *     testbench it produces, so pooling across the change would average the instrument
+ *     under one transform with the instrument under another.
+ *   - when `NORMALIZER_VERSION` went 2 -> 3 (testbench-dialect-normalization group 15) -
+ *     the identical reason recorded in `SMOKE_RUN_CONFIG_HASH`'s history above. That ONE
+ *     constant moved and nothing else in the identity did: the rule now MOVES a block's
+ *     declarations to the top of that block rather than only inserting a label, which is
+ *     what the parser actually reads, and took the `unnamed-begin-declaration` class from
+ *     0 of 29 committed fixtures fixed to 25 of 29. This slice exists to measure the
+ *     Testbench_Agent, and the normalizer runs on every testbench it produces, so pooling
+ *     across a change of that size would average the instrument under one transform with
+ *     the instrument under another.
  */
-const TBSLICE_RUN_CONFIG_HASH = 'd098398e36cd3095';
+const TBSLICE_RUN_CONFIG_HASH = 'fa9ec5a014b07e0f';
 
 /** Lowercase hex SHA-256, the digest the CLI injects. */
 function sha256Hex(text: string): string {
@@ -395,6 +447,18 @@ describe('the config identity that scopes a resume', () => {
       throw new Error(`the committed smoke config is invalid: ${parsed.error.message}`);
     }
     expect(sweepConfigHash(parsed.value, sha256Hex)).toBe(SMOKE_RUN_CONFIG_HASH);
+    // Guards against a fold-in that silently fails to move the identity: if this ever
+    // matches the pre-normalizer hash again, the constant above was pasted from stale
+    // output instead of a fresh observed run.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('0e45a8995706a637');
+    // The same guard one bump later: `57510b0540933dd2` is the hash under
+    // NORMALIZER_VERSION 1. If the constant above ever reads it again, the 1 -> 2 bump
+    // silently did not reach the identity.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('57510b0540933dd2');
+    // And one bump later again: `832f0bff098e4469` is the hash under NORMALIZER_VERSION 2.
+    // These guards STACK rather than replace - every superseded value stays a test failure,
+    // so a bump that failed to reach the identity can never read as a silent pass.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('832f0bff098e4469');
   });
 
   it('still matches the committed campaign-readiness slice config, so its recorded samples stay resumable', async () => {
@@ -418,6 +482,18 @@ describe('the config identity that scopes a resume', () => {
     expect(parsed.value.ks).toEqual([1]);
 
     expect(sweepConfigHash(parsed.value, sha256Hex)).toBe(TBSLICE_RUN_CONFIG_HASH);
+    // Guards against a fold-in that silently fails to move the identity: if this ever
+    // matches the pre-normalizer hash again, the constant above was pasted from stale
+    // output instead of a fresh observed run.
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('d098398e36cd3095');
+    // The same guard one bump later: `49c4a7f86dd25e1a` is the hash under
+    // NORMALIZER_VERSION 1. If the constant above ever reads it again, the 1 -> 2 bump
+    // silently did not reach the identity.
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('49c4a7f86dd25e1a');
+    // And one bump later again: `7ae7c413d6a8b221` is the hash under NORMALIZER_VERSION 2.
+    // These guards STACK rather than replace - every superseded value stays a test failure,
+    // so a bump that failed to reach the identity can never read as a silent pass.
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('7ae7c413d6a8b221');
   });
 });
 

@@ -101,6 +101,11 @@ function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
     // report. A test about the repair fields sets both explicitly.
     repairAttempted: false,
     repairAccepted: false,
+    // No repair was attempted, so there is no decline stage to name.
+    repairDeclineReason: null,
+    // The default sample's testbench was unchanged by normalization, so there is no
+    // visibility gap to report.
+    checkNameVisibilitySignal: false,
     durationMs: 1_000,
     completedAtMs: 1_000,
     failureNote: null,

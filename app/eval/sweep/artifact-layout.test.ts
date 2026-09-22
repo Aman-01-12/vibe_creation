@@ -95,6 +95,12 @@ function artifacts(overrides: Partial<EvalSampleArtifacts> = {}): EvalSampleArti
     repairProvenance: NO_REPAIR,
     rejectedPreRepairTestbench: null,
     repairHint: null,
+    precheckDiagnostic: null,
+    repairDeclineReason: null,
+    checkNameVisibilitySignal: false,
+    preNormalizationTestbench: null,
+    normalizerReport: null,
+    normalizerReportFindingsTruncated: false,
     ...overrides,
   };
 }

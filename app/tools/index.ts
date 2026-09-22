@@ -11,6 +11,7 @@ import { CORE_LAYER } from '@app/core';
 export * from './sandbox/index.js';
 export * from './simulator/index.js';
 export * from './synth/index.js';
+export * from './verilog/source-mask.js';
 
 /** Layer identifier, proving inward resolution of @app/core through the scaffold. */
 export const TOOLS_LAYER = `${CORE_LAYER}:tools` as const;

@@ -41,12 +41,17 @@ export {
 // handoff seam. Its integration test is task 14.2; its self-healing loop is 14.3.
 export {
   NO_REPAIR,
+  repairAccepted,
+  repairDeclined,
+  repairDeclineReasonOf,
   VerificationLoop,
   type CandidateGenerator,
   type GenerationContextOpener,
   type IndependentTestbenchGenerator,
   type InstrumentRefusalReason,
   type InstrumentRefusedModule,
+  type NormalizationProvenance,
+  type RepairDeclineReason,
   type RepairProvenance,
   type SetupFailureCause,
   type TeachModeHandoff,
@@ -111,6 +116,27 @@ export { INSTRUMENT_POLICY_VERSION } from './instrument-policy-version.js';
 // experiment identity the same way `INSTRUMENT_POLICY_VERSION` is.
 export { TESTBENCH_REPAIR_POLICY_VERSION } from './testbench-repair-policy-version.js';
 
+// The build constant identifying the Dialect_Normalizer's transform behaviour
+// (task 4.1): the set of mechanical rewrites applied to a generated Testbench
+// source before the Testbench_Precheck builds it, folded into the experiment
+// identity the same way `TESTBENCH_REPAIR_POLICY_VERSION` is.
+export { NORMALIZER_VERSION } from './normalizer-version.js';
+
+// The Dialect_Normalizer (task 4.5): the pure, model-free entry point that
+// composes the unnamed-begin, sized-literal, and prose-as-statement rules into
+// one desugaring pass over a generated Testbench source, applied once before
+// the Testbench_Precheck builds it. See `./dialect/normalizer.ts` for why this
+// is the sole caller of `scanSource` for this transform's whole call graph.
+export {
+  MAX_NORMALIZED_CHARS,
+  normalizeDialect,
+  type DialectClass,
+  type DialectDeclineCause,
+  type DialectFinding,
+  type NormalizerOutcome,
+  type NormalizerReport,
+} from './dialect/normalizer.js';
+
 // The Testbench_Precheck (task 3.1): a deterministic, model-free build check of a
 // generated Testbench against a Spec-derived Interface_Stub, run once before the
 // first repair iteration. See `app/tools/simulator/adapter.ts` for the
@@ -122,30 +148,15 @@ export {
 } from './testbench-precheck.js';
 
 // The Repair_Hint vocabulary and its one builder (testbench-repair-loop task
-// 1.1/1.2): the closed `DefectClass` enum, the two-member `RepairHint` union, the
-// `RepairTrigger` a hint is built from, and the pure `buildRepairHint` /
-// `ruleFamilyFor` functions. Exported here (rather than deferred to task 10.10)
-// because the property tests task 1.4 adds can only reach this module through
-// `@app/agent`'s package export map, which resolves `dist/index.js` alone.
+// 1.1/1.2; narrowed to one trigger by testbench-dialect-normalization task
+// 10.3): the single-member `RepairHint` union, the `RepairTrigger` a hint is
+// built from, and the pure `buildRepairHint` function. Exported here (rather
+// than deferred to task 10.10) because the property tests task 1.4 adds can
+// only reach this module through `@app/agent`'s package export map, which
+// resolves `dist/index.js` alone.
 export {
   buildRepairHint,
-  ruleFamilyFor,
   type BuildDiagnosticHint,
-  type ClassifiedFunctionalHint,
-  type DefectClass,
   type RepairHint,
   type RepairTrigger,
 } from './repair-hint.js';
-
-// The Testbench_Repair port (task 6.2): consulted by the Eval_Harness for a
-// Positive_Control-caused Repair_Trigger, before that sample's Session_Budget is
-// read for the record. No implementation lives here - see
-// `app/eval/testbench-repair.ts` for `EvalTestbenchRepair`.
-export {
-  type TestbenchRepair,
-  type TestbenchRepairDecision,
-  type TestbenchRepairDeclined,
-  type TestbenchRepairOutcome,
-  type TestbenchRepairRequest,
-  type TestbenchRepairResult,
-} from './testbench-repair.js';

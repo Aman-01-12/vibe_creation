@@ -40,6 +40,8 @@
 //
 // Pure: no clock, no I/O, no randomness.
 
+import { scanSource, type SourceMask } from '@app/tools';
+
 import {
   mutantIdOf,
   MAX_SITE_TEXT_CHARS,
@@ -100,111 +102,6 @@ const WHITESPACE: ReadonlySet<string> = new Set([' ', '\t', '\n', '\r', '\f', '\
  * tail of a sized literal written `8'd5`.
  */
 const OPERAND_TAIL: ReadonlySet<string> = new Set([')', ']', '}', "'"]);
-
-/** Per-character classification of the source, so no operator fires on non-code. */
-interface SourceMask {
-  /** `1` at offsets that are ordinary code; `0` inside a comment, string, or directive. */
-  readonly code: Uint8Array;
-  /** `[...]` nesting depth at each offset, saturating at 255; `0` outside any brackets. */
-  readonly bracketDepth: Uint8Array;
-  /** Offset of the first character of each line, so a site can report line and column. */
-  readonly lineStarts: readonly number[];
-}
-
-/** What the scanner is currently inside. */
-type ScanMode = 'code' | 'line-comment' | 'block-comment' | 'string' | 'directive';
-
-/**
- * Classify every character of the source in one left-to-right pass.
- *
- * Linear and allocation-bounded. Escapes inside a string literal are honoured so a `\"` does
- * not end the string early, which is what keeps a `$display("a + b")` out of reach of the
- * arithmetic operators.
- */
-function scanSource(source: string): SourceMask {
-  const code = new Uint8Array(source.length);
-  const bracketDepth = new Uint8Array(source.length);
-  const lineStarts: number[] = [0];
-  let mode: ScanMode = 'code';
-  let depth = 0;
-  let index = 0;
-  while (index < source.length) {
-    const character = source.charAt(index);
-    if (character === '\n') {
-      lineStarts.push(index + 1);
-    }
-    const step = advanceScan({ source, index, character, mode });
-    mode = step.mode;
-    if (step.isCode) {
-      depth = openBracket(character, depth);
-      code[index] = 1;
-      bracketDepth[index] = depth;
-      depth = closeBracket(character, depth);
-    }
-    index += step.width;
-  }
-  return { code, bracketDepth, lineStarts };
-}
-
-/** Depth after an opening bracket, so the bracket itself reads as inside one. */
-function openBracket(character: string, depth: number): number {
-  return character === '[' ? Math.min(255, depth + 1) : depth;
-}
-
-/** Depth after a closing bracket, so the bracket itself still read as inside one. */
-function closeBracket(character: string, depth: number): number {
-  return character === ']' ? Math.max(0, depth - 1) : depth;
-}
-
-/** One scanner step: the mode to continue in, how far to advance, and whether this is code. */
-interface ScanStep {
-  readonly mode: ScanMode;
-  readonly width: number;
-  readonly isCode: boolean;
-}
-
-/** Advance the scanner by one step from its current mode. */
-function advanceScan(input: {
-  readonly source: string;
-  readonly index: number;
-  readonly character: string;
-  readonly mode: ScanMode;
-}): ScanStep {
-  const { source, index, character, mode } = input;
-  if (mode === 'code') {
-    return advanceCode(source, index, character);
-  }
-  if (mode === 'line-comment' || mode === 'directive') {
-    return { mode: character === '\n' ? 'code' : mode, width: 1, isCode: false };
-  }
-  if (mode === 'block-comment') {
-    const ends = character === '*' && source.charAt(index + 1) === '/';
-    return { mode: ends ? 'code' : 'block-comment', width: ends ? 2 : 1, isCode: false };
-  }
-  if (character === '\\') {
-    // A backslash escape consumes the next character, so `\"` cannot close the literal.
-    return { mode: 'string', width: 2, isCode: false };
-  }
-  return { mode: character === '"' ? 'code' : 'string', width: 1, isCode: false };
-}
-
-/** Advance from code, entering a comment, a string, or a directive when one opens. */
-function advanceCode(source: string, index: number, character: string): ScanStep {
-  const next = source.charAt(index + 1);
-  if (character === '/' && next === '/') {
-    return { mode: 'line-comment', width: 2, isCode: false };
-  }
-  if (character === '/' && next === '*') {
-    return { mode: 'block-comment', width: 2, isCode: false };
-  }
-  if (character === '"') {
-    return { mode: 'string', width: 1, isCode: false };
-  }
-  if (character === '`') {
-    return { mode: 'directive', width: 1, isCode: false };
-  }
-  return { mode: 'code', width: 1, isCode: true };
-}
 
 /** One planned single-point mutation of the source. */
 interface MutationCandidate {

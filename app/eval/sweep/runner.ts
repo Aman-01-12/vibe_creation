@@ -30,8 +30,7 @@
 //
 // COST IS RECORDED, NEVER A LIMITER (see `./kill-switch.ts`).
 
-import { MODEL_TASKS, type SessionBudgetHandle } from '@app/agent';
-import type { Ulid } from '@app/core';
+import { MODEL_TASKS, repairDeclineReasonOf } from '@app/agent';
 
 import type { EvalArtifactSink } from '../artifact-sink.js';
 import { createEvalHarness } from '../harness.js';
@@ -42,8 +41,6 @@ import type { EvalLoopRunner } from '../loop-runner.js';
 import { noVerdictCauseOf } from '../no-verdict-cause.js';
 import type { EvalProblem } from '../problem.js';
 import type { SampleOutcomeStatus, SampleResult } from '../report.js';
-import { EvalTestbenchRepair, type RepairingTestbenchGenerator } from '../testbench-repair.js';
-import type { TestbenchRepair } from '@app/agent';
 import {
   armCostIsKnown,
   modelSignatureOf,
@@ -60,19 +57,6 @@ import {
 } from './results-log.js';
 import { captureOneSample, scheduleOneSample } from './sample-scheduler.js';
 import type { ThrottleGovernor } from './throttle-governor.js';
-
-/**
- * The concrete shape a real `EvalLoopRunner` may also satisfy: the production
- * `EvalVerificationLoopRunner` implements BOTH `EvalLoopRunner` and
- * `RepairingTestbenchGenerator` (see `../verification-loop-runner.ts`), but the
- * `loopRunnerFor` factory below is declared to return only the narrower
- * `EvalLoopRunner` - the port the harness actually drives a sample through. This
- * intersection is what `#armRunner` returns instead, so `#measure` can build a
- * per-sample `EvalTestbenchRepair` from the SAME arm runner instance without
- * widening `loopRunnerFor`'s own declared return type (which would let every OTHER
- * caller of that field start relying on a capability most fakes never implement).
- */
-type ArmRunner = EvalLoopRunner & Partial<RepairingTestbenchGenerator>;
 
 /**
  * How often a withheld worker re-asks for admission, in milliseconds.
@@ -163,19 +147,6 @@ export interface SweepRunnerDeps {
    * VALIDATED.
    */
   readonly instrumentControl: InstrumentControl | null;
-  /**
-   * Whether the positive-control-path Testbench_Repair is active for this run;
-   * `false`/absent skips it entirely, matching the harness's own absent-port
-   * behavior (`EvalHarnessDeps.testbenchRepairFor` absent).
-   *
-   * Unlike `goldenJudge`/`instrumentControl`, this is a boolean rather than an
-   * injected collaborator: the collaborator itself (`EvalTestbenchRepair`) needs a
-   * fresh `sessionId`/`budget` per sample that only the harness has at the point it
-   * is needed, so there is nothing arm-shared to inject here - only a decision of
-   * whether to build one at all, using the arm's OWN loop runner as the testbench
-   * generator (Req 8.4).
-   */
-  readonly testbenchRepairEnabled?: boolean;
   readonly resultsLog: ResultsLogPort;
   /** Sample slots a previous run already completed for this exact config. */
   readonly completed: CompletedSampleIndex;
@@ -263,6 +234,8 @@ function recordFor(
     mutation: recordedMutationCounts(sample.mutationProbe),
     repairAttempted: sample.repairProvenance.attempted,
     repairAccepted: sample.repairProvenance.accepted,
+    repairDeclineReason: repairDeclineReasonOf(sample.repairProvenance),
+    checkNameVisibilitySignal: sample.checkNameVisibilitySignal,
     durationMs: timing.durationMs,
     completedAtMs: timing.completedAtMs,
     // The harness derived this from the loop's own sanitized outcome; it is the only
@@ -324,6 +297,11 @@ function failureRecordFor(
     // for this path, not a genuine "no repair happened" answer.
     repairAttempted: false,
     repairAccepted: false,
+    // No decline was ever measured either - the mirror of `repairAttempted: false` above.
+    repairDeclineReason: null,
+    // The runner crashed before any testbench was normalized or controlled, so there is no
+    // visibility signal to report.
+    checkNameVisibilitySignal: false,
     durationMs: timing.durationMs,
     completedAtMs: timing.completedAtMs,
     failureNote: note,
@@ -427,7 +405,7 @@ type AdmissionResult =
  */
 export class SweepRunner {
   readonly #deps: SweepRunnerDeps;
-  readonly #runnerByArm = new Map<string, ArmRunner>();
+  readonly #runnerByArm = new Map<string, EvalLoopRunner>();
   readonly #artifactSinkByArm = new Map<string, EvalArtifactSink>();
 
   constructor(deps: SweepRunnerDeps) {
@@ -623,7 +601,6 @@ export class SweepRunner {
     // measures every slot of the problem, and a DECLINED slot must leave no evidence behind
     // claiming it failed setup.
     const artifactSink = armSink === undefined ? undefined : captureOneSample(armSink, slot);
-    const testbenchRepairFor = this.#buildTestbenchRepairFor(unit.arm);
     const built = createEvalHarness({
       loopRunner: scheduleOneSample(this.#armRunner(unit.arm), slot),
       caps: config.caps,
@@ -636,7 +613,6 @@ export class SweepRunner {
         ? {}
         : { instrumentControl: this.#deps.instrumentControl }),
       ...(artifactSink === undefined ? {} : { artifactSink }),
-      ...(testbenchRepairFor === undefined ? {} : { testbenchRepairFor }),
     });
     if (!built.ok) {
       // Unreachable in a validated run: the CLI builds a probe harness before dispatching
@@ -662,59 +638,13 @@ export class SweepRunner {
   /**
    * The arm's loop runner, built once in `#prepareArms` and shared by that arm's
    * concurrent samples - safe because it holds no per-sample state.
-   *
-   * Returns `ArmRunner` rather than the narrower `EvalLoopRunner`: the production
-   * runner also implements `RepairingTestbenchGenerator`, and `#buildTestbenchRepairFor`
-   * needs that capability from this SAME shared instance rather than building a second one.
    */
-  #armRunner(arm: SweepArmConfig): ArmRunner {
+  #armRunner(arm: SweepArmConfig): EvalLoopRunner {
     const runner = this.#runnerByArm.get(arm.name);
     if (runner === undefined) {
       // Unreachable: `#prepareArms` covers every configured arm and arm names are unique.
       throw new Error('Sweep runner error: no loop runner was prepared for this arm');
     }
     return runner;
-  }
-
-  /**
-   * Build this arm's per-sample `testbenchRepairFor` factory for the harness, or
-   * `undefined` when the run has repair disabled.
-   *
-   * `EvalTestbenchRepair`'s own contract is "one instance per sample, constructed
-   * with the sample's own `sessionId` and its own `SessionBudgetHandle`" (see
-   * `../testbench-repair.ts`), so the factory closure defers that construction to
-   * the harness's own per-sample call, exactly when it has both.
-   *
-   * The arm's own loop runner is the testbench generator this repair calls into
-   * (Req 8.4: the SAME `TestbenchAgent#repairTestbench` the precheck path calls
-   * directly), NOT a second one built here - `EvalVerificationLoopRunner` implements
-   * `repairTestbench` for exactly this purpose (see `../verification-loop-runner.ts`).
-   * A fake arm runner that never implements it (most test fakes) leaves this arm's
-   * repair silently unavailable rather than throwing: `EvalTestbenchRepair`'s own
-   * `repair()` only ever calls `repairTestbench` when actually invoked by the
-   * harness, and a fake that lacks the method would fail loudly there instead, which
-   * is why this factory is gated on `testbenchRepairEnabled` rather than on runtime
-   * feature-detection.
-   */
-  #buildTestbenchRepairFor(
-    arm: SweepArmConfig,
-  ): ((sessionId: Ulid, budget: SessionBudgetHandle) => TestbenchRepair) | undefined {
-    if (this.#deps.testbenchRepairEnabled !== true) {
-      return undefined;
-    }
-    const generator: RepairingTestbenchGenerator = {
-      repairTestbench: (request, budget) => {
-        const runner = this.#armRunner(arm);
-        if (runner.repairTestbench === undefined) {
-          // The arm's runner does not implement repair (e.g. a test fake); decline
-          // rather than throw, matching every other fail-safe path in this class.
-          return Promise.reject(
-            new Error('Sweep runner error: this arm runner does not implement repairTestbench'),
-          );
-        }
-        return runner.repairTestbench(request, budget);
-      },
-    };
-    return (sessionId, budget) => new EvalTestbenchRepair(generator, sessionId, budget);
   }
 }

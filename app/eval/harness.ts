@@ -42,15 +42,8 @@ import {
   type SessionBudget,
   type Ulid,
 } from '@app/core';
-import {
-  buildRepairHint,
-  NO_REPAIR,
-  type RepairHint,
-  type RepairProvenance,
-  type SessionBudgetHandle,
-  type TestbenchRepair,
-} from '@app/agent';
-import type { ResourceLimits } from '@app/tools';
+import { NO_REPAIR, type RepairProvenance } from '@app/agent';
+import { readCheckSignals, type ResourceLimits } from '@app/tools';
 
 import {
   candidateRtlOf,
@@ -85,8 +78,8 @@ import { MeteredSessionBudget } from './metered-budget.js';
 import { sampleSeed, type ReproducibilityConfig } from './reproducibility.js';
 import { meanPassAtK, passAtK } from './metrics.js';
 import type { EvalProblem } from './problem.js';
-import { repairTriggerFor } from './testbench-repair.js';
 import type { EvalLoopRunner, StudentSessionCaps } from './loop-runner.js';
+
 import type {
   CostEnvelopeReport,
   CostViolation,
@@ -146,33 +139,6 @@ export interface EvalHarnessDeps {
    * number (see `#captureArtifacts` and `./artifact-sink.ts`).
    */
   readonly artifactSink?: EvalArtifactSink;
-  /**
-   * Optional per-sample TESTBENCH_REPAIR factory, consulted for a
-   * Positive_Control-caused Repair_Trigger, before that sample's Session_Budget is
-   * read for the record.
-   *
-   * A FACTORY, not a fixed instance, for the same reason `#buildAdmission` builds a
-   * fresh `MemoizingInstrumentAdmission` per sample rather than taking one
-   * constructed instance: `EvalTestbenchRepair`'s own contract is "one instance per
-   * sample, constructed with the sample's own `sessionId` and its own
-   * `SessionBudgetHandle`" (see `./testbench-repair.ts`), and neither of those exists
-   * until `#runSample` has already minted them. Called at most once per sample - the
-   * SAME sessionId and SAME budget `#runSample` charges every other model call in
-   * that sample against - right after they are established, mirroring
-   * `#buildAdmission`'s placement.
-   *
-   * After the positive control runs, a sample whose testbench rejects the
-   * known-good reference (or fails to build with it) - AND for which the loop's
-   * own precheck-path repair was never attempted for this sample (Req 1.3, 1.4) -
-   * is offered exactly one repair attempt through the port this factory builds,
-   * before its verdict is finalized. On `{ decision: 'repaired' }`, the revised
-   * testbench is re-checked under the SAME control and mutation config a first
-   * draft is held to (Req 3.2, 3.6), and the sample's recorded fields reflect the
-   * re-check, not the original run. When absent, every sample's
-   * positive-control-path repair is skipped entirely and the run behaves exactly as
-   * it did before this seam existed.
-   */
-  readonly testbenchRepairFor?: (sessionId: Ulid, budget: SessionBudgetHandle) => TestbenchRepair;
   /** ULID source for per-session budget ids; defaults to `newUlid`. */
   readonly newId?: () => Ulid;
 }
@@ -189,8 +155,6 @@ interface ResolvedConfig {
   readonly goldenJudge: GoldenJudge | null;
   readonly instrumentControl: InstrumentControl | null;
   readonly artifactSink: EvalArtifactSink | null;
-  readonly testbenchRepairFor:
-    ((sessionId: Ulid, budget: SessionBudgetHandle) => TestbenchRepair) | null;
   readonly newId: () => Ulid;
 }
 
@@ -235,7 +199,6 @@ export function createEvalHarness(deps: EvalHarnessDeps): Result<EvalHarness, Do
       goldenJudge: deps.goldenJudge ?? null,
       instrumentControl: deps.instrumentControl ?? null,
       artifactSink: deps.artifactSink ?? null,
-      testbenchRepairFor: deps.testbenchRepairFor ?? null,
       newId,
     }),
   );
@@ -318,14 +281,11 @@ export class EvalHarness {
     const seed = sampleSeed(this.#resolved.config, problem.id, sampleIndex);
     const budget = this.#freshBudget();
     const admission = this.#buildAdmission(problem);
-    // Built right where the harness first has a fresh sessionId and budget for this sample,
-    // mirroring `#buildAdmission`'s placement: one `TestbenchRepair` per sample, bound to
-    // the SAME sessionId and budget every other model call in this sample charges against.
-    const testbenchRepair = this.#buildTestbenchRepair(budget);
     const outcome = await this.#drive(problem, sampleIndex, seed, budget, admission);
-    // Whether the loop already attempted (and used up) the one repair this sample is
-    // allowed, read before consulting the control or the repair port (Req 1.3, 1.4).
-    const repairProvenance = repairProvenanceOf(outcome);
+    // Req 7.10: read once the loop has returned; no repair-and-recheck sequence is
+    // held open, because none can occur.
+    const consumed = budget.consumed();
+    const stopReason = budget.stopReason();
     // Prefer the result the loop's own admission check already produced over the instrument
     // (Req 4.12, 4.14): the loop consults `admission.admit` at most once, before its first
     // iteration, and `recorded()` hands back the exact `InstrumentControlResult` that decision
@@ -335,123 +295,32 @@ export class EvalHarness {
     // returned Instrument_Refused before admission was ever reached) - does this fall back to
     // the pre-existing after-the-loop control, unchanged.
     const control = admission?.recorded() ?? (await this.#controlInstrument(problem, outcome));
-    // Only when the positive control just found exactly the two triggering defects, AND no
-    // repair has already been attempted for this sample, does this consult the repair port
-    // (Req 1.4).
-    const { finalOutcome, finalControl, wasRepaired, repairHint, preRepairTestbenchSource } =
-      await this.#repairIfTriggered(problem, outcome, control, repairProvenance, testbenchRepair);
-    // Read AFTER any repair-and-recheck sequence has fully completed, not immediately
-    // after `#drive`, so a repair attempt's own model call is accounted for (Req 5.4).
-    const consumed = budget.consumed();
-    const stopReason = budget.stopReason();
     const sample: SampleResult = {
       sampleIndex,
       seed,
-      passed: finalOutcome.status === 'verified',
-      outcomeStatus: finalOutcome.status,
-      failureNote: sampleFailureNote(finalOutcome),
-      noVerdictCause: noVerdictCauseOf(finalOutcome),
-      iterations: iterationsOf(finalOutcome),
+      passed: outcome.status === 'verified',
+      outcomeStatus: outcome.status,
+      failureNote: sampleFailureNote(outcome),
+      noVerdictCause: noVerdictCauseOf(outcome),
+      iterations: iterationsOf(outcome),
       costCents: consumed.costCents,
       promptTokens: consumed.promptTokens,
       completionTokens: consumed.completionTokens,
       totalTokens: consumed.tokens,
       unreportedUsageCalls: consumed.unreportedUsageCalls,
       stopReason,
-      goldenVerdict: await this.#judgeIndependently(problem, finalOutcome),
-      instrumentVerdict: finalControl.verdict,
-      mutationProbe: finalControl.mutation,
-      repairProvenance: wasRepaired
-        ? { attempted: true, accepted: finalControl.verdict.validity === 'valid' }
-        : repairProvenance,
+      goldenVerdict: await this.#judgeIndependently(problem, outcome),
+      instrumentVerdict: control.verdict,
+      mutationProbe: control.mutation,
+      // Req 1.6: COPIED from what the loop returned, never re-derived from acceptance.
+      repairProvenance: repairProvenanceOf(outcome),
+      // Req 5.8, 5.11: computed LAST, after every verdict field above is already
+      // decided, from the same `outcome`/`control` this method already holds - see
+      // `checkNameVisibilitySignalOf`'s own comment for why this changes nothing.
+      checkNameVisibilitySignal: checkNameVisibilitySignalOf(outcome, control),
     };
-    await this.#captureArtifacts(
-      problem,
-      sample,
-      finalOutcome,
-      finalControl,
-      repairHint,
-      preRepairTestbenchSource,
-    );
+    await this.#captureArtifacts(problem, sample, outcome, control);
     return sample;
-  }
-
-  /**
-   * Offer this sample exactly one Positive_Control-caused repair attempt, before its
-   * verdict is finalized (Req 1.1-1.5, 3.2, 3.6, 6.1-6.4, 8.4).
-   *
-   * Total by construction - every path returns a result, never a throw - so a repair
-   * attempt can never end a campaign that has hours invested in it. Every path that
-   * declines to repair returns the ORIGINAL outcome and control UNCHANGED and
-   * `wasRepaired: false`, so the caller proceeds exactly as it would with no repair
-   * capability at all:
-   *   - no port wired, or a precheck-path repair already spent this sample's one
-   *     attempt (Req 1.3, 1.4)
-   *   - the control's verdict is not one of the two triggering defects (Req 1.1, 1.2)
-   *   - the outcome carries no testbench source to repair (Req 1.6, 6.1)
-   *   - the port threw (Req 6.1, 6.2)
-   *   - the port declined (`not-repaired` / `undecided`) (Req 6.1, 6.4)
-   *
-   * On `{ decision: 'repaired' }`, the revised testbench is re-checked through the
-   * EXISTING `#controlInstrument` - unchanged, so the repaired testbench is held to
-   * identically the same standard a first draft is (Req 3.2, 3.6).
-   *
-   * `port` is this sample's own `TestbenchRepair` (see `#buildTestbenchRepair`), or
-   * `null` when no factory is wired - passed in rather than read off `this.#resolved`
-   * because the port is per-sample, not run-wide.
-   */
-  async #repairIfTriggered(
-    problem: EvalProblem,
-    outcome: DriveOutcome,
-    control: InstrumentControlResult,
-    precheckProvenance: RepairProvenance,
-    port: TestbenchRepair | null,
-  ): Promise<{
-    readonly finalOutcome: DriveOutcome;
-    readonly finalControl: InstrumentControlResult;
-    readonly wasRepaired: boolean;
-    /** The hint this attempt was built from, or `null` when no attempt was made. */
-    readonly repairHint: RepairHint | null;
-    /** The pre-repair testbench source, present only when `wasRepaired` is `true`. */
-    readonly preRepairTestbenchSource: string | null;
-  }> {
-    const declined = {
-      finalOutcome: outcome,
-      finalControl: control,
-      wasRepaired: false,
-      repairHint: null,
-      preRepairTestbenchSource: null,
-    };
-    if (port === null || precheckProvenance.attempted) {
-      return declined;
-    }
-    const trigger = repairTriggerFor(control.verdict, problem.spec, control.stderr);
-    if (trigger === null) {
-      return declined;
-    }
-    const previousSource = testbenchSourceOf(outcome);
-    if (previousSource === null) {
-      return declined; // Req 1.6, 6.1: no testbench source to repair.
-    }
-    const hint = buildRepairHint(trigger);
-    let decision;
-    try {
-      decision = await port.repair({ spec: problem.spec, previousSource, hint });
-    } catch {
-      return declined; // Req 6.1, 6.2: fail-safe, never propagates.
-    }
-    if (decision.decision !== 'repaired') {
-      return declined; // Req 6.1, 6.4: `not-repaired` / `undecided` proceed unrepaired.
-    }
-    const revisedOutcome = withRevisedTestbench(outcome, decision.revisedSource);
-    const recheck = await this.#controlInstrument(problem, revisedOutcome);
-    return {
-      finalOutcome: revisedOutcome,
-      finalControl: recheck,
-      wasRepaired: true,
-      repairHint: hint,
-      preRepairTestbenchSource: previousSource,
-    };
   }
 
   /**
@@ -513,23 +382,19 @@ export class EvalHarness {
     sample: SampleResult,
     outcome: CapturedOutcome,
     control: InstrumentControlResult,
-    repairHint: RepairHint | null,
-    preRepairTestbenchSource: string | null,
   ): Promise<void> {
     const sink = this.#resolved.artifactSink;
     if (sink === null) {
       return;
     }
+    // The hint and the pre-repair source are no longer supplied as separate parallel
+    // parameters (task 1.5's stopgap): `captureSampleArtifacts` derives both itself from
+    // `sample.repairProvenance` - the same provenance the loop returned, copied verbatim -
+    // so a hint and a provenance can no longer disagree (task 1.7).
     try {
       await sink.write(
         { problemId: problem.id, sampleIndex: sample.sampleIndex, seed: sample.seed },
-        captureSampleArtifacts({
-          outcome,
-          measured: sample,
-          control,
-          repairHint,
-          preRepairTestbenchSource,
-        }),
+        captureSampleArtifacts({ outcome, measured: sample, control }),
       );
     } catch {
       // Sanitized and fail-safe: the sink's error detail routinely names a path and an
@@ -621,23 +486,6 @@ export class EvalHarness {
     });
   }
 
-  /**
-   * Build this sample's per-sample Testbench_Repair port, or `null` when no factory
-   * is wired (mirrors `#buildAdmission`).
-   *
-   * One `TestbenchRepair` instance per sample, built from THIS sample's own
-   * `sessionId` and `SessionBudgetHandle` - the same `budget` `#runSample` already
-   * charges every other model call in this sample against - so a repair attempt is
-   * accounted for inside the identical budget a first draft is (Req 5.1, 5.4, 5.5).
-   */
-  #buildTestbenchRepair(budget: MeteredSessionBudget): TestbenchRepair | null {
-    const factory = this.#resolved.testbenchRepairFor;
-    if (factory === null) {
-      return null;
-    }
-    return factory(budget.sessionId, budget);
-  }
-
   /** Assemble the whole-run report from the per-problem results (pure). */
   #assembleReport(problems: readonly ProblemResult[]): EvalRunReport {
     const aggregatePassAtK: Record<number, number> = {};
@@ -725,32 +573,83 @@ function repairProvenanceOf(outcome: DriveOutcome): RepairProvenance {
     outcome.status === 'unverified' ||
     outcome.status === 'instrument-refused'
   ) {
-    return outcome.repairProvenance;
+    // Defensive fallback, mirroring `captureSampleArtifacts`'s identical read of the same
+    // required field (`./artifact-sink.ts`): a stale fixture built before this field became
+    // required on `VerificationOutcome` can still hand back `undefined` at runtime despite
+    // the compile-time guarantee, and `#runSample` reads `.attempted` transitively through
+    // `RepairProvenance`'s own consumers, so a silent `undefined` must not reach it.
+    return outcome.repairProvenance ?? NO_REPAIR;
   }
   return NO_REPAIR;
 }
 
 /**
- * A shallow copy of `outcome` with its testbench source replaced by
- * `revisedSource`, or `outcome` unchanged when it carries no `testbench` field.
+ * The pre-normalization required-check names this outcome's `NormalizationProvenance`
+ * carries, or `null` for a status that carries no `normalization` field at all.
  *
- * Legal because `testbenchSourceOf`/`candidateRtlOf` already read
- * `outcome.testbench.source` structurally (see `./artifact-sink.ts`), so every
- * downstream reader of the returned outcome - `#judgeIndependently`,
- * `#captureArtifacts`, the golden judge - sees the repaired source with no
- * further change. Total and safe for `blocked`/`setup-failed`/`runner-error`
- * too, even though `#repairIfTriggered` never reaches a trigger for those (a
- * status with no testbench source never fires `repairTriggerFor`).
+ * Mirrors `repairProvenanceOf`'s narrowing exactly, and for the same reason: `verified`,
+ * `unverified`, and `instrument-refused` are the only statuses that reach a point where a
+ * Testbench was normalized, and `blocked`, `setup-failed`, and `runner-error` never do, so
+ * they carry no `normalization` field to read and must return the "cannot compute" default
+ * rather than throw. The `?? null` guards the same stale-fixture gap `repairProvenanceOf`
+ * guards: a fixture built before `normalization` became required can still hand back
+ * `undefined` at runtime despite the compile-time guarantee.
  */
-function withRevisedTestbench(outcome: DriveOutcome, revisedSource: string): DriveOutcome {
+function preNormalizationCheckNamesOf(outcome: DriveOutcome): readonly string[] | null {
   if (
     outcome.status === 'verified' ||
     outcome.status === 'unverified' ||
     outcome.status === 'instrument-refused'
   ) {
-    return { ...outcome, testbench: { ...outcome.testbench, source: revisedSource } };
+    return outcome.normalization?.preNormalizationCheckNames ?? null;
   }
-  return outcome;
+  return null;
+}
+
+/**
+ * Whether this sample is the early-warning case Council B named: the Dialect_Normalizer
+ * changed the Testbench source, the changed Testbench then PASSED the Positive_Control, and
+ * at least one check name the PRE-normalization source emitted is absent from the names the
+ * control's own stdout reports (Req 5.8).
+ *
+ * A pure module-level function, not a method, because it reads no `this`. Both inputs are
+ * values `#runSample` already holds: the pre-normalization check names come from
+ * `outcome.normalization.preNormalizationCheckNames`, computed once in Loop_Setup where
+ * that source existed, and `control` is the SAME `InstrumentControlResult` the sample's
+ * verdict was decided from - `#runSample` passes the identical `outcome`/`control` it
+ * already used to fill every other field of `sample`, so this signal costs zero extra
+ * control runs and cannot make the control run twice (Req 4.12 of the precedent spec).
+ *
+ * The names the control reported are read with `readCheckSignals`, the oracle's own
+ * `CHECK <name> PASS|FAIL` grammar owner, rather than by substring search, so a check name
+ * that merely appears inside some other line is not counted as reported. A name that was
+ * reported but FAILED still counts as visible - only a name reported nowhere at all trips
+ * this signal, per the "absent from the names the control's stdout" wording: a testbench
+ * that silently dropped a check from its output is a stronger warning than one that ran the
+ * check and reported it failing.
+ *
+ * CHANGES NOTHING DOWNSTREAM (Req 5.11): this is computed after every verdict field of
+ * `sample` is already decided, written only to the record and the artifact, and read back
+ * nowhere. It cannot alter the Verification_Loop's oracle verdict or the Golden_Judge's
+ * verdict for any sample, because neither of those has been given a way to read it.
+ */
+function checkNameVisibilitySignalOf(
+  outcome: DriveOutcome,
+  control: InstrumentControlResult,
+): boolean {
+  if (control.verdict.validity !== 'valid') {
+    return false;
+  }
+  const preNormalizationNames = preNormalizationCheckNamesOf(outcome);
+  if (preNormalizationNames === null || preNormalizationNames.length === 0) {
+    return false;
+  }
+  const normalizationChanged = 'normalization' in outcome && outcome.normalization.report.changed;
+  if (!normalizationChanged) {
+    return false;
+  }
+  const reportedNames = new Set(readCheckSignals(control.stdout).checks.map((check) => check.name));
+  return preNormalizationNames.some((name) => !reportedNames.has(name));
 }
 
 /**
