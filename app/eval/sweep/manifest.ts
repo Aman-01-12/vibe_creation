@@ -33,7 +33,9 @@
 //   `instrumentPolicyVersion` is read directly from `INSTRUMENT_POLICY_VERSION` for the
 //   identical reason: a manifest must not be able to claim a policy the run did not
 //   actually use. `testbenchRepairPolicyVersion` is read directly from
-//   `TESTBENCH_REPAIR_POLICY_VERSION` following the same discipline.
+//   `TESTBENCH_REPAIR_POLICY_VERSION` following the same discipline, and
+//   `normalizerVersion` is read directly from `NORMALIZER_VERSION` following the same
+//   discipline: a manifest must not be able to claim a transform the run did not use.
 //
 // WHAT IS DELIBERATELY ABSENT
 //   No credential, obviously - but also no hostname and no absolute paths. A machine
@@ -44,6 +46,7 @@
 import {
   INSTRUMENT_POLICY_VERSION,
   MODEL_TASKS,
+  NORMALIZER_VERSION,
   TESTBENCH_PROMPT_VERSION,
   TESTBENCH_REPAIR_POLICY_VERSION,
   type ModelTask,
@@ -169,6 +172,14 @@ export interface SweepManifest {
    * be able to claim a policy the run did not actually use.
    */
   readonly testbenchRepairPolicyVersion: number;
+  /**
+   * The Dialect_Normalizer's transform version that ran for every sample in this run.
+   *
+   * Read directly from `NORMALIZER_VERSION`, the same way `testbenchRepairPolicyVersion`
+   * is read directly from its own constant: a manifest must not be able to claim a
+   * transform the run did not use.
+   */
+  readonly normalizerVersion: number;
   readonly reproducibility: ReproducibilityConfig;
   readonly toolchain: ManifestToolchain;
   readonly host: ManifestHost;
@@ -230,6 +241,7 @@ export function assembleManifest(input: ManifestInput): SweepManifest {
     testbenchPromptVersion: TESTBENCH_PROMPT_VERSION,
     instrumentPolicyVersion: INSTRUMENT_POLICY_VERSION,
     testbenchRepairPolicyVersion: TESTBENCH_REPAIR_POLICY_VERSION,
+    normalizerVersion: NORMALIZER_VERSION,
     reproducibility: config.reproducibility,
     toolchain: facts.toolchain,
     host: facts.host,

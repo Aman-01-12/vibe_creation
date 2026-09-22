@@ -93,6 +93,8 @@
 //
 // Pure: no clock, no I/O, no randomness.
 
+import type { RepairDeclineReason } from '@app/agent';
+
 import {
   countsInGoldenPassAtK,
   summarizeAgreement,
@@ -246,6 +248,12 @@ export interface UncheckedReasonCount {
   readonly count: number;
 }
 
+/** One Repair_Decline_Reason and how many declined Testbench_Repair attempts carried it. */
+export interface RepairDeclineReasonCount {
+  readonly reason: RepairDeclineReason;
+  readonly count: number;
+}
+
 /**
  * The `InstrumentUncheckedReason` members, in a fixed tie-break order.
  *
@@ -267,6 +275,24 @@ const INSTRUMENT_UNCHECKED_REASONS: readonly InstrumentUncheckedReason[] = [
   'no-golden-killed-mutants',
   'mutation-probe-unavailable',
   'control-resource-exhausted',
+];
+
+/**
+ * The `RepairDeclineReason` members, in a fixed tie-break order.
+ *
+ * `@app/agent` exports `RepairDeclineReason` as a type but no enumerable array of its
+ * members, so this list is kept here as a local const, following the exact precedent
+ * `./results-log.ts`'s own `REPAIR_DECLINE_REASONS` already set for the identical reason.
+ * Iterating this rather than the observed values keeps the rendered breakdown
+ * byte-identical no matter which order concurrent samples finished in, matching
+ * `INSTRUMENT_UNCHECKED_REASONS` immediately above.
+ */
+const REPAIR_DECLINE_REASONS: readonly RepairDeclineReason[] = [
+  'no-admissible-revision',
+  'coverage-validation-failed',
+  'recheck-failed',
+  'port-threw',
+  'port-unavailable',
 ];
 
 /** One arm's aggregated result. */
@@ -355,10 +381,16 @@ export interface ArmSummary {
    *
    * `repairedSamples` counts passing samples that needed a repair ITERATION of the
    * candidate design (the base hero-loop concept: same testbench, another try at the
-   * RTL). This field counts samples whose TESTBENCH ITSELF was revised by a
+   * RTL). This field counts samples whose TESTBENCH ITSELF was submitted for a
    * Testbench_Repair attempt, a distinct capability this spec adds. Read from
    * `SweepSampleRecord.repairAttempted`, so it is unaffected by whether the sample
    * ultimately passed.
+   *
+   * COUNTS EVERY DECLINED ATTEMPT TOO, not only accepted ones: `repairAttempted` persists
+   * `true` for a decline at any stage (Req 1.7), the fix for the defect where a declined
+   * control-path attempt used to persist as `attempted: false` and vanish from this count.
+   * `testbenchRepairAttempted - testbenchRepairAccepted` is therefore exactly the declined
+   * count, and `declinedByReason` below is that same count broken out by stage.
    */
   readonly testbenchRepairAttempted: number;
   /**
@@ -371,6 +403,17 @@ export interface ArmSummary {
    * what `validAfterRepair` below decomposes.
    */
   readonly testbenchRepairAccepted: number;
+  /**
+   * Of `testbenchRepairAttempted`, the declined ones broken out by Repair_Decline_Reason,
+   * most frequent first.
+   *
+   * Iterated over the closed five-member vocabulary rather than over the observed values,
+   * matching `uncheckedReasonCounts` and `deferredCauses` on this same interface: a fixed
+   * declaration order makes the rendered breakdown byte-identical regardless of completion
+   * order under concurrency. Zero-count reasons are dropped, so an arm with no declines
+   * gains no noise. Sums to exactly `testbenchRepairAttempted - testbenchRepairAccepted`.
+   */
+  readonly testbenchRepairDeclinedByReason: readonly RepairDeclineReasonCount[];
   /**
    * Of `instrument.validSamples`, how many needed no Testbench_Repair at all.
    *
@@ -389,6 +432,19 @@ export interface ArmSummary {
    * unchecked and is not part of this headline total at all.
    */
   readonly validAfterRepair: number;
+  /**
+   * Samples carrying Council B's early-warning signal: a normalized-and-silently-emptied
+   * testbench (Req 5.9, 5.11).
+   *
+   * Read from `SweepSampleRecord.checkNameVisibilitySignal`. Reported SEPARATELY from
+   * `validNoRepair` and `validAfterRepair` rather than folded into either: a signalled
+   * sample already reached `valid` (`checkNameVisibilitySignalOf` in `../harness.ts` can
+   * only be `true` for a sample whose control passed), so it is already counted in exactly
+   * one of those two buckets. Pooling a normalized-and-intact testbench with a
+   * normalized-and-silently-emptied one there would hide the very defect this signal
+   * exists to surface, which is why it gets its own count instead.
+   */
+  readonly checkNameVisibilitySignalSamples: number;
   /** Mean iterations over PASSING samples, or null when none passed. */
   readonly meanIterationsToPass: number | null;
   /**
@@ -716,6 +772,34 @@ function uncheckedReasonCounts(
   }).sort((left, right) => right.count - left.count);
 }
 
+/**
+ * Tally the declined Testbench_Repair attempts by Repair_Decline_Reason, most frequent first.
+ *
+ * Iterated over `REPAIR_DECLINE_REASONS` rather than over the observed values, for the same
+ * reason `uncheckedReasonCounts` and `deferredCauses` iterate their own fixed vocabularies: a
+ * declaration-order tie break makes the rendered breakdown byte-identical regardless of
+ * completion order under concurrency. Scoped to `repairAttempted && !repairAccepted` records,
+ * which is exactly the population `repairDeclineReason` is non-null for (see
+ * `decodeRepairDeclineReason` in `./results-log.ts`). Zero-count reasons are dropped, so an
+ * arm with no declines gains no noise.
+ */
+function repairDeclinedByReason(
+  records: readonly SweepSampleRecord[],
+): readonly RepairDeclineReasonCount[] {
+  const counts = new Map<RepairDeclineReason, number>();
+  for (const record of records) {
+    if (!record.repairAttempted || record.repairAccepted || record.repairDeclineReason === null) {
+      continue;
+    }
+    const reason = record.repairDeclineReason;
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  return REPAIR_DECLINE_REASONS.flatMap((reason) => {
+    const count = counts.get(reason) ?? 0;
+    return count === 0 ? [] : [{ reason, count }];
+  }).sort((left, right) => right.count - left.count);
+}
+
 /** Order two strings deterministically, so every rendered list is stable. */
 function compareText(left: string, right: string): number {
   if (left === right) {
@@ -820,6 +904,9 @@ function summarizeArm(
   const testbenchRepairAccepted = records.filter(
     (record) => record.repairAttempted && record.repairAccepted,
   ).length;
+  const checkNameVisibilitySignalSamples = records.filter(
+    (record) => record.checkNameVisibilitySignal,
+  ).length;
   const validated = instrumentControlMeasured(instrument);
   const eligible = validated ? denominatorRecords(records) : unvalidatedRecords(records);
   const goldenEligible = goldenDenominatorRecords(records);
@@ -848,8 +935,10 @@ function summarizeArm(
     repairedRate: sampleCount === 0 ? 0 : (passing.length - firstTrySamples) / sampleCount,
     testbenchRepairAttempted,
     testbenchRepairAccepted,
+    testbenchRepairDeclinedByReason: repairDeclinedByReason(records),
     validNoRepair: instrument.validSamples - testbenchRepairAccepted,
     validAfterRepair: testbenchRepairAccepted,
+    checkNameVisibilitySignalSamples,
     meanIterationsToPass: meanOrNull(passing.map((record) => record.iterations)),
     efficiency: armEfficiency(records, eligible),
     cost: armCost(records, passing.length),
@@ -1087,16 +1176,64 @@ function instrumentLines(summary: ArmSummary): readonly string[] {
  * `instrument.uncheckedWithVerdict > 0` above). Nested under the `instrument:` line it
  * decomposes, at the same indentation column `instrument-invalid`'s own defect breakdown
  * uses, because it is the same kind of thing: the headline total broken into its parts.
+ *
+ * `testbenchRepairAttempted` now counts EVERY declined attempt too (Req 1.7), so this line's
+ * own attempted/accepted pair already reflects that; `repairDeclineReasonLines` immediately
+ * below adds the per-reason breakdown of the gap between them, and
+ * `checkNameVisibilitySignalLine` adds the separately-counted early-warning signal.
  */
 function testbenchRepairLines(summary: ArmSummary): readonly string[] {
   if (summary.testbenchRepairAttempted === 0) {
-    return [];
+    return checkNameVisibilitySignalLine(summary);
   }
   return [
     `                   of these: valid-no-repair ${summary.validNoRepair}  ` +
       `valid-after-repair ${summary.validAfterRepair}  ` +
       `(testbench-repair attempted ${summary.testbenchRepairAttempted}, ` +
       `accepted-on-recheck ${summary.testbenchRepairAccepted})`,
+    ...repairDeclineReasonLines(summary.testbenchRepairDeclinedByReason),
+    ...checkNameVisibilitySignalLine(summary),
+  ];
+}
+
+/** The label that opens the Testbench_Repair decline breakdown; sets the value column. */
+const REPAIR_DECLINE_REASON_LABEL = '                   declined: ';
+
+/**
+ * Render the declined Testbench_Repair attempts broken out by Repair_Decline_Reason, one
+ * reason per line, most frequent first.
+ *
+ * Nested under the `of these:` attempted/accepted line exactly as `instrument-invalid`'s own
+ * defect breakdown is nested under it a few lines up: a reader who already stopped at the
+ * attempted/accepted pair finds WHICH STAGE each decline happened at in the same block
+ * instead of having to search a second one. Printed only when at least one attempt was
+ * declined, matching every other conditional breakdown in this file.
+ */
+function repairDeclineReasonLines(counts: readonly RepairDeclineReasonCount[]): readonly string[] {
+  if (counts.length === 0) {
+    return [];
+  }
+  const continuation = ' '.repeat(REPAIR_DECLINE_REASON_LABEL.length);
+  return counts.map(
+    ({ reason, count }, index) =>
+      `${index === 0 ? REPAIR_DECLINE_REASON_LABEL : continuation}${reason} x${count}`,
+  );
+}
+
+/**
+ * Render Council B's early-warning signal count: a normalized-and-silently-emptied testbench
+ * (Req 5.9, 5.11).
+ *
+ * REPORTED SEPARATELY from `valid-no-repair` and `valid-after-repair` above rather than folded
+ * into either, so a normalized-and-silently-emptied testbench is never pooled with a
+ * normalized-and-intact one (see `ArmSummary.checkNameVisibilitySignalSamples`). Printed
+ * whenever the instrument was measured at all, even at zero, because a reader who saw the line
+ * once and stops seeing it must not wonder whether the signal is still being computed.
+ */
+function checkNameVisibilitySignalLine(summary: ArmSummary): readonly string[] {
+  return [
+    `                   check-name-visibility-signal: ${summary.checkNameVisibilitySignalSamples} ` +
+      '(normalized testbench whose check name(s) went silent; see per-sample artifacts)',
   ];
 }
 

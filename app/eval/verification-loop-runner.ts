@@ -74,14 +74,11 @@ import {
   type ModelPriceTable,
   type ModelRouter,
   type ProviderTransport,
-  type RepairTestbenchRequest,
   type RoutingPolicy,
   type SecretManagerPort,
-  type SessionBudgetHandle,
   type SpecApprovalReceipt,
   type SpecApprovalSink,
   type SpecApprovalSinkError,
-  type TestbenchGenerationOutcome,
   type TracePersistencePort,
   type VerificationOutcome,
   type VerificationSetupFailed,
@@ -89,7 +86,6 @@ import {
 
 import type { EvalLoopRunner, EvalSampleRequest } from './loop-runner.js';
 import type { EvalProblem } from './problem.js';
-import type { RepairingTestbenchGenerator } from './testbench-repair.js';
 
 // The accepted sampling ranges are re-stated here on purpose: the transport rejects an
 // illegal value by THROWING at composition time, which is right for a wiring mistake
@@ -252,40 +248,21 @@ function admissionFor(problem: EvalProblem, intent: IntentSession): GenerationAd
   return { intent, spec: problem.spec };
 }
 
-/**
- * The two transport-sampling fields `#buildRouter` reads.
- *
- * Narrowed out of `EvalSampleRequest` so `repairTestbench` can build a router without
- * constructing a fake sample request just to satisfy the wider type: a repair call has
- * no sample index, problem, or budget of its own at the point the router is built.
- */
+/** The two transport-sampling fields `#buildRouter` reads. */
 interface SamplingParams {
   readonly seed: number;
   readonly temperature: number;
 }
 
 /**
- * The production `EvalLoopRunner`, and the `RepairingTestbenchGenerator` the eval
- * Testbench_Repair adapter (`./testbench-repair.ts`) depends on.
+ * The production `EvalLoopRunner`.
  *
  * Construct it once at the wiring root; the harness calls `runSample` per sample.
  * Host configuration is validated at construction (a bad region or a blank model id
  * throws HERE), so a wiring mistake can never masquerade as a provider outage or as a
  * model's poor score.
- *
- * `repairTestbench` is a SEPARATE entry point from `runSample`: a repair happens after
- * a sample's own `runSample` call has already returned, by which point that call's
- * router and recorder are gone (each `runSample` builds and discards its own). So this
- * method builds its OWN fresh router and recorder, exactly the way `runSample` does,
- * under a FRESH `sessionId` - the repair is not part of the original sample's Trace,
- * it is its own event. Seed and temperature are fixed to `0` rather than threaded from
- * the original sample: Req 15.10's reproducibility concern is about the ORIGINAL
- * sample's model calls being repeatable, not a repair call's, and every eval config in
- * this repo already pins `temperature: 0` for the whole campaign (see
- * `sweep.config.stage1-screen.json`), so this introduces no observable behavior change
- * versus threading the campaign's own fixed value through.
  */
-export class EvalVerificationLoopRunner implements EvalLoopRunner, RepairingTestbenchGenerator {
+export class EvalVerificationLoopRunner implements EvalLoopRunner {
   readonly #deps: ResolvedDeps;
 
   constructor(deps: EvalVerificationLoopRunnerDeps) {
@@ -317,33 +294,6 @@ export class EvalVerificationLoopRunner implements EvalLoopRunner, RepairingTest
     return loop.verify(admissionFor(request.problem, intent), request.budget, request.limits);
   }
 
-  /**
-   * Repair a previously-generated testbench, for the eval `TestbenchRepair` adapter
-   * (`EvalTestbenchRepair` in `./testbench-repair.ts`).
-   *
-   * A thin pass-through, exactly like `runSample` is a thin pass-through to
-   * `loop.verify`: this method adds no verdict, no retry, and no interpretation of
-   * its own. It builds a fresh router and recorder under a fixed neutral sampling
-   * (seed `0`, temperature `0`; see the class doc comment) and a fresh
-   * `TestbenchAgent` mirroring exactly how `#buildLoop` constructs one, then returns
-   * that agent's own `repairTestbench` outcome unchanged.
-   */
-  repairTestbench(
-    request: RepairTestbenchRequest,
-    budget: SessionBudgetHandle,
-  ): Promise<TestbenchGenerationOutcome> {
-    const recorder = this.#buildRecorder();
-    const router = this.#buildRouter({ seed: 0, temperature: 0 }, recorder);
-    const testbenchAgent = new TestbenchAgent({
-      router,
-      recorder,
-      retriever: this.#deps.retriever,
-      newId: this.#deps.newId,
-      now: this.#deps.now,
-    });
-    return testbenchAgent.repairTestbench(request, budget);
-  }
-
   /** The Trace recorder for one sample: the injected store, or a fresh in-memory one. */
   #buildRecorder(): ActionRecorder {
     const persistence = this.#deps.tracePersistence ?? new InMemoryTracePersistence();
@@ -358,8 +308,7 @@ export class EvalVerificationLoopRunner implements EvalLoopRunner, RepairingTest
   /**
    * The real Model_Router for one call: bedrock-mantle transport seeded per
    * `SamplingParams`, credentials resolved per adapter at the point of use, eval
-   * policy. Shared by `runSample` (the sample's own seed/temperature) and
-   * `repairTestbench` (the fixed neutral `{ seed: 0, temperature: 0 }`).
+   * policy.
    *
    * A missing credential or an unwired transport surfaces as a typed, redacted
    * provider failure that the agents turn into a sanitized setup failure - never a

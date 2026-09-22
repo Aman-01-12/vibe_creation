@@ -24,6 +24,7 @@
 
 import {
   INSTRUMENT_POLICY_VERSION,
+  NORMALIZER_VERSION,
   TESTBENCH_PROMPT_VERSION,
   TESTBENCH_REPAIR_POLICY_VERSION,
 } from '@app/agent';
@@ -63,6 +64,15 @@ const INSTRUMENT_POLICY_VERSION_KEY = '__instrumentPolicyVersion';
 const TESTBENCH_REPAIR_POLICY_VERSION_KEY = '__testbenchRepairPolicyVersion';
 
 /**
+ * The canonical JSON key `NORMALIZER_VERSION` is folded in under.
+ *
+ * Reserved rather than a `SweepConfig` field, for the same reason and in the same way as
+ * `TESTBENCH_REPAIR_POLICY_VERSION_KEY` above; see `../../agent/orchestrator/normalizer-version.ts`
+ * for why this is a distinct constant rather than a reuse of `TESTBENCH_REPAIR_POLICY_VERSION`.
+ */
+const NORMALIZER_VERSION_KEY = '__normalizerVersion';
+
+/**
  * The config fields DELIBERATELY excluded from the experiment's identity.
  *
  * The rule for this list is narrow: a field belongs here only if it cannot move a measured
@@ -84,14 +94,14 @@ const IDENTITY_EXCLUDED_FIELDS: readonly (keyof SweepConfig)[] = ['captureArtifa
 
 /**
  * The config's identity-bearing fields: everything except the excluded ones, plus the
- * prompt version, the instrument-policy version, and the testbench-repair-policy version
- * the running code carries.
+ * prompt version, the instrument-policy version, the testbench-repair-policy version,
+ * and the normalizer version the running code carries.
  *
- * `TESTBENCH_PROMPT_VERSION`, `INSTRUMENT_POLICY_VERSION`, and
- * `TESTBENCH_REPAIR_POLICY_VERSION` are all read directly from the import rather than
- * taken as a parameter, so `sweepConfigHash`'s signature - and every call site - stays
- * unchanged: a manifest or a resume check can never pass a stale or fabricated version,
- * only the one the code that is actually running was built with.
+ * `TESTBENCH_PROMPT_VERSION`, `INSTRUMENT_POLICY_VERSION`,
+ * `TESTBENCH_REPAIR_POLICY_VERSION`, and `NORMALIZER_VERSION` are all read directly from
+ * the import rather than taken as a parameter, so `sweepConfigHash`'s signature - and
+ * every call site - stays unchanged: a manifest or a resume check can never pass a stale
+ * or fabricated version, only the one the code that is actually running was built with.
  */
 function identityBearingFields(config: SweepConfig): Record<string, unknown> {
   const excluded = new Set<string>(IDENTITY_EXCLUDED_FIELDS);
@@ -103,6 +113,7 @@ function identityBearingFields(config: SweepConfig): Record<string, unknown> {
     [TESTBENCH_PROMPT_VERSION_KEY]: TESTBENCH_PROMPT_VERSION,
     [INSTRUMENT_POLICY_VERSION_KEY]: INSTRUMENT_POLICY_VERSION,
     [TESTBENCH_REPAIR_POLICY_VERSION_KEY]: TESTBENCH_REPAIR_POLICY_VERSION,
+    [NORMALIZER_VERSION_KEY]: NORMALIZER_VERSION,
   };
 }
 

@@ -34,6 +34,7 @@
 //   A record carries a verdict, counters, and sanitized classifications only. It is
 //   the artifact a number is cited from, so it is safe to attach to a report.
 
+import type { RepairDeclineReason } from '@app/agent';
 import type { BudgetStopReason } from '@app/core';
 
 import { RECORDED_GOLDEN_KINDS, type RecordedGoldenKind } from '../golden-judge.js';
@@ -199,8 +200,31 @@ import type { SampleOutcomeStatus } from '../report.js';
  * older) file is refused wholesale on read, by the identical `record.schemaVersion !==
  * RESULTS_SCHEMA_VERSION` refusal this bump number change already triggers for a v9 record;
  * no separate special-case code is needed for the refusal itself.
+ *
+ * v11 -> v12 (a DECLINED repair now names WHICH STAGE declined, and a repaired instrument's
+ * `repairAttempted`/`repairAccepted` pair CHANGED MEANING for that same population). Three
+ * facts, not one.
+ *
+ * First, `RepairProvenance` (from `@app/agent`, `testbench-dialect-normalization` Requirement
+ * 3) gained `RepairDeclineReason`: a closed five-member vocabulary - `no-admissible-revision`,
+ * `coverage-validation-failed`, `recheck-failed`, `port-threw`, `port-unavailable` - naming
+ * WHICH stage a decline happened at. `repairDeclineReason` is the new field that carries it.
+ *
+ * Second, and this is the meaning change, not just an addition: under v11 a declined
+ * control-path repair attempt persisted as `repairAttempted: false` - the RC-1 defect this
+ * spec fixes, where a decline recorded at the control trigger point could not be told apart
+ * from no attempt at all. Separately, the control-path trigger itself is retired in this same
+ * spec; there is no longer a second point a repair can be declined at. So for ANY sample where
+ * a decline happened, a v11 record's `repairAttempted`/`repairAccepted` pair is not even the
+ * same fact a v12 record's pair is - one of them may be silently misreporting an attempt as
+ * absent, and the mechanism that produced it no longer exists to be reasoned about.
+ *
+ * Third, there is no honest default for `repairDeclineReason` on a v11 (or older) record, for
+ * the identical reason `instrumentUncheckedReason` has none (see this constant's v9 -> v10
+ * note): the vocabulary did not exist when the record was written, so there is no question a
+ * v11 record could have answered. A fresh output directory is required.
  */
-export const RESULTS_SCHEMA_VERSION = 11;
+export const RESULTS_SCHEMA_VERSION = 12;
 
 /**
  * What an operator must do about a results file written before the schema bump.
@@ -210,7 +234,7 @@ export const RESULTS_SCHEMA_VERSION = 11;
  */
 export const STALE_SCHEMA_ADVICE: readonly string[] = Object.freeze([
   `this results file holds records from an older schema (current v${RESULTS_SCHEMA_VERSION}) and`,
-  'CANNOT be aggregated, for six independent reasons.',
+  'CANNOT be aggregated, for seven independent reasons.',
   '(1) Those records carry NO token counts. The primary efficiency figure is now tokens and',
   'wall clock per verified artifact - the things the endpoint and the clock actually report -',
   'and a token count that was metered per sample and then discarded cannot be recovered from',
@@ -270,6 +294,17 @@ export const STALE_SCHEMA_ADVICE: readonly string[] = Object.freeze([
   'default: filling in `false` would assert "never repaired" for a sample that was never',
   'measured against a repair capability at all, silently pooling "sound on the first draft"',
   'with "fixed after failing" under the identical word.',
+  '(7) A DECLINED repair now names WHICH STAGE declined, and the pair of fields introduced in',
+  '(6) changed meaning for that same population. `repairDeclineReason` is a new field: a',
+  'closed five-member vocabulary naming the stage a Testbench_Repair attempt declined at.',
+  'Separately, and this is the part that is not just an addition: under the older schema a',
+  'declined CONTROL-PATH repair attempt persisted as `repairAttempted: false` - it could not',
+  'be told apart from no attempt at all - and the control-path trigger that produced that',
+  'defect no longer exists in this build. So for any sample where a decline happened, an',
+  "older record's `repairAttempted`/`repairAccepted` pair is not the same fact a current",
+  "record's pair is, and there is no honest default for `repairDeclineReason` on an older",
+  'record for the same reason `instrumentUncheckedReason` has none: the vocabulary did not',
+  'exist when the record was written.',
   'Fix: re-run the campaign into a FRESH outputDir. The only records ever written at an older',
   'schema were throwaway smoke samples and one diagnostic calibration run.',
 ]);
@@ -341,6 +376,22 @@ const INSTRUMENT_UNCHECKED_REASONS: readonly InstrumentUncheckedReason[] = [
   'no-golden-killed-mutants',
   'mutation-probe-unavailable',
   'control-resource-exhausted',
+];
+
+/**
+ * The repair decline reasons a record may carry; a closed set, validated on read.
+ *
+ * `@app/agent` exports `RepairDeclineReason` as a type but no enumerable array of its
+ * members, so this list is kept here as a local const, following the exact precedent of
+ * `INSTRUMENT_UNCHECKED_REASONS` above. Every member must appear exactly once; a member
+ * added there and not here is a silent gap a new reason would fail to round-trip against.
+ */
+const REPAIR_DECLINE_REASONS: readonly RepairDeclineReason[] = [
+  'no-admissible-revision',
+  'coverage-validation-failed',
+  'recheck-failed',
+  'port-threw',
+  'port-unavailable',
 ];
 
 /**
@@ -538,6 +589,34 @@ export interface SweepSampleRecord {
    * trusted (see `decodeSampleRecord`).
    */
   readonly repairAccepted: boolean;
+  /**
+   * Which stage a declined Testbench_Repair attempt declined at, or `null` when this
+   * sample's repair was accepted or never attempted (`repairDeclineReasonOf(provenance)`
+   * from `@app/agent`, copied verbatim).
+   *
+   * Required, not optional, matching `repairAccepted` itself: `null` is the ACCURATE value
+   * for an accepted-or-not-attempted record, not a placeholder standing in for one, and a
+   * record where `repairAttempted` is `true` and `repairAccepted` is `false` has no honest
+   * `null` to carry here - the same closed-vocabulary reasoning `instrumentUncheckedReason`
+   * already applies to `instrumentValidity: 'unchecked'`. An unreadable value on a record
+   * that IS declined is refused on decode rather than defaulted (see `decodeSampleRecord`),
+   * because every reason string asserts a specific stage nobody may have measured.
+   */
+  readonly repairDeclineReason: RepairDeclineReason | null;
+  /**
+   * Council B's early-warning signal (Req 5.8, 5.11), copied verbatim from
+   * `checkNameVisibilitySignalOf` in `../harness.js`: whether the Dialect_Normalizer changed
+   * this sample's testbench, the changed testbench then passed the Positive_Control, and a
+   * check name the pre-normalization source emitted is absent from the names the control's
+   * own stdout reports.
+   *
+   * Sourced from two values the harness already computed for the sample's own verdict, so
+   * persisting it costs no extra control run. Changes NO verdict: it is written here and to
+   * the artifact only, and read back nowhere, matching `checkNameVisibilitySignalOf`'s own
+   * doc comment - it cannot alter the Verification_Loop's oracle verdict or the
+   * Golden_Judge's verdict for any sample.
+   */
+  readonly checkNameVisibilitySignal: boolean;
 }
 
 /** The key identifying one sample slot within one experiment. */
@@ -809,6 +888,27 @@ function decodeUncheckedReason(
 const INVALID_SHAPE = Symbol('invalid-shape');
 
 /**
+ * Decode `repairDeclineReason` against this record's own `repairAttempted`/`repairAccepted`
+ * pair, or `null` when it is unreadable - which INCLUDES the shape being wrong for that pair.
+ *
+ * Strict, matching `decodeUncheckedReason`'s exact reasoning: an accepted or never-attempted
+ * record must carry `null` here - there is no decline to name a stage for - so a record
+ * claiming BOTH is exactly as untrustworthy as a declined record missing its reason, and both
+ * are refused the same way rather than one being defaulted and the other refused.
+ */
+function decodeRepairDeclineReason(
+  attempted: boolean,
+  accepted: boolean,
+  value: unknown,
+): RepairDeclineReason | null | typeof INVALID_SHAPE {
+  if (accepted || !attempted) {
+    return value === null || value === undefined ? null : INVALID_SHAPE;
+  }
+  const reason = member(value, REPAIR_DECLINE_REASONS);
+  return reason ?? INVALID_SHAPE;
+}
+
+/**
  * Decode one untrusted record, or `null` when it is not a complete, valid record.
  *
  * Strict on purpose: a half-written or hand-edited line is DROPPED rather than
@@ -839,7 +939,11 @@ export function decodeSampleRecord(raw: unknown): SweepSampleRecord | null {
   ) {
     return null;
   }
-  if (typeof record.passed !== 'boolean' || typeof record.costKnown !== 'boolean') {
+  if (
+    typeof record.passed !== 'boolean' ||
+    typeof record.costKnown !== 'boolean' ||
+    typeof record.checkNameVisibilitySignal !== 'boolean'
+  ) {
     return null;
   }
   if (typeof record.repairAttempted !== 'boolean' || typeof record.repairAccepted !== 'boolean') {
@@ -858,6 +962,14 @@ export function decodeSampleRecord(raw: unknown): SweepSampleRecord | null {
   if (instrumentUncheckedReason === INVALID_SHAPE) {
     return null;
   }
+  const repairDeclineReason = decodeRepairDeclineReason(
+    record.repairAttempted,
+    record.repairAccepted,
+    record.repairDeclineReason,
+  );
+  if (repairDeclineReason === INVALID_SHAPE) {
+    return null;
+  }
   return {
     schemaVersion: RESULTS_SCHEMA_VERSION,
     ...identity,
@@ -866,8 +978,10 @@ export function decodeSampleRecord(raw: unknown): SweepSampleRecord | null {
     passed: record.passed,
     outcomeStatus,
     costKnown: record.costKnown,
+    checkNameVisibilitySignal: record.checkNameVisibilitySignal,
     repairAttempted: record.repairAttempted,
     repairAccepted: record.repairAccepted,
+    repairDeclineReason,
     stopReason: optionalMember(record.stopReason, STOP_REASONS),
     goldenVerdict: optionalMember(record.goldenVerdict, GOLDEN_KINDS),
     goldenFailureCount: nonNegativeInt(record.goldenFailureCount),

@@ -44,8 +44,15 @@
 //   crash. Pure: no clock, no I/O, no randomness.
 
 import type { BudgetStopReason, Verdict } from '@app/core';
-import { describeRepairHint, NO_REPAIR } from '@app/agent';
-import type { RepairHint, RepairProvenance, VerificationOutcome } from '@app/agent';
+import { describeRepairHint, NO_REPAIR, repairDeclineReasonOf } from '@app/agent';
+import type {
+  NormalizationProvenance,
+  NormalizerReport,
+  RepairDeclineReason,
+  RepairHint,
+  RepairProvenance,
+  VerificationOutcome,
+} from '@app/agent';
 import type { RunFailureCause } from '@app/tools';
 
 import type { RecordedGoldenVerdict } from './golden-judge.js';
@@ -77,6 +84,10 @@ export const ARTIFACT_CAPS = Object.freeze({
   maxMissingCheckNames: 256,
   /** Longest captured Testbench_Repair hint text, in characters. */
   maxRepairHintChars: 4_096,
+  /** Longest captured Precheck_Diagnostic text, in characters. */
+  maxPrecheckDiagnosticChars: 4_096,
+  /** Most Dialect_Normalizer findings captured from one sample's report. */
+  maxNormalizerFindings: 64,
 });
 
 /** Which end of an over-long text was kept. */
@@ -272,6 +283,58 @@ export interface EvalSampleArtifacts {
    * already enforces at the model seam. Bounded by `ARTIFACT_CAPS.maxRepairHintChars`.
    */
   readonly repairHint: string | null;
+  /**
+   * The Precheck_Diagnostic for this sample's `testbench-build-failed` precheck outcome,
+   * rendered through `describePrecheckDiagnostic`, or `null` when the precheck never
+   * failed the build.
+   *
+   * Read off `repairProvenance.hint.diagnostic`: a repair is attempted if and only if the
+   * precheck reported `testbench-build-failed` (`#admitInstrument`), and the ONE `RepairHint`
+   * member the loop ever constructs for that trigger already carries the diagnostic rendered
+   * through `describePrecheckDiagnostic` (`app/agent/orchestrator/repair-hint.ts`) - the same
+   * text the model itself saw. So this field can never drift from the model-facing hint, and
+   * needs no second rendering call here. Bounded by `ARTIFACT_CAPS.maxPrecheckDiagnosticChars`.
+   */
+  readonly precheckDiagnostic: string | null;
+  /**
+   * WHICH stage declined this sample's repair attempt, or `null` when no attempt was
+   * declined - copied verbatim from `repairDeclineReasonOf(repairProvenance)`, the SAME
+   * total reader the results record sources its `repairDeclineReason` field from, so the
+   * artifact and the record can never disagree about which reason a decline carries.
+   */
+  readonly repairDeclineReason: RepairDeclineReason | null;
+  /**
+   * Whether the required check names the PRE-normalization source emitted are all still
+   * reported by the CONTROL's stdout, or `false` when the outcome carries no way to answer -
+   * copied verbatim from the harness's own `checkNameVisibilitySignalOf`, the same value the
+   * results record persists, so the artifact can never disagree with the record it sits
+   * beside.
+   */
+  readonly checkNameVisibilitySignal: boolean;
+  /**
+   * The pre-normalization Testbench source, HEAD-kept like `testbenchSource`, or `null`
+   * when the Dialect_Normalizer left this sample's testbench unchanged.
+   *
+   * Read from `outcome.normalization.preNormalizationSource`, which is itself already
+   * `null` unless `report.changed` is `true` - so a sample the transform did not touch has
+   * no second copy of a source byte-identical to `testbenchSource` (Req 4.18). Reuses
+   * `ARTIFACT_CAPS.maxSourceChars` rather than declaring a cap of its own: this is the same
+   * kind of value `testbenchSource` already bounds, just from before the transform ran.
+   */
+  readonly preNormalizationTestbench: CapturedText | null;
+  /**
+   * What the Dialect_Normalizer did to this sample's ONE measured Testbench, or `null` when
+   * the outcome carries no `NormalizationProvenance` to read it from.
+   *
+   * Copied from `outcome.normalization.report` with no re-derivation: the findings are
+   * already bounded at construction by the normalizer's own per-rule scan, and this field
+   * exists so a reader can see WHICH rewrites or declines fired without re-running the
+   * transform. Findings capped at `ARTIFACT_CAPS.maxNormalizerFindings`, with the cut
+   * recorded on `normalizerReportFindingsTruncated` rather than silently dropped.
+   */
+  readonly normalizerReport: NormalizerReport | null;
+  /** Whether `normalizerReport.findings` was cut at `ARTIFACT_CAPS.maxNormalizerFindings`. */
+  readonly normalizerReportFindingsTruncated: boolean;
 }
 
 /**
@@ -323,25 +386,6 @@ export interface ArtifactCaptureInput {
    * read from `measured` regardless, so an artifact can never disagree with the record.
    */
   readonly control: InstrumentControlResult | null;
-  /**
-   * The Repair_Hint this sample's Testbench_Repair attempt was built from, or `null`
-   * / omitted when `measured.repairProvenance.attempted` is `false`.
-   *
-   * Neither `CapturedOutcome` nor `SampleResult` carries the hint VALUE - only
-   * `measured.repairProvenance`'s `{ attempted, accepted }` pair - so the harness
-   * supplies it directly from whichever trigger point actually built it (Req 4.7).
-   */
-  readonly repairHint?: RepairHint | null;
-  /**
-   * The testbench source a Testbench_Repair replaced, or `null` / omitted when no
-   * repair was accepted for this sample.
-   *
-   * Like `repairHint`, this is not reachable from `outcome` or `measured`: by the
-   * time the outcome the harness holds reflects a repair, its own testbench source
-   * IS the revised one (see `./harness.ts`'s `withRevisedTestbench`), so the PRE-
-   * repair source has to be supplied separately, from before that replacement.
-   */
-  readonly preRepairTestbenchSource?: string | null;
 }
 
 /** The verdicts a simulation may report; a closed set, validated on read. */
@@ -364,12 +408,14 @@ const RUN_FAILURE_CAUSES: readonly RunFailureCause[] = [
  * because a diagnostic derivation must not be able to fail a measured sample.
  */
 export function captureSampleArtifacts(input: ArtifactCaptureInput): EvalSampleArtifacts {
-  const { outcome, measured, control, repairHint = null, preRepairTestbenchSource = null } = input;
+  const { outcome, measured, control } = input;
   // Defensively read, like every other field on `measured`/`outcome` here: `measured` is
   // typed as a `SampleResult`, whose `repairProvenance` is required, but this derivation
   // must still degrade to the unrepaired baseline rather than throw for a caller that
   // hands in a malformed value (Req 6.6's "never throws" contract, extended to this field).
   const repairProvenance = measured.repairProvenance ?? NO_REPAIR;
+  const normalization = normalizationOf(outcome);
+  const normalizerReport = capNormalizerReport(normalization?.report ?? null);
   return {
     outcomeStatus: measured.outcomeStatus,
     passed: measured.passed,
@@ -379,16 +425,45 @@ export function captureSampleArtifacts(input: ArtifactCaptureInput): EvalSampleA
     goldenVerdict: measured.goldenVerdict,
     instrumentVerdict: measured.instrumentVerdict,
     repairProvenance,
-    // Req 4.6, 4.7: present only for an ACCEPTED repair - the only case with a
-    // genuinely distinct pre-repair source to contrast against `testbenchSource`.
+    // Req 2.3, 2.6: present only for an ACCEPTED repair - the only member of the
+    // union carrying a `replacedSource` - and read off the SAME provenance `.accepted`
+    // was just read from, rather than a second parallel field, so a hint and a
+    // provenance can no longer disagree (task 1.7).
     rejectedPreRepairTestbench: repairProvenance.accepted
-      ? captureText(preRepairTestbenchSource, ARTIFACT_CAPS.maxSourceChars, 'head')
+      ? captureText(repairProvenance.replacedSource, ARTIFACT_CAPS.maxSourceChars, 'head')
       : null,
-    // Req 4.7: present whenever a repair was ATTEMPTED, accepted or not - a hint was
-    // built and shown to the model either way.
+    // Req 2.3-2.6: present whenever a repair was ATTEMPTED, accepted or not - a hint was
+    // built and shown to the model either way. Read off the same narrowing: both attempted
+    // members carry `hint`.
     repairHint: repairProvenance.attempted
-      ? captureRepairHint(repairHint, ARTIFACT_CAPS.maxRepairHintChars)
+      ? captureRepairHint(repairProvenance.hint, ARTIFACT_CAPS.maxRepairHintChars)
       : null,
+    // Req 6.12: a repair is attempted if and only if the precheck reported
+    // `testbench-build-failed` (`#admitInstrument`), and the ONE `RepairHint` the loop
+    // ever builds for that trigger already carries `diagnostic` rendered through
+    // `describePrecheckDiagnostic` (`app/agent/orchestrator/repair-hint.ts`) - the bare
+    // diagnostic text, distinct from `repairHint` above, which wraps that SAME text in
+    // `describeRepairHint`'s model-facing prompt framing. Reading `hint.diagnostic`
+    // directly, rather than through `describeRepairHint`, keeps this field the diagnostic
+    // alone rather than the diagnostic plus a prompt sentence.
+    precheckDiagnostic: repairProvenance.attempted
+      ? repairProvenance.hint.diagnostic.slice(0, ARTIFACT_CAPS.maxPrecheckDiagnosticChars)
+      : null,
+    // Copied from the SAME total reader the results record sources its own
+    // `repairDeclineReason` field from, so the two can never disagree (Req 3.11).
+    repairDeclineReason: repairDeclineReasonOf(repairProvenance),
+    // Copied verbatim from `measured`, the same value the results record persists
+    // (Req 5.10, 5.11): computed once by the harness, never re-derived here.
+    checkNameVisibilitySignal: measured.checkNameVisibilitySignal,
+    // Req 4.18: `null` whenever `report.changed` is `false`, so a sample the transform
+    // left untouched carries no second copy of a source byte-identical to `testbenchSource`.
+    preNormalizationTestbench: captureText(
+      normalization?.preNormalizationSource ?? null,
+      ARTIFACT_CAPS.maxSourceChars,
+      'head',
+    ),
+    normalizerReport: normalizerReport?.report ?? null,
+    normalizerReportFindingsTruncated: normalizerReport?.truncated ?? false,
     candidateRtl: captureText(candidateRtlOf(outcome), ARTIFACT_CAPS.maxSourceChars, 'head'),
     testbenchSource: captureText(testbenchSourceOf(outcome), ARTIFACT_CAPS.maxSourceChars, 'head'),
     simulation: captureSimulation(outcome),
@@ -409,6 +484,52 @@ export function captureSampleArtifacts(input: ArtifactCaptureInput): EvalSampleA
     // there can be, so the artifact footprint stays bounded without a second cap here.
     mutation: control?.mutation ?? null,
   };
+}
+
+/**
+ * The `NormalizationProvenance` a terminal outcome carried, or `null` when the outcome's
+ * status carries none.
+ *
+ * `blocked`, `setup-failed`, and `runner-error` never reach a point where a Testbench was
+ * constructed and normalized (the same set `repairProvenanceOf` in `app/eval/harness.ts`
+ * excludes), so there is nothing to capture for them. `outcome.normalization` is a REQUIRED
+ * field on every member checked here (see `VerifiedModule`, `UnverifiedModule`,
+ * `InstrumentRefusedModule` in `app/agent/orchestrator/verification-loop.ts`), narrowed by
+ * `status` alone rather than by an untyped property read, so no defensive cast is needed to
+ * reach it.
+ */
+function normalizationOf(outcome: CapturedOutcome): NormalizationProvenance | null {
+  if (
+    outcome.status === 'verified' ||
+    outcome.status === 'unverified' ||
+    outcome.status === 'instrument-refused'
+  ) {
+    // Defensive fallback for a stale fixture built before this field became required,
+    // mirroring the identical `?? null` guard `app/eval/harness.ts`'s
+    // `preNormalizationCheckNamesOf` already applies to the same field.
+    return outcome.normalization ?? null;
+  }
+  return null;
+}
+
+/**
+ * A `NormalizerReport` with its `findings` capped at `ARTIFACT_CAPS.maxNormalizerFindings`,
+ * plus whether the cap cut anything, or `null` when there is no report to cap.
+ *
+ * The report's other fields - `normalizerVersion`, `changed`, `refusedWholeSource` - carry
+ * no per-finding growth, so only `findings` needs bounding here.
+ */
+function capNormalizerReport(
+  report: NormalizerReport | null,
+): { readonly report: NormalizerReport; readonly truncated: boolean } | null {
+  if (report === null) {
+    return null;
+  }
+  const truncated = report.findings.length > ARTIFACT_CAPS.maxNormalizerFindings;
+  const findings = truncated
+    ? report.findings.slice(0, ARTIFACT_CAPS.maxNormalizerFindings)
+    : report.findings;
+  return { report: { ...report, findings }, truncated };
 }
 
 /**

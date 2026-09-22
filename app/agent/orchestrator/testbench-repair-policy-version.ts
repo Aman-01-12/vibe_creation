@@ -17,4 +17,17 @@
 //   `__testbenchRepairPolicyVersion`, mirroring `__instrumentPolicyVersion`'s
 //   precedent), so all three identities can never be conflated and each is a
 //   one-line edit that cannot collide with an unrelated one.
-export const TESTBENCH_REPAIR_POLICY_VERSION = 1;
+//
+// WHY 1 -> 2 (testbench-dialect-normalization, Req 7.4)
+//   Version 1's regime had two repair trigger points: the precheck-path repair
+//   inside `#admitInstrument`, and a positive-control-path repair the harness
+//   attempted via `EvalTestbenchRepair`. This spec retires the positive-control-path
+//   trigger entirely - `EvalTestbenchRepair` and `#repairIfTriggered` are deleted,
+//   not merely disabled - leaving only the precheck-path trigger. That is exactly
+//   the change this constant's own contract above says cannot pass silently: a
+//   sample measured under version 1 (repair reachable from two trigger points)
+//   answers a different question than one measured under version 2 (repair
+//   reachable from one), even though the precheck-path repair itself is
+//   unchanged. The bump records that the trigger surface moved, not that the
+//   repair logic did.
+export const TESTBENCH_REPAIR_POLICY_VERSION = 2;

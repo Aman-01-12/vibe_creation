@@ -81,6 +81,13 @@ function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
     // `repairAccepted` without `repairAttempted` is refused (see the round-trip tests below).
     repairAttempted: false,
     repairAccepted: false,
+    // No repair was attempted, so there is no decline stage to name. A test about
+    // `repairDeclineReason` sets `repairAttempted` and `repairAccepted` explicitly too,
+    // because a declined-but-unnamed (or accepted-but-named) record is refused.
+    repairDeclineReason: null,
+    // The default sample's testbench was unchanged by normalization, so there is no
+    // visibility gap to report. A test about the signal sets it explicitly.
+    checkNameVisibilitySignal: false,
     durationMs: 42_000,
     completedAtMs: 1_700_000_000_000,
     failureNote: null,

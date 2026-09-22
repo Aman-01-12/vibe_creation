@@ -10,14 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type {
-  SessionBudgetHandle,
-  SetupFailureCause,
-  TestbenchRepair,
-  VerificationOutcome,
-  VerificationSetupFailed,
-} from '@app/agent';
-import type { Ulid } from '@app/core';
+import type { SetupFailureCause, VerificationOutcome, VerificationSetupFailed } from '@app/agent';
 import type { ResourceLimits } from '@app/tools';
 
 import {
@@ -28,11 +21,7 @@ import {
 } from './artifact-sink.js';
 import { countsInGoldenPassAtK, summarizeGoldenPassAtK } from './golden-judge.js';
 import type { GoldenJudge, GoldenJudgeRequest, RecordedGoldenVerdict } from './golden-judge.js';
-import {
-  countsInPassAtK,
-  summarizeInstrumentControl,
-  type InstrumentControl,
-} from './instrument-control.js';
+import { countsInPassAtK, summarizeInstrumentControl } from './instrument-control.js';
 import { createEvalHarness, type EvalHarnessDeps } from './harness.js';
 import {
   makeReproducibilityConfig,
@@ -750,64 +739,6 @@ describe('EvalHarness.run - per-sample artifact capture', () => {
     }).run(FIXED_EVAL_SUBSET);
 
     expect(withSink).toEqual(without);
-  });
-});
-
-describe('EvalHarness.run - the per-sample Testbench_Repair factory (Req 5.1, 5.4, 5.5)', () => {
-  it('calls testbenchRepairFor once, with this sample own sessionId and its own budget', async () => {
-    // An `unverified` outcome carrying a testbench source and the unrepaired baseline, so
-    // `#repairIfTriggered` has a source to repair and has not already spent its one attempt.
-    const runner = new FakeLoopRunner(() => ({
-      kind: 'outcome',
-      outcome: {
-        status: 'unverified',
-        iterations: 2,
-        candidate: { rtl: 'module m(input a, output y); assign y = a; endmodule' },
-        testbench: { source: 'module m_tb; endmodule' },
-        simulation: { verdict: 'fail', checks: [], stdout: '', stderr: '', exitCode: 1 },
-        failingCase: null,
-        stopReason: 'max-iterations',
-        repairProvenance: { attempted: false, accepted: false },
-      } as unknown as VerificationOutcome,
-    }));
-    // A positive control reporting exactly one of the two triggering defects, so
-    // `#repairIfTriggered` finds a trigger and proceeds to consult the port.
-    const control: InstrumentControl = {
-      check: () =>
-        Promise.resolve({
-          verdict: { validity: 'invalid', defect: 'TESTBENCH_FAILED_REFERENCE' },
-          stdout: '',
-          stderr: '',
-          exitCode: 1,
-          mutation: null,
-        }),
-    };
-    const calls: { readonly sessionId: string; readonly budget: unknown }[] = [];
-    const stubPort: TestbenchRepair = {
-      repair: () => Promise.resolve({ decision: 'not-repaired' }),
-    };
-    const testbenchRepairFor = (sessionId: Ulid, budget: SessionBudgetHandle): TestbenchRepair => {
-      calls.push({ sessionId, budget });
-      return stubPort;
-    };
-
-    const evalHarness = harness({
-      loopRunner: runner,
-      instrumentControl: control,
-      testbenchRepairFor,
-      config: config({ sampleCount: 1 }),
-      ks: [1],
-    });
-    await evalHarness.run([firstProblem()]);
-
-    expect(calls).toHaveLength(1);
-    const [call] = calls;
-    if (call === undefined) throw new Error('testbenchRepairFor was not called');
-    expect(typeof call.sessionId).toBe('string');
-    expect(call.sessionId.length).toBeGreaterThan(0);
-    // The SAME budget instance the sample's other model calls charge against, not a copy.
-    expect(call.budget).toHaveProperty('charge');
-    expect(call.budget).toHaveProperty('sessionId', call.sessionId);
   });
 });
 

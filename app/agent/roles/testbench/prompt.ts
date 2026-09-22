@@ -63,7 +63,7 @@
 // `gotcha-stage1-screen-v2-dialect-and-concurrency-are-the-two-instrument-defects`.
 
 import type { ModelRequest } from '../../model-router/index.js';
-import type { DefectClass, RepairHint } from '../../orchestrator/repair-hint.js';
+import type { RepairHint } from '../../orchestrator/repair-hint.js';
 
 import type { KnowledgePassage } from '@app/knowledge';
 import type { ClockingContract, ModuleInterface, PortDirection, Spec } from '@app/core';
@@ -275,10 +275,6 @@ function handshakeQualifierNames(
 
 /**
  * The declared single-bit outputs a testbench may legally wait on for timing.
- *
- * Exported so `repair-hint.ts`'s `ruleFamilyFor` can read the identical interface
- * fact this module's own `describeTiming` branches on, rather than re-deriving a
- * second copy of the same handshake-keyword scan.
  */
 export function timingQualifierNames(moduleInterface: ModuleInterface): readonly string[] {
   return handshakeQualifierNames(moduleInterface, 'output');
@@ -289,7 +285,6 @@ export function timingQualifierNames(moduleInterface: ModuleInterface): readonly
  *
  * The input-side peer of `timingQualifierNames`, and the only signal from which a
  * testbench may legally derive which of the inputs it drove belong to one result.
- * Exported for the same reason `timingQualifierNames` is.
  */
 export function inputQualifierNames(moduleInterface: ModuleInterface): readonly string[] {
   return handshakeQualifierNames(moduleInterface, 'input');
@@ -381,9 +376,6 @@ function describeInputWindow(moduleInterface: ModuleInterface): string {
  * derives them, so "is there a vector to index" is answered by the declaration rather
  * than guessed from a name. A single-bit interface has no index to walk, and telling
  * the model to walk one would assert a structure the ports cannot justify.
- *
- * Exported for the same reason `timingQualifierNames` is: `repair-hint.ts`'s
- * `ruleFamilyFor` reads this same fact rather than re-deriving it.
  */
 export function declaresVectorDataPort(moduleInterface: ModuleInterface): boolean {
   const { clockName, resetName } = moduleInterface.clocking;
@@ -558,57 +550,15 @@ export function buildTestbenchModelInput(
 }
 
 /**
- * One model-facing hint sentence per `DefectClass` member (Req 2.3, 2.9).
+ * Render a Repair_Hint as prompt text (Req 2.1, 2.2, 2.9).
  *
- * Each sentence reuses the SAME wording register as this file's own rule
- * descriptions, and references the named rule above by name where doing so is
- * safe: that rule's own text is unconditional or interface-derived, carrying no
- * RTL or reference-derived content, so pointing the model back at it adds no
- * new channel for the reference's observed behaviour to enter (Req 2.4-2.6).
- * `unclassified` is deliberately generic: this vocabulary member exists for a
- * functional failure the closed set cannot name, so nothing more specific can
- * honestly be said.
- */
-const DEFECT_CLASS_HINTS: Readonly<Record<DefectClass, string>> = {
-  'state-anchoring': [
-    'This failure suggests your testbench re-anchored an expected value to a',
-    'state the declared interface cannot reach - see the State anchoring rule',
-    'above.',
-  ].join('\n'),
-  concurrency: [
-    'This failure suggests your testbench stepped a shadow implementation of the',
-    'design instead of observing it, or sampled an output before it settled -',
-    'see the Concurrency rule above.',
-  ].join('\n'),
-  timing: [
-    'This failure suggests your testbench assumed a latency, pipeline depth, or',
-    'valid cycle the Spec does not state - see the Timing rule above.',
-  ].join('\n'),
-  'input-window': [
-    'This failure suggests your testbench assumed which of the driven inputs',
-    'form one result, rather than deriving that from the Spec - see the Input',
-    'windows rule above.',
-  ].join('\n'),
-  'stimulus-adequacy': [
-    'This failure suggests your stimulus never reached a value that would',
-    'distinguish a correct design from a wrong one - see the Stimulus adequacy',
-    'rule above.',
-  ].join('\n'),
-  unclassified: [
-    'This failure does not match a known defect class; re-read the Spec goal,',
-    'constraints, and module interface below and reconsider the testbench as a',
-    'whole.',
-  ].join('\n'),
-};
-
-/**
- * Render a Repair_Hint as prompt text (Req 2.1, 2.2, 2.3, 2.9).
- *
- * A `build-diagnostic` hint includes the toolchain's own diagnostic text
- * verbatim, under a clear label. A `classified-functional` hint includes only
- * the failing check's name and the one-sentence, defect-class-specific
- * translation above - never the reference's observed value, a diff, or its
- * source, none of which this type can even carry (Req 2.4, 2.5, 2.6).
+ * Includes the toolchain's own diagnostic text verbatim, under a clear label -
+ * never a reference's observed value, a diff, or its source, none of which
+ * this type can even carry (Req 2.4, 2.5, 2.6). Testbench-dialect-normalization
+ * task 10.3 retired the two positive-control trigger points, so `RepairHint`
+ * is now a single-member union and this function has no second branch; kept
+ * as its own function (rather than inlined at the one call site) so a future
+ * second hint kind is additive rather than a rewrite of its signature.
  *
  * Exported (testbench-repair-loop task 8.7) so `app/eval/artifact-sink.ts`'s
  * `EvalSampleArtifacts.repairHint` renders the identical text the model itself
@@ -616,13 +566,7 @@ const DEFECT_CLASS_HINTS: Readonly<Record<DefectClass, string>> = {
  * same `RepairHint`.
  */
 export function describeRepairHint(hint: RepairHint): string {
-  if (hint.kind === 'build-diagnostic') {
-    return ['The testbench did not compile. Toolchain diagnostic:', hint.diagnostic].join('\n');
-  }
-  return [
-    `The check "${hint.failingCheckName}" failed.`,
-    DEFECT_CLASS_HINTS[hint.defectClass],
-  ].join('\n');
+  return ['The testbench did not compile. Toolchain diagnostic:', hint.diagnostic].join('\n');
 }
 
 /**

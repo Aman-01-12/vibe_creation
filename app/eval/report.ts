@@ -154,6 +154,18 @@ export interface SampleResult {
    * means the sample's recorded fields describe the ORIGINAL, unrepaired run.
    */
   readonly repairProvenance: RepairProvenance;
+  /**
+   * Council B's early-warning signal (Req 5.8): the Dialect_Normalizer changed this
+   * sample's Testbench source, the changed Testbench then passed the Positive_Control, and
+   * at least one check name the PRE-normalization source emitted is absent from the names
+   * the control's own stdout reports.
+   *
+   * Computed strictly AFTER every other field above, from the same outcome and control
+   * those fields were already decided from (Req 5.11): nothing reads this field back, so
+   * it can change neither the loop's own oracle verdict nor `goldenVerdict` for any sample.
+   * See `checkNameVisibilitySignalOf` in `./harness.ts` for the full derivation.
+   */
+  readonly checkNameVisibilitySignal: boolean;
 }
 
 /** The aggregated result for one problem across all its samples. */
