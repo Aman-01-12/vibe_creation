@@ -1,0 +1,110 @@
+{
+  "_README": [
+    "The Measurement_Slice (testbench-failure-reportability): does the Check_Report_Rule move",
+    "the Valueless_Report_Rate off its 55.2% Pinned_Baseline?",
+    "76 slots: 4 Model_Arms x 19 Campaign_Designs x 1 sample, CONTROL ARM ONLY.",
+    "Control only because the defect is a Control 57.3% / Grounded 53.0% split, so one arm",
+    "answers the question and the other costs 76 more slots to answer it twice.",
+    "Every arm's seed, temperature, caps, limits, and modelHost are copied from",
+    "sweep.config.grounding-confirmatory-v1.json field for field (Req 8.5).",
+    "This is the ONLY paid run of this spec. The baseline and the Replay_Gate are free.",
+    "With no Campaign block declared, there is no maxResumes, so nextCampaignPass is never",
+    "consulted and campaignPass records null; the kill switch's 8-slot headroom covers a",
+    "deferred tail instead of a pass counter.",
+    "Start it with `npm run eval:reportability-slice`, which runs the prompt-version,",
+    "RTL-isolation, and fixture pins first and only then the sweep CLI."
+  ],
+  "schemaVersion": 1,
+  "runName": "reportability-slice-v1",
+  "arms": [
+    {
+      "name": "moonshotai.kimi-k2.5.control",
+      "model": "moonshotai.kimi-k2.5",
+      "strategy": "control"
+    },
+    {
+      "name": "zai.glm-5.control",
+      "model": "zai.glm-5",
+      "strategy": "control"
+    },
+    {
+      "name": "zai.glm-4.7.control",
+      "model": "zai.glm-4.7",
+      "strategy": "control"
+    },
+    {
+      "name": "deepseek.v3.2.control",
+      "model": "deepseek.v3.2",
+      "strategy": "control"
+    }
+  ],
+  "problems": {
+    "kind": "ids",
+    "ids": [
+      "rtllm/arithmetic/adder_8bit",
+      "rtllm/arithmetic/adder_16bit",
+      "rtllm/arithmetic/adder_pipe_64bit",
+      "rtllm/arithmetic/multi_16bit",
+      "rtllm/arithmetic/multi_pipe_8bit",
+      "rtllm/arithmetic/multi_booth_8bit",
+      "rtllm/arithmetic/div_16bit",
+      "rtllm/control/fsm",
+      "rtllm/control/counter_12",
+      "rtllm/control/JC_counter",
+      "rtllm/memory/right_shifter",
+      "rtllm/memory/asyn_fifo",
+      "rtllm/miscellaneous/signal_generator",
+      "rtllm/miscellaneous/calendar",
+      "rtllm/miscellaneous/traffic_light",
+      "rtllm/arithmetic/accu",
+      "rtllm/miscellaneous/parallel2serial",
+      "rtllm/miscellaneous/serial2parallel",
+      "rtllm/miscellaneous/width_8to16"
+    ]
+  },
+  "sampleCount": 1,
+  "ks": [1],
+  "seed": 20240601,
+  "temperature": 0,
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+  "limits": {
+    "cpu": 1,
+    "memMb": 512,
+    "procs": 128,
+    "diskMb": 128,
+    "wallMs": 30000
+  },
+  "costEnvelopeCents": 25,
+  "modelHost": {
+    "region": "us-east-1",
+    "maxOutputTokens": 6000,
+    "requestTimeoutMs": 240000
+  },
+  "prices": {},
+  "outputDir": ".eval-runs/reportability-slice-v1",
+  "captureArtifacts": true,
+  "concurrency": 3,
+  "transportRetry": {
+    "maxAttempts": 4,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "jitterRatio": 0.5,
+    "breakerFailureThreshold": 8,
+    "breakerCooldownMs": 60000,
+    "breakerMaxTrips": 3
+  },
+  "_killSwitch": [
+    "maxSamples 84 is 76 slots plus 8, so a deferred tail can be retaken once while a runaway",
+    "still stops. maxWallClockMs is the Confirmatory budget scaled from 1064 slots to 76."
+  ],
+  "killSwitch": {
+    "maxWallClockMs": 3316364,
+    "maxSamples": 84
+  },
+  "replayGateReportPath": ".eval-runs/reportability-slice-v1/replay-gate.json"
+}

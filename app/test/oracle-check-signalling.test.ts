@@ -256,6 +256,48 @@ describe('the check-signalling grammar', () => {
   });
 });
 
+// -- The pinned Check_Contract (testbench-failure-reportability C2) ----------
+
+/** The shipped reader's source, read as text because its two patterns are module-private. */
+function checkReaderSource(): Promise<string> {
+  return readFile(join(HERE, '..', 'tools', 'simulator', 'check-signalling.ts'), 'utf8');
+}
+
+/** The regex literal assigned to `const <name> = ...;` in the reader source, or null if absent. */
+function patternLiteral(source: string, name: string): string | null {
+  const match = new RegExp(`^const ${name} = (.+);$`, 'm').exec(source);
+  return match?.[1] ?? null;
+}
+
+describe('the Check_Contract the Check_Report_Task prints against', () => {
+  it('given the shipped reader when its line pattern is read then it is the literal C2 quotes', async () => {
+    expect(patternLiteral(await checkReaderSource(), 'CHECK_LINE_PATTERN')).toBe(
+      '/^CHECK[ \\t]+(\\S+)[ \\t]+(PASS|FAIL)(?![A-Za-z0-9_]).*$/',
+    );
+  });
+
+  it('given the shipped reader when its keyword pattern is read then it is the literal C2 quotes', async () => {
+    expect(patternLiteral(await checkReaderSource(), 'CHECK_KEYWORD_PATTERN')).toBe(
+      '/^CHECK(?:[ \\t]|$)/',
+    );
+  });
+
+  it('given the rendered PASS form when read then it is one passing check and nothing unreadable', () => {
+    const reading = readCheckSignals('CHECK ac1_foo PASS');
+
+    expect(reading.checks).toEqual([{ name: 'ac1_foo', passed: true }]);
+    expect(reading.unreadableSignals).toBe(0);
+  });
+
+  it('given the rendered FAIL: form with values when read then it is one failing check and nothing unreadable', () => {
+    // The trailing-diagnostic shape a past reader discarded, turning a FAIL into a PASS.
+    const reading = readCheckSignals('CHECK ac1_foo FAIL: expected a0, got 90');
+
+    expect(reading.checks).toEqual([{ name: 'ac1_foo', passed: false }]);
+    expect(reading.unreadableSignals).toBe(0);
+  });
+});
+
 // -- The verdict rule -------------------------------------------------------
 
 describe('the verdict rule over unreadable and missing signals', () => {
