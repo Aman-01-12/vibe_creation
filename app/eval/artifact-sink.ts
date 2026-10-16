@@ -31,6 +31,10 @@
 //   stream keeps its TAIL (the error is at the end of the run). Whether a value was cut is
 //   carried ON the value, so the writer can label the file and a reader can never mistake
 //   a truncated artifact for a complete one.
+//   The one artifact never cut is a formal Counterexample trace, because a cut VCD is not a
+//   VCD: it rides here WHOLE, exactly as the Formal_Oracle read it where its own run ended,
+//   bounded by `MAX_COUNTEREXAMPLE_TRACE_BYTES`, and the layer that owns the filesystem
+//   writes it whole or writes nothing.
 //
 // WHAT MAY NEVER BE CAPTURED
 //   Model output and tool output ONLY - the same values the loop already returned, plus
@@ -53,12 +57,21 @@ import type {
   RepairProvenance,
   VerificationOutcome,
 } from '@app/agent';
-import type { RunFailureCause } from '@app/tools';
+import {
+  MAX_RETAINED_ARTIFACT_BYTES,
+  type ArtifactBlobRef,
+  type CounterexampleRefusal,
+  type PropertyResult,
+  type RunFailureCause,
+} from '@app/tools';
 
 import type { RecordedGoldenVerdict } from './golden-judge.js';
 import type { InstrumentControlResult, RecordedInstrumentVerdict } from './instrument-control.js';
 import type { MutationProbeReport } from './mutation-control.js';
 import type { SampleOutcomeStatus, SampleResult } from './report.js';
+// The ONE reader of the roll-up precedence the results record's `formal` block is projected
+// through, reused so this capture and that record cannot decide from different properties.
+import { decidingResult } from './sweep/results-log.js';
 
 /**
  * The caps every captured value is bounded by.
@@ -89,6 +102,37 @@ export const ARTIFACT_CAPS = Object.freeze({
   /** Most Dialect_Normalizer findings captured from one sample's report. */
   maxNormalizerFindings: 64,
 });
+
+/**
+ * The largest formal Counterexample trace persisted, in UTF-8 BYTES - the unit
+ * `ArtifactBlobRef.sizeBytes` states a trace's size in.
+ *
+ * ITS OWN CONSTANT AND NOT A MEMBER OF `ARTIFACT_CAPS`, for two reasons. Every member there
+ * bounds a text this module CUTS, keeping its head or its tail, and a trace must never be cut: a
+ * VCD missing its step-0 block, or with its `$scope`/`$upscope` nesting broken, is not a readable
+ * trace, so a trace is written WHOLE OR NOT AT ALL and this number is the line between the two.
+ * And the units differ: those caps count characters, this counts bytes.
+ *
+ * EQUAL TO `MAX_RETAINED_ARTIFACT_BYTES` (131_072, 128 KiB), the largest blob the retention
+ * store the Formal_Oracle read the trace out of will hold - twice `maxSourceChars` and four
+ * times `maxDiagnosticsChars`, so no existing cap could hold a retained trace whole. A smaller
+ * value would refuse traces that store kept; a larger one would admit nothing more, because
+ * nothing larger is ever retained. It is stated here rather than left to the oracle's own
+ * constant, so the artifact footprint is bounded by this layer too.
+ *
+ * `captureSampleArtifacts` carries the trace's BYTES, read where its own run ended, so this cap
+ * is checked again by the layer that owns the filesystem: the bytes cross a port, and only the
+ * writer decides what reaches a disk.
+ */
+export const MAX_COUNTEREXAMPLE_TRACE_BYTES = MAX_RETAINED_ARTIFACT_BYTES;
+
+/**
+ * Lowercase hex SHA-256: the digest shape the seam schema requires of every `ArtifactBlobRef`.
+ *
+ * NON-GLOBAL, so `test` reads and writes no `lastIndex` and this shared object carries no state
+ * between calls.
+ */
+const SHA256_HEX_DIGEST = /^[0-9a-f]{64}$/;
 
 /** Which end of an over-long text was kept. */
 export type CapturedEnd = 'head' | 'tail';
@@ -153,6 +197,39 @@ export interface CapturedFailingCase {
   /** Simulation time of the failure in nanoseconds, or `null` if not localized. */
   readonly atSimTimeNs: number | null;
 }
+
+/**
+ * Why a `refuted` sample carries no Counterexample trace. FOUR reasons, and every one of them
+ * is a note the writer must print, because each is a trace that EXISTED and cannot be handed
+ * over (Req 12.25).
+ *
+ * Three are the `CounterexampleRefusal` members the Formal_Oracle established while reading
+ * bytes it had a locator for, REUSED rather than restated so the reason a reader is told is the
+ * reason the oracle recorded. The fourth is the Verification_Loop's own marker: a refutation
+ * whose recorded locator is not a usable `ArtifactBlobRef`, which this derivation also records
+ * for a capture it cannot read or cannot pair with the deciding result - every one of those is
+ * the same fact, that nothing usable locates this trace.
+ */
+export type CapturedCounterexampleAbsence = CounterexampleRefusal | 'malformed-reference';
+
+/**
+ * A `refuted` sample's Counterexample as the capture hands it over: the WHOLE trace beside the
+ * reference it must hash to, or the named reason there is none (Req 12.16, 12.24).
+ *
+ * THE BYTES RIDE HERE AND THE WRITER STILL CHECKS THEM. They were read where the refuting run
+ * ended, which is the only moment they are certainly still retained, so this is the sole route
+ * by which a trace can reach a disk at all. They cross the `EvalArtifactSink` port, so the
+ * writer re-checks them against this reference's SHA-256 and the trace's own cap before any of
+ * them reach a file: a trace is written whole or not at all, and the digest is what makes that
+ * a fact rather than a claim.
+ *
+ * `reference` rides on the written arm alone, because it is the only arm with bytes to check.
+ * The reference itself is recorded separately as `formalCounterexample`, so a reader can still
+ * locate the trace by its hash once the bytes are gone.
+ */
+export type CapturedCounterexample =
+  | { readonly kind: 'trace'; readonly reference: ArtifactBlobRef; readonly trace: string }
+  | { readonly kind: 'absent'; readonly reason: CapturedCounterexampleAbsence };
 
 /**
  * Everything captured for one sample.
@@ -335,6 +412,62 @@ export interface EvalSampleArtifacts {
   readonly normalizerReport: NormalizerReport | null;
   /** Whether `normalizerReport.findings` was cut at `ARTIFACT_CAPS.maxNormalizerFindings`. */
   readonly normalizerReportFindingsTruncated: boolean;
+  /**
+   * The Property_Wrapper source the Formal_Oracle rendered for the ONE Formal_Property that
+   * decided this sample, HEAD-kept like `testbenchSource`, or `null` (Req 12.15).
+   *
+   * The deciding property is `decidingResult`'s choice - the same reader the results record's
+   * `formal` block is projected through - so this wrapper, that block, `formalAssertionCount`,
+   * and `formalCounterexample` all describe ONE property rather than adjacent ones. Read off the
+   * provenance's `propertyWrapperSources` and never re-rendered (Req 12.23). Reuses
+   * `ARTIFACT_CAPS.maxSourceChars`: a wrapper is generated Verilog, the same kind of value
+   * `testbenchSource` already bounds.
+   *
+   * SCOPED TO A SAMPLE WHOSE DECIDING PROPERTY HAD A WRAPPER RENDERED, which is what Req 12.15
+   * asks for and not merely what this read can manage. A pre-pass refusal renders NO wrapper for
+   * any property (Req 1.18, 14.18), so there is no text to persist and no absence to explain:
+   * the deciding result's own recorded cause already says the pre-pass refused. `null` is
+   * therefore the whole answer there, and the same for a sample where no property was submitted,
+   * and for one whose wrapper list cannot be paired with the results by index - an absent
+   * artifact, never a wrapper borrowed from another property.
+   */
+  readonly propertyWrapperSource: CapturedText | null;
+  /**
+   * The generated SMT2 assertion count the deciding result carries, or `null` (Req 12.22).
+   *
+   * The one number that tells a proof over assertions from the vacuous proof over none: read
+   * from `evidence.assertionCount` on a `proved` result and from `conditions.assertionCount` on
+   * the other two, the same split `recordedFormalRun` reads the five facts by. `null` where no
+   * property was submitted or the value is not a non-negative safe integer: an unreadable count
+   * is absent, never coerced into one.
+   */
+  readonly formalAssertionCount: number | null;
+  /**
+   * The deciding result's Counterexample REFERENCE - name, size, and SHA-256, and NO bytes -
+   * present for a `refuted` sample and for no other (Req 12.16).
+   *
+   * The LOCATOR, recorded beside the bytes rather than instead of them: it is what lets a
+   * reader find the trace by its hash once the bytes are gone, and it is small enough to keep
+   * in an index that a whole campaign is grepped through. `null` for every sample that is not
+   * `refuted`, and for a refuted one whose reference is malformed.
+   */
+  readonly formalCounterexample: ArtifactBlobRef | null;
+  /**
+   * The deciding result's Counterexample BYTES, or the named reason there are none - present for
+   * a `refuted` sample and for no other (Req 12.16, 12.24, 12.25).
+   *
+   * Read off the provenance's `counterexampleCaptures`, paired with `results` by index, and
+   * never resolved here: the trace was read where its own refuting run ended, because the
+   * retention store it sat in holds 1 MiB in total and every run on a shared runtime keeps
+   * filling it, so a reader that waited for the sample to finish could lose the race.
+   *
+   * `null` for every sample that is not `refuted` - a proof writes no trace, and a sample no
+   * Formal_Property decided has nothing to read. Never `null` for a refuted one: a refutation
+   * whose capture is absent, unreadable, or unpairable records
+   * `{ kind: 'absent', reason: 'malformed-reference' }`, so every refuted sample that lacks its
+   * trace carries the reason a writer must report rather than a silence.
+   */
+  readonly formalCounterexampleCapture: CapturedCounterexample | null;
 }
 
 /**
@@ -358,7 +491,9 @@ export interface EvalArtifactDescriptor {
  * Implementations MUST treat a write failure as their own problem: the harness catches a
  * throw and continues, but an adapter that can report a sanitized note should do so
  * rather than staying silent. Implementations must never mutate the artifacts, and must
- * never write anything the artifacts do not carry.
+ * never write anything the artifacts do not carry: a Counterexample's bytes arrive on
+ * `formalCounterexampleCapture` and may be written only once they hash to the SHA-256 the
+ * capture's own reference records, and every `absent` reason it carries must be reported.
  */
 export interface EvalArtifactSink {
   write(descriptor: EvalArtifactDescriptor, artifacts: EvalSampleArtifacts): Promise<void>;
@@ -483,7 +618,186 @@ export function captureSampleArtifacts(input: ArtifactCaptureInput): EvalSampleA
     // bounded at construction (see `MAX_SITE_TEXT_CHARS`) and the mutant cap bounds how many
     // there can be, so the artifact footprint stays bounded without a second cap here.
     mutation: control?.mutation ?? null,
+    // Req 12.15, 12.16, 12.22: read off `measured.formal`, the SAME provenance object the
+    // results record's `formal` block is projected from, so the two cannot describe different
+    // runs. The harness copies it verbatim from the outcome, or `NO_FORMAL_RUN` where none ran.
+    ...captureFormalEvidence(measured.formal),
   };
+}
+
+/** The four formal facts one sample's deciding result carries, each absent when unreadable. */
+interface CapturedFormalEvidence {
+  readonly propertyWrapperSource: CapturedText | null;
+  readonly formalAssertionCount: number | null;
+  readonly formalCounterexample: ArtifactBlobRef | null;
+  readonly formalCounterexampleCapture: CapturedCounterexample | null;
+}
+
+/** The formal evidence of a sample no Formal_Property decided: nothing was submitted to read. */
+const NO_FORMAL_EVIDENCE: CapturedFormalEvidence = Object.freeze({
+  propertyWrapperSource: null,
+  formalAssertionCount: null,
+  formalCounterexample: null,
+  formalCounterexampleCapture: null,
+});
+
+/** The oracle's three refusal reasons; a closed set, validated on read. */
+const COUNTEREXAMPLE_REFUSALS: readonly CounterexampleRefusal[] = [
+  'over-cap',
+  'unresolved',
+  'read-failed',
+];
+
+/**
+ * The absence recorded for a refutation nothing usable locates: the Verification_Loop's own
+ * marker, and this derivation's answer for a capture it cannot read or cannot pair.
+ */
+const MALFORMED_REFERENCE: CapturedCounterexample = Object.freeze({
+  kind: 'absent',
+  reason: 'malformed-reference',
+});
+
+/**
+ * The wrapper, the assertion count, and the Counterexample reference of the ONE result that
+ * decided the sample, or all three absent (Req 12.15, 12.16, 12.22).
+ *
+ * Total by DELIBERATE BRANCHES rather than a caught exception. `decidingResult` reads `verdict`
+ * off every element, so a `results` that is not a list of objects - a stale fixture, or a double
+ * built before the field was required - is refused here before it is handed over, and every
+ * field below is read through `propertyAt`, so an absent `evidence`, `conditions`, or
+ * `counterexample` yields an absent artifact rather than a `TypeError`. The check runs over
+ * `Array.from(raw)` because `every` skips the holes of a sparse array while `find` visits them.
+ *
+ * The cast to `PropertyResult[]` asserts only what that check established and what
+ * `decidingResult` needs: each element is an object, so reading its `verdict` cannot throw. The
+ * element it returns is one of these same objects, so `indexOf` finds the wrapper paired with it.
+ */
+function captureFormalEvidence(formal: unknown): CapturedFormalEvidence {
+  const raw = propertyAt(formal, 'results');
+  if (!Array.isArray(raw) || !Array.from(raw).every(isObjectLike)) {
+    return NO_FORMAL_EVIDENCE;
+  }
+  const results = raw as readonly PropertyResult[];
+  const deciding = decidingResult(results);
+  if (deciding === null) {
+    return NO_FORMAL_EVIDENCE;
+  }
+  const index = results.indexOf(deciding);
+  return {
+    propertyWrapperSource: captureText(
+      pairedWrapperSource(formal, results.length, index),
+      ARTIFACT_CAPS.maxSourceChars,
+      'head',
+    ),
+    formalAssertionCount: assertionCountOf(deciding),
+    formalCounterexample:
+      deciding.verdict === 'refuted' ? blobRefAt(deciding, 'counterexample') : null,
+    // Gated on the verdict HERE as well as in the loop, by the same rule the reference above
+    // follows: Req 12.16 persists a Counterexample for a refutation and for no other sample, so
+    // a trace attached to a `proved` result is dropped rather than written.
+    formalCounterexampleCapture:
+      deciding.verdict === 'refuted'
+        ? capturedCounterexampleOf(formal, results.length, index)
+        : null,
+  };
+}
+
+/**
+ * The capture paired BY INDEX with the deciding result, narrowed to what a writer needs, or the
+ * malformed-reference absence (Req 12.16, 12.25). Total: never throws.
+ *
+ * NEVER `null`, because the caller has already established that the deciding result is
+ * `refuted`: a trace existed, so every answer here is either its bytes or a reason, and a
+ * silence beside a refutation would read as "no evidence was ever produced".
+ *
+ * Refused unless the capture list is exactly as long as `results`, for the reason
+ * `pairedWrapperSource` refuses the same thing: a list of any other length cannot say which
+ * trace belongs to which property, and handing one property's waveform to another is strictly
+ * worse than having none, because a Student would be coached from the wrong trace.
+ */
+function capturedCounterexampleOf(
+  formal: unknown,
+  resultCount: number,
+  index: number,
+): CapturedCounterexample {
+  const captures = propertyAt(formal, 'counterexampleCaptures');
+  if (!Array.isArray(captures) || captures.length !== resultCount) {
+    return MALFORMED_REFERENCE;
+  }
+  const capture: unknown = captures[index];
+  if (propertyAt(capture, 'kind') === 'trace') {
+    const reference = blobRefAt(capture, 'reference');
+    const trace = nonEmptyStringAt(capture, 'trace');
+    return reference === null || trace === null
+      ? MALFORMED_REFERENCE
+      : { kind: 'trace', reference, trace };
+  }
+  // The oracle's own reason where it recorded one, and the marker for everything else: the
+  // loop's `{ kind: 'malformed-reference' }`, a refusal naming a reason outside the closed set,
+  // and an absent entry are all the one fact that nothing usable locates this trace.
+  const refusal = COUNTEREXAMPLE_REFUSALS.find(
+    (candidate) => candidate === propertyAt(capture, 'refusal'),
+  );
+  return refusal === undefined ? MALFORMED_REFERENCE : { kind: 'absent', reason: refusal };
+}
+
+/**
+ * The wrapper source paired BY INDEX with the result at `index`, or `null`.
+ *
+ * Refused unless the list is exactly as long as `results`. A list of any other length cannot say
+ * which wrapper belongs to which property, and an absent wrapper is honest where a mispaired one
+ * would describe a property that did not decide the sample.
+ */
+function pairedWrapperSource(formal: unknown, resultCount: number, index: number): string | null {
+  const sources = propertyAt(formal, 'propertyWrapperSources');
+  if (!Array.isArray(sources) || sources.length !== resultCount) {
+    return null;
+  }
+  const source: unknown = sources[index];
+  return typeof source === 'string' ? source : null;
+}
+
+/**
+ * The generated SMT2 assertion count one result carries, or `null` when it is not a count.
+ *
+ * A `proved` result carries it on its `ProvedEvidence` and the other two on their
+ * `ProofConditions` - the same split `recordedFormalRun` reads, so the artifact's number and the
+ * record's `formal.conditions.assertionCount` are one value.
+ */
+function assertionCountOf(result: PropertyResult): number | null {
+  const holder = propertyAt(result, result.verdict === 'proved' ? 'evidence' : 'conditions');
+  const count = integerAt(holder, 'assertionCount');
+  return count !== null && count >= 0 ? count : null;
+}
+
+/**
+ * An `ArtifactBlobRef` property, rebuilt from its three fields, or `null` when it is not one.
+ *
+ * Rebuilt rather than passed through, so only the reference's own fields can reach
+ * `outcome.json` whatever else a malformed carrier holds. Validated by the seam schema's rules -
+ * a non-empty name, a non-negative integer size, a lowercase hex SHA-256 - because a reference
+ * failing any of them locates nothing, and recording it would claim a locator that is not one.
+ *
+ * The name gets no cap of its own, for the reason `attributedFiles` gets none: the worker
+ * registers a trace under a name built from its own constants, never from the request, so its
+ * length is bounded by construction rather than by a model.
+ */
+function blobRefAt(carrier: unknown, key: string): ArtifactBlobRef | null {
+  const ref = propertyAt(carrier, key);
+  const name = nonEmptyStringAt(ref, 'name');
+  const sizeBytes = integerAt(ref, 'sizeBytes');
+  const sha256 = propertyAt(ref, 'sha256');
+  if (name === null || sizeBytes === null || sizeBytes < 0) {
+    return null;
+  }
+  return typeof sha256 === 'string' && SHA256_HEX_DIGEST.test(sha256)
+    ? { name, sizeBytes, sha256 }
+    : null;
+}
+
+/** Whether a value is a non-null object, so reading a property off it cannot throw. */
+function isObjectLike(value: unknown): value is object {
+  return typeof value === 'object' && value !== null;
 }
 
 /**
@@ -498,7 +812,7 @@ export function captureSampleArtifacts(input: ArtifactCaptureInput): EvalSampleA
  * `status` alone rather than by an untyped property read, so no defensive cast is needed to
  * reach it.
  */
-function normalizationOf(outcome: CapturedOutcome): NormalizationProvenance | null {
+export function normalizationOf(outcome: CapturedOutcome): NormalizationProvenance | null {
   if (
     outcome.status === 'verified' ||
     outcome.status === 'unverified' ||

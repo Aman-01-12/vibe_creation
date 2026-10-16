@@ -23,6 +23,15 @@
 // Both run only AFTER the sample is measured, receive no budget handle, and make no model
 // call, so neither can move a measured number.
 //
+// A THIRD optional check gates the OTHER instrument, and this one runs BEFORE the sample:
+//   - the Property_Set gate scores a Property_Set against single-operator mutants of that
+//     same reference design, and a Property_Set that PROVES a mutant the independent judge
+//     killed is refused as inadmissible (`./property-set-admission.ts`). A refused sample is
+//     decided by the Simulation_Fallback rather than by the refused Property_Set (Req 10.3),
+//     which is a decision about which INSTRUMENT may speak and so has to be made before the
+//     run rather than after it. It still makes no model call and gets no budget handle.
+
+//
 // Determinism (Req 15.10): the subset is iterated in order, samples in index order,
 // each sample's seed is derived deterministically from the base seed, and every
 // reported number is a pure function of the samples. Given a deterministic loop
@@ -42,12 +51,25 @@ import {
   type SessionBudget,
   type Ulid,
 } from '@app/core';
-import { NO_REPAIR, type RepairProvenance } from '@app/agent';
+import {
+  designGroupOf,
+  NO_FORMAL_RUN,
+  NO_REPAIR,
+  requiredChecksFor,
+  routeCheckingApproach,
+  type FormalProvenance,
+  type TestbenchParseRefusal,
+  type StrategyArm,
+  type PropertySetAdmissionOutcome,
+  type RepairProvenance,
+  type PropertySetSource,
+} from '@app/agent';
 import { readCheckSignals, type ResourceLimits } from '@app/tools';
 
 import {
   candidateRtlOf,
   captureSampleArtifacts,
+  normalizationOf,
   testbenchSourceOf,
   type CapturedOutcome,
   type EvalArtifactSink,
@@ -59,7 +81,9 @@ import {
   type RecordedGoldenVerdict,
   type VerdictPair,
 } from './golden-judge.js';
+import { AdmissionStampingPropertySource } from './admission-stamping-property-source.js';
 import { MemoizingInstrumentAdmission } from './instrument-admission.js';
+import { MemoizingPropertySetSource } from './memoizing-property-set-source.js';
 import {
   summarizeInstrumentControl,
   uncheckedInstrument,
@@ -74,6 +98,15 @@ import {
   type MutationSample,
 } from './mutation-control.js';
 import { noVerdictCauseOf } from './no-verdict-cause.js';
+import {
+  admitPropertySet,
+  formalMutationCounts,
+  propertySetAdmissionOutcomeOf,
+  propertySetSurvivorCountOf,
+  type FormalMutationCounts,
+  type PropertySetAdmission,
+  type PropertySetGate,
+} from './property-set-admission.js';
 import { MeteredSessionBudget } from './metered-budget.js';
 import { sampleSeed, type ReproducibilityConfig } from './reproducibility.js';
 import { meanPassAtK, passAtK } from './metrics.js';
@@ -87,6 +120,7 @@ import type {
   EvalRunReport,
   ProblemResult,
   SampleResult,
+  PositiveControlRunSummary,
 } from './report.js';
 
 /** The injected collaborators and configuration for the harness; no globals. */
@@ -105,6 +139,15 @@ export interface EvalHarnessDeps {
   readonly ks?: readonly number[];
   /** Optional sink that records each run so metrics track over time (Req 15.5). */
   readonly recorder?: EvalRunRecorder;
+  /**
+   * Optional per-problem Property_Author, used ONLY where a Property_Set_Gate is also wired.
+   *
+   * The gate scores a Property_Set against reference mutants and the loop reasons with it, so
+   * both have to be handed the SAME artifact; see design.md, Component 11a. An ungated run
+   * never calls this, with or without it supplied, which is what keeps the shipping path the
+   * one the student session takes (Req 6.2).
+   */
+  readonly propertySetSourceFor?: (problem: EvalProblem) => PropertySetSource;
   /**
    * Optional INDEPENDENT judge scoring each sample's candidate against a
    * benchmark-supplied golden testbench.
@@ -139,8 +182,29 @@ export interface EvalHarnessDeps {
    * number (see `#captureArtifacts` and `./artifact-sink.ts`).
    */
   readonly artifactSink?: EvalArtifactSink;
+  /**
+   * Optional gate on the PROPERTY SET, the other instrument a sample can be decided by.
+   *
+   * `instrumentControl` above validates the TESTBENCH against the reference design; this
+   * scores the Property_Set against single-operator MUTANTS of that same reference, and a
+   * Property_Set that PROVES a mutant the independent judge killed is refused as
+   * inadmissible. A refused sample is then decided by the Simulation_Fallback rather than by
+   * the refused Property_Set (Req 10.3).
+   *
+   * It lives here rather than in `app/agent` because it reads a reference design and a
+   * student session has none (Req 10.7), and because `app/agent` holds no import of
+   * `app/eval` (Req 11.11, 13.6). When absent, every sample's Property_Set is `'not-gated'`
+   * and nothing falls back, so a run without a gate is never mistaken for a run whose
+   * Property_Sets were all admitted.
+   *
+   * Deterministic and free of model calls, like both controls above: it runs before the
+   * sample's own verdict is reached, receives no budget handle, and adds no iteration.
+   */
+  readonly propertySetGate?: PropertySetGate;
   /** ULID source for per-session budget ids; defaults to `newUlid`. */
   readonly newId?: () => Ulid;
+  /** The Strategy_Arm every sample runs under; `control` when absent, as on the Student_Path. */
+  readonly strategyArm?: StrategyArm;
 }
 
 /** The validated, resolved configuration the harness runs with. */
@@ -155,7 +219,11 @@ interface ResolvedConfig {
   readonly goldenJudge: GoldenJudge | null;
   readonly instrumentControl: InstrumentControl | null;
   readonly artifactSink: EvalArtifactSink | null;
+  readonly propertySetGate: PropertySetGate | null;
+  /** The per-problem Property_Author, or `null` where no run authors up front. */
+  readonly propertySetSourceFor: ((problem: EvalProblem) => PropertySetSource) | null;
   readonly newId: () => Ulid;
+  readonly strategyArm: StrategyArm;
 }
 
 /**
@@ -199,7 +267,10 @@ export function createEvalHarness(deps: EvalHarnessDeps): Result<EvalHarness, Do
       goldenJudge: deps.goldenJudge ?? null,
       instrumentControl: deps.instrumentControl ?? null,
       artifactSink: deps.artifactSink ?? null,
+      propertySetGate: deps.propertySetGate ?? null,
+      propertySetSourceFor: deps.propertySetSourceFor ?? null,
       newId,
+      strategyArm: deps.strategyArm ?? 'control',
     }),
   );
 }
@@ -281,7 +352,29 @@ export class EvalHarness {
     const seed = sampleSeed(this.#resolved.config, problem.id, sampleIndex);
     const budget = this.#freshBudget();
     const admission = this.#buildAdmission(problem);
-    const outcome = await this.#drive(problem, sampleIndex, seed, budget, admission);
+    // BEFORE the loop runs, because the decision it produces is an INPUT to the run: a
+    // refused Property_Set must not be given the chance to decide this sample (Req 10.1,
+    // 10.3). On a GATED run this now makes one model call, the up-front authoring, and it is
+    // charged to this sample's own budget handle under FL-18 option (a) - so `costCents` and
+    // `totalTokens` carry it rather than it being spent off the books. The gate itself still
+    // makes none; see design.md, Component 10.
+    const authored = this.#authorPropertySet(problem);
+    const propertySet = recordedPropertySetAdmission(
+      await this.#gatePropertySet(problem, authored, budget),
+    );
+    // The loop receives the set already stamped with the gate's decision, which is what makes
+    // the loop's own refusal guard reachable on a gated run (Component 11b).
+    const propertySetSource =
+      authored === null ? null : new AdmissionStampingPropertySource(authored, propertySet.outcome);
+    const outcome = await this.#drive(
+      problem,
+      sampleIndex,
+      seed,
+      budget,
+      admission,
+      propertySet,
+      propertySetSource,
+    );
     // Req 7.10: read once the loop has returned; no repair-and-recheck sequence is
     // held open, because none can occur.
     const consumed = budget.consumed();
@@ -312,12 +405,41 @@ export class EvalHarness {
       goldenVerdict: await this.#judgeIndependently(problem, outcome),
       instrumentVerdict: control.verdict,
       mutationProbe: control.mutation,
+      // Req 10.8: the gate's own outcome and the count that makes a refusal readable. Both
+      // are derived from the ONE admission `#gatePropertySet` produced, so the member and
+      // the number cannot disagree about the same run.
+      propertySetAdmitted: propertySet.outcome,
+      // Read from the AUTHOR, never from the admission outcome: a gate that found no reference
+      // design, or that threw, records `not-gated` after this sample already paid for the
+      // authoring, so the outcome cannot tell the two apart and this field is what does.
+      propertySetAuthoredUpFront: authored !== null,
+      // Read from the author itself, not from the admission outcome: a gate that found no
+      // reference, or threw, records `not-gated` after this sample already paid for the authoring.
+      propertySetSurvivorCount: propertySet.survivorCount,
+      // Req 9.4, 9.6, 9.9: the SAME gate run's own mutant tally, including the mutants the
+      // oracle could not reason about - the count that previously died with the population.
+      formalMutationCounts: propertySet.mutationCounts,
       // Req 1.6: COPIED from what the loop returned, never re-derived from acceptance.
       repairProvenance: repairProvenanceOf(outcome),
+      // Req 7.9, 12.11, 12.21: COPIED from what the loop returned too. The loop decided this
+      // sample from these values, so re-deriving them here could disagree with `passed` above.
+      formal: formalProvenanceOf(outcome),
       // Req 5.8, 5.11: computed LAST, after every verdict field above is already
       // decided, from the same `outcome`/`control` this method already holds - see
       // `checkNameVisibilitySignalOf`'s own comment for why this changes nothing.
       checkNameVisibilitySignal: checkNameVisibilitySignalOf(outcome, control),
+      testbenchParseRefusal: parseRefusalOf(outcome),
+      // COPIED from the loop's own provenance, never recomputed here: a second reading could
+      // disagree with the source the Positive_Control was run against (Req 5.3).
+      valuelessFailureReports: normalizationOf(outcome)?.valuelessFailureReports ?? null,
+      positiveControlRun: positiveControlRunOf(control, this.#knownAnswerNames(problem)),
+      // Derived with the agent's own pure router over the same Spec and arm, so it equals the
+      // approach the agent took whether or not a testbench was generated (Req 1.8).
+      checkingApproach: routeCheckingApproach(
+        problem.spec.moduleInterface,
+        this.#resolved.strategyArm,
+      ),
+      designGroup: designGroupOf(problem.spec.moduleInterface),
     };
     await this.#captureArtifacts(problem, sample, outcome, control);
     return sample;
@@ -358,6 +480,7 @@ export class EvalHarness {
         testbench,
         // The control runs under the SAME sandbox caps as the loop's own oracle.
         limits: this.#resolved.limits,
+        requiredCheckNames: this.#requiredCheckNames(problem),
       });
       return result ?? uncheckedControl('no-reference');
     } catch {
@@ -450,6 +573,8 @@ export class EvalHarness {
     seed: number,
     budget: MeteredSessionBudget,
     admission: MemoizingInstrumentAdmission | null,
+    propertySet: RecordedPropertySetAdmission,
+    propertySetSource: AdmissionStampingPropertySource | null,
   ): Promise<DriveOutcome> {
     try {
       return await this.#resolved.loopRunner.runSample({
@@ -459,11 +584,106 @@ export class EvalHarness {
         temperature: this.#resolved.config.temperature,
         budget,
         limits: this.#resolved.limits,
+        strategyArm: this.#resolved.strategyArm,
         ...(admission === null ? {} : { instrumentAdmission: admission }),
+        // THE SIGNAL, AND WHY IT IS OMITTED RATHER THAN SENT AS `'not-gated'`: absent means
+        // no gate was wired, which is the exact fact `'not-gated'` carries, and the loop
+        // already defaults to it. Sending it would make this request shape differ between a
+        // gated and an ungated run over a value that means the same thing in both.
+        ...(this.#resolved.propertySetGate === null
+          ? {}
+          : { propertySetAdmitted: propertySet.outcome }),
+        // Omitted rather than passed as `null` for the same reason the outcome is: absent means
+        // the loop builds its own author, which is the ungated shipping path.
+        ...(propertySetSource === null ? {} : { propertySetSource }),
       });
     } catch {
       // Sanitized, fail-safe: the runner's error detail never enters the report.
       return { status: 'runner-error' };
+    }
+  }
+
+  /**
+   * This sample's up-front Property_Author, or `null` where nothing should author up front.
+   *
+   * One `MemoizingPropertySetSource` per sample, matching its documented lifetime: the gate and
+   * the loop are two callers of ONE authoring call, so the set they see cannot diverge and the
+   * sample pays for one model call rather than two.
+   *
+   * `null` whenever no gate is wired, EVEN IF a factory was supplied. That is the rule that
+   * keeps an ungated run identical to the shipping path: nothing authors up front there, so a
+   * gated and an ungated run differ by the gate alone, which is what task 9.12's comparison
+   * rests on.
+   */
+  #authorPropertySet(problem: EvalProblem): MemoizingPropertySetSource | null {
+    const sourceFor = this.#resolved.propertySetSourceFor;
+    if (this.#resolved.propertySetGate === null || sourceFor === null) {
+      return null;
+    }
+    return new MemoizingPropertySetSource(sourceFor(problem));
+  }
+
+  /**
+   * Score this problem's Property_Set against reference-design mutants (Req 10.1, 10.3).
+   *
+   * Total by construction - it always returns, never throws - so a sample can never be
+   * missing an admission outcome. Every path that cannot produce a real one yields `null`,
+   * which `recordedPropertySetAdmission` records as `'not-gated'`:
+   *   - no gate wired        -> nothing was gated
+   *   - the gate found no reference for this problem (`null` from the port)
+   *   - the gate threw       -> no admission was established
+   *
+   * THE THROWING CASE IS THE ONE WORTH STATING. A gate that broke demonstrated NOTHING, so
+   * it must not be recorded as `'refused'` - that would be an accusation nobody measured,
+   * and Requirement 10.9's refused-sample count is over `'refused'` alone, so a broken gate
+   * would inflate a reported number with samples nothing refused. It degrades to "no
+   * admission was established" instead, which is the same fail-safe direction
+   * `#controlInstrument` takes when the positive control throws: a control that cannot run
+   * degrades to `unchecked`, never to a verdict. The consequence is stated rather than
+   * hidden: an ungated Property_Set may then decide a sample, and the record says so.
+   *
+   * The RULE is applied here and not in the port: `admitPropertySet` reads the population
+   * the port measured, so no implementation can widen or weaken which mutants the gate
+   * holds a Property_Set to (Req 10.5).
+   *
+   * THE COUNTS ARE TAKEN HERE FOR THE SAME REASON THE RULE IS (Req 9.4, 9.6, 9.9). This is
+   * the one place the calibrated population is in hand: `admitPropertySet` reduces it to an
+   * outcome and a survivor list, so a mutant the Formal_Oracle could not reason about was
+   * tallied by `formalMutationCounts` nowhere and DROPPED here - one layer above the record -
+   * leaving Requirement 9.4's excluded-mutant count with no data path to the Sweep_Summary at
+   * all. Both reads are taken from the SAME population in the same statement, so the counts
+   * and the admission can never describe different runs.
+   */
+  async #gatePropertySet(
+    problem: EvalProblem,
+    authored: MemoizingPropertySetSource | null,
+    budget: MeteredSessionBudget,
+  ): Promise<GatedPropertySet | null> {
+    const gate = this.#resolved.propertySetGate;
+    if (gate === null || authored === null) {
+      // No gate, or no author to score: either way nothing was gated, and a gate with no set
+      // to score would be asked to measure an artifact that does not exist.
+      return null;
+    }
+    try {
+      const population = await gate.calibrate({
+        problemId: problem.id,
+        // The gate runs under the SAME sandbox caps as the loop's own oracle.
+        limits: this.#resolved.limits,
+        // Authored on THIS sample's budget, and memoized, so the loop is handed the same
+        // object rather than a second set the sample paid for twice (Req 6.7).
+        propertySet: await authored.propertySetFor(problem.spec, budget),
+      });
+      // `null` is "the gate could not run"; an EMPTY population is "it ran and its gate set
+      // came back empty", which `admitPropertySet` reports as `no-gate-set`. Collapsing the
+      // two would lose the one distinction the four-member vocabulary exists for.
+      return population === null
+        ? null
+        : { admission: admitPropertySet(population), counts: formalMutationCounts(population) };
+    } catch {
+      // Sanitized, fail-safe: the gate's error detail never enters the report, and the
+      // Property_Set stays ungated rather than being refused on a broken run.
+      return null;
     }
   }
 
@@ -483,7 +703,19 @@ export class EvalHarness {
     return new MemoizingInstrumentAdmission(control, {
       problemId: problem.id,
       limits: this.#resolved.limits,
+      requiredCheckNames: this.#requiredCheckNames(problem),
     });
+  }
+
+  /** The Required_Check names this arm's Testbench_Agent derived, from the Spec alone (C9). */
+  #requiredCheckNames(problem: EvalProblem): readonly string[] {
+    return requiredChecksFor(problem.spec, this.#resolved.strategyArm).map((check) => check.name);
+  }
+
+  /** The Known_Answer_Check names of this arm's list: the trusted side of the membership test. */
+  #knownAnswerNames(problem: EvalProblem): ReadonlySet<string> {
+    const checks = requiredChecksFor(problem.spec, this.#resolved.strategyArm);
+    return new Set(checks.filter((check) => check.kind === 'known-answer').map((c) => c.name));
   }
 
   /** Assemble the whole-run report from the per-problem results (pure). */
@@ -581,6 +813,32 @@ function repairProvenanceOf(outcome: DriveOutcome): RepairProvenance {
     return outcome.repairProvenance ?? NO_REPAIR;
   }
   return NO_REPAIR;
+}
+
+/**
+ * What the Formal_Oracle established for this sample, or `NO_FORMAL_RUN` for an outcome that
+ * carries no formal provenance at all (Req 7.9, 12.11, 12.21).
+ *
+ * Mirrors `repairProvenanceOf`'s narrowing exactly, and for the same reason: `verified`,
+ * `unverified`, and `instrument-refused` are the only statuses that reach a candidate the
+ * formal gate could have been run over, and `blocked`, `setup-failed`, and `runner-error`
+ * never do, so they carry no `formal` field to read and must report the no-run value rather
+ * than throw. `NO_FORMAL_RUN` is the honest answer on those three: no property was submitted,
+ * no admission gate ran, and the pre-pass was never reached.
+ *
+ * The `??` guards the same stale-fixture gap `repairProvenanceOf` guards - a fixture built
+ * before `formal` became required can still hand back `undefined` at runtime - and it guards
+ * it in the fail-safe direction, because `NO_FORMAL_RUN` claims no formal evidence at all.
+ */
+function formalProvenanceOf(outcome: DriveOutcome): FormalProvenance {
+  if (
+    outcome.status === 'verified' ||
+    outcome.status === 'unverified' ||
+    outcome.status === 'instrument-refused'
+  ) {
+    return outcome.formal ?? NO_FORMAL_RUN;
+  }
+  return NO_FORMAL_RUN;
 }
 
 /**
@@ -701,6 +959,56 @@ function mutationSamples(problems: readonly ProblemResult[]): readonly MutationS
   );
 }
 
+/**
+ * One RUN of the Property_Set_Admission gate: the rule's own outcome, and the tally of the
+ * population that outcome was decided over.
+ *
+ * Both halves come from ONE `calibrate` call, so the record cannot pair an admission with
+ * counts taken over a different population. The admission alone is lossy on purpose -
+ * `admitPropertySet` reduces the population to an outcome and a survivor list - which is why
+ * the counts travel beside it rather than being re-derived downstream from something smaller.
+ */
+interface GatedPropertySet {
+  readonly admission: PropertySetAdmission;
+  readonly counts: FormalMutationCounts;
+}
+
+/** The Property_Set facts one sample records, derived from the ONE gate run it got. */
+interface RecordedPropertySetAdmission {
+  readonly outcome: PropertySetAdmissionOutcome;
+  readonly survivorCount: number;
+  /** `null` where no gate ran: not measured, which is a different claim from zero. */
+  readonly mutationCounts: FormalMutationCounts | null;
+}
+
+/**
+ * Project one gate run - or the absence of one - onto what the sample records (pure, total).
+ *
+ * `null` becomes `'not-gated'`: no gate ran, so nothing was measured in either direction.
+ * That is NOT `'no-gate-set'`, which means a gate RAN and its gate set came back empty, and
+ * it is NOT `'refused'`, which would report a refusal nobody measured. Both facts are real
+ * and both are recorded distinctly, which is the whole reason the vocabulary has four
+ * members rather than a boolean (see `./property-set-admission.ts`).
+ *
+ * The counts go to `null` on that same path rather than to an all-zero tally, by the rule
+ * `formalKillRateOf` already follows one layer down: a population nobody calibrated has no
+ * counts, where every count at zero reads as a gate that scored nothing. No production
+ * `PropertySetGate` is wired yet, so `null` - rendered "not measured" - is what every sweep
+ * sample carries today, and that is the honest reading rather than a reason to withhold it.
+ */
+function recordedPropertySetAdmission(
+  gated: GatedPropertySet | null,
+): RecordedPropertySetAdmission {
+  if (gated === null) {
+    return { outcome: 'not-gated', survivorCount: 0, mutationCounts: null };
+  }
+  return {
+    outcome: propertySetAdmissionOutcomeOf(gated.admission),
+    survivorCount: propertySetSurvivorCountOf(gated.admission),
+    mutationCounts: gated.counts,
+  };
+}
+
 /** The control result for a sample the control could not speak for; no streams, no run. */
 function uncheckedControl(reason: InstrumentUncheckedReason): InstrumentControlResult {
   return {
@@ -709,6 +1017,40 @@ function uncheckedControl(reason: InstrumentUncheckedReason): InstrumentControlR
     stderr: '',
     exitCode: null,
     mutation: null,
+    positiveRun: null,
+  };
+}
+
+/** The parse refusal this sample's setup failure carried, or `null` when it carried none. */
+export function parseRefusalOf(outcome: DriveOutcome): TestbenchParseRefusal | null {
+  if (outcome.status !== 'setup-failed') {
+    return null;
+  }
+  return outcome.testbenchParseRefusal ?? null;
+}
+
+/**
+ * Reduce the Positive_Control's run facts to the four booleans a record carries.
+ *
+ * MEMBERSHIP, NEVER EXTRACTION: `failingCheckNames` is tool output, so it is only ever tested
+ * against our own trusted Known_Answer_Check names and is dropped here (Req 11.3).
+ */
+export function positiveControlRunOf(
+  control: InstrumentControlResult,
+  knownAnswerNames: ReadonlySet<string>,
+): PositiveControlRunSummary | null {
+  const run = control.positiveRun;
+  if (run === null) {
+    return null;
+  }
+  return {
+    passed: run.passed,
+    watchdogStopped: run.watchdogStopped,
+    waveformMissing: run.waveformMissing,
+    knownAnswerOnlyFailure:
+      !run.passed &&
+      run.failingCheckNames.length > 0 &&
+      run.failingCheckNames.every((name) => knownAnswerNames.has(name)),
   };
 }
 

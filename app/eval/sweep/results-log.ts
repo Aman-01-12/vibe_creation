@@ -34,8 +34,35 @@
 //   A record carries a verdict, counters, and sanitized classifications only. It is
 //   the artifact a number is cited from, so it is safe to attach to a report.
 
-import type { RepairDeclineReason } from '@app/agent';
+import {
+  CHECKING_APPROACHES,
+  DESIGN_GROUPS,
+  FALLBACK_ROUTES,
+  PROPERTY_SET_ADMISSION_OUTCOMES,
+  STRATEGY_ARMS,
+  type CheckingApproach,
+  type DesignGroup,
+  type FallbackRoute,
+  type FormalProvenance,
+  type PropertySetAdmissionOutcome,
+  type RepairDeclineReason,
+  type StrategyArm,
+  TESTBENCH_PARSE_REFUSALS,
+  type TestbenchParseRefusal,
+} from '@app/agent';
 import type { BudgetStopReason } from '@app/core';
+import {
+  CLOCK_POLARITIES,
+  COULD_NOT_VERIFY_CAUSES,
+  FORMAL_VERDICTS,
+  type ClockPolarity,
+  type CouldNotVerifyCause,
+  type CoverCondition,
+  type FormalVerdict,
+  type ProofConditions,
+  type PropertyResult,
+  type ResetContract,
+} from '@app/tools';
 
 import { RECORDED_GOLDEN_KINDS, type RecordedGoldenKind } from '../golden-judge.js';
 import type {
@@ -50,6 +77,7 @@ import {
   type MutationSampleCounts,
 } from '../mutation-control.js';
 import { isDeferredSample, NO_VERDICT_CAUSES, type NoVerdictCause } from '../no-verdict-cause.js';
+import type { FormalMutationCounts } from '../property-set-admission.js';
 import type { SampleOutcomeStatus } from '../report.js';
 
 /**
@@ -223,8 +251,57 @@ import type { SampleOutcomeStatus } from '../report.js';
  * the identical reason `instrumentUncheckedReason` has none (see this constant's v9 -> v10
  * note): the vocabulary did not exist when the record was written, so there is no question a
  * v11 record could have answered. A fresh output directory is required.
+ *
+ * v12 -> v13 (a SECOND ORACLE now decides samples, and the record has to be able to explain
+ * which one did). This bump is the same KIND as v10 -> v11 - new fields, no existing field
+ * redefined - and it is the largest of them: a whole FAMILY of fields joins the record at
+ * once, because the Formal_Oracle's verdict, the contract it was taken under, and the gate
+ * applied to the Property_Set it rested on are one story that cannot be told in parts. The
+ * family is still being completed inside THIS version - no v13 record has been written yet,
+ * so a field added here costs no further bump - and the count is deliberately not stated,
+ * because a number in this comment would go stale on the next field rather than fail.
+ *
+ * `passed` and `instrumentValidity` mean exactly what they meant in v12. What v12 cannot
+ * express is WHICH ORACLE decided the sample. A v12 `passed: true` is the simulation oracle's
+ * verdict, full stop; a v13 `passed: true` may have been decided by a formal proof of every
+ * submitted property, or by the Simulation_Fallback after a `could-not-verify`, and those two
+ * rest on different evidence. There is no field on a v12 record that distinguishes them,
+ * because the Formal_Oracle did not exist when one was written.
+ *
+ * And there is no honest default, for the identical reason `repairAttempted` has none (see the
+ * v10 -> v11 note). `formal: null` is not neutral: it asserts "no Formal_Property was ever
+ * submitted for this sample", which is a fact about a capability the sample was never measured
+ * against. `propertySetAdmitted: 'not-gated'` would assert the Property_Set_Admission gate did
+ * not run, which is indistinguishable from a genuine `'not-gated'` only by coincidence. And
+ * `formalResetContract: null` would assert the pre-pass was never reached, which cannot be told
+ * from the `{ derived: false }` a pre-pass that RAN and refused records. So a v12 (or older)
+ * file is refused wholesale on read, by the identical `record.schemaVersion !==
+ * RESULTS_SCHEMA_VERSION` refusal this bump number change already triggers for a v11 record.
+ *
+ * v13 -> v14: `noVerdictCause` accepts `provider-refused-credential`, a provider that ANSWERED
+ * and refused the credential. A v13 reader has no member for it, and `optionalMember` drops an
+ * unknown cause to `null`, which `isDeferrableCause` reads as NOT deferrable. So a v14 record
+ * read by a v13 build would turn a retakeable slot into a final one, which is the deletion
+ * `no-verdict-cause.ts` exists to prevent, and the version is what refuses it instead.
+ *
+ * v14 -> v15 (testbench-in-order-scoreboard): every record names its Strategy_Arm,
+ * Checking_Approach, Design_Group, and Testbench prompt version. A v14 record has none, and
+ * defaulting them would pool a Treatment sample into the Control cell of the A/B Campaign.
+ *
+ * v15 -> v16 (testbench-spec-grounding): every record names the `SIMULATION_HARNESS_VERSION`
+ * it ran under, the Testbench_Parser refusal that ended it (or `null`), and what its
+ * Positive_Control run itself showed (or `null`). A v15 record has none of the three, and
+ * defaulting them would read "the harness was absent" as "harness version unknown" and a
+ * refused reply as a reply that parsed.
+ *
+ * v16 -> v17 (testbench-failure-reportability): every record names its
+ * `valuelessFailureReports`, the count of failure reports in the measured testbench that carry
+ * no observed value, or `null` when no testbench was measured. This bump redefines no existing
+ * field, the way v10 -> v11 did not. There is still no honest default for a v16 record: the
+ * detector did not exist when one was written, so `0` would assert "this sample's testbench
+ * reported its failures with values" about a sample never measured for it.
  */
-export const RESULTS_SCHEMA_VERSION = 12;
+export const RESULTS_SCHEMA_VERSION = 17;
 
 /**
  * What an operator must do about a results file written before the schema bump.
@@ -234,7 +311,7 @@ export const RESULTS_SCHEMA_VERSION = 12;
  */
 export const STALE_SCHEMA_ADVICE: readonly string[] = Object.freeze([
   `this results file holds records from an older schema (current v${RESULTS_SCHEMA_VERSION}) and`,
-  'CANNOT be aggregated, for seven independent reasons.',
+  'CANNOT be aggregated, for ten independent reasons.',
   '(1) Those records carry NO token counts. The primary efficiency figure is now tokens and',
   'wall clock per verified artifact - the things the endpoint and the clock actually report -',
   'and a token count that was metered per sample and then discarded cannot be recovered from',
@@ -305,6 +382,35 @@ export const STALE_SCHEMA_ADVICE: readonly string[] = Object.freeze([
   "record's pair is, and there is no honest default for `repairDeclineReason` on an older",
   'record for the same reason `instrumentUncheckedReason` has none: the vocabulary did not',
   'exist when the record was written.',
+  '(8) A FORMAL VERDICT, ITS CONDITIONS, AND A FALLBACK REASON ARE NOW RECORDED, and an older',
+  'record carries none of them. A sample now records the Formal_Verdict a second oracle',
+  'reached, the Could_Not_Verify_Cause where one applies, which of the five Proof_Conditions',
+  'held, the Proof_Depth, the elapsed time, and the Fallback_Reason naming why a sample took',
+  'the Simulation_Fallback instead. It also records the Reset_Contract the run was taken',
+  'under - the reset net, its polarity, its synchronous-or-asynchronous kind, and whether the',
+  "design's initial state is free - together with the Clock_Contract's polarity and whether",
+  'the `if (!$initstate)` assertion gate was emitted, because the gate emission is a FUNCTION',
+  'of that contract and a record omitting it cannot explain its own verdict. Beside those, a',
+  'sample records whether the Property_Set_Admission gate admitted the property set its formal',
+  'verdict would have rested on, how many reference-design mutants survived it, and that',
+  "gate's own mutant counts - killed, survived, the mutants the oracle could not reason about",
+  'at all, and the FORMAL denominator those exclusions were taken out of, which is a different',
+  "number from the negative control's valid-mutant count over the same mutants. `passed`",
+  'itself did NOT change meaning, but an older record cannot say WHICH ORACLE decided it: a',
+  'formal proof of every submitted property and a Simulation_Fallback after a',
+  '`could-not-verify` rest on different evidence and an older record has no field that tells',
+  'them apart. No default is honest: `null` would assert no property was ever submitted,',
+  '"not-gated" would assert no admission gate ran, and an absent Reset_Contract would assert',
+  'the pre-pass was never reached - which is a different fact from a pre-pass that RAN and',
+  'refused to derive one.',
+  '(9) A record now names its STRATEGY_ARM, CHECKING_APPROACH, DESIGN_GROUP, and Testbench',
+  'prompt version. An older record has none, and defaulting them would pool a Treatment',
+  'sample into a Control cell, which is the comparison the A/B Campaign exists to keep apart.',
+  '(10) A record now counts its VALUELESS FAILURE REPORTS: the failure reports in its measured',
+  'testbench that carry no observed value. This redefines no existing field, but there is no',
+  'honest default for an older record, because the detector did not exist when it was',
+  'written: `0` would assert "this sample\'s testbench reported its failures with values"',
+  'about a sample never measured for it.',
   'Fix: re-run the campaign into a FRESH outputDir. The only records ever written at an older',
   'schema were throwaway smoke samples and one diagnostic calibration run.',
 ]);
@@ -324,6 +430,14 @@ const OUTCOME_STATUSES: readonly SampleOutcomeStatus[] = [
   'runner-error',
   'instrument-refused',
 ];
+
+/**
+ * The ONE outcome status that cannot carry a formal run (Req 12.29).
+ *
+ * `satisfies` rather than a bare literal, so a rename of the status breaks here instead of
+ * silently retiring the rule.
+ */
+const SETUP_FAILED = 'setup-failed' satisfies SampleOutcomeStatus;
 
 /** The budget stop reasons a record may carry; a closed set, validated on read. */
 const STOP_REASONS: readonly BudgetStopReason[] = [
@@ -395,6 +509,44 @@ const REPAIR_DECLINE_REASONS: readonly RepairDeclineReason[] = [
 ];
 
 /**
+ * The Formal_Verdicts a record may carry; a closed set, validated on read (Req 12.12).
+ *
+ * Read from `@app/tools`, the vocabulary's single owner, rather than restated here - the same
+ * rule `GOLDEN_KINDS` follows and the opposite of `INSTRUMENT_UNCHECKED_REASONS`, which is a
+ * local const only because its owner exports no enumerable array. A fourth Formal_Verdict
+ * therefore arrives here automatically instead of silently failing to round-trip.
+ */
+const FORMAL_VERDICT_MEMBERS: readonly FormalVerdict[] = FORMAL_VERDICTS;
+
+/** The Could_Not_Verify_Causes a record may carry; a closed set, validated on read (Req 12.12). */
+const COULD_NOT_VERIFY_MEMBERS: readonly CouldNotVerifyCause[] = COULD_NOT_VERIFY_CAUSES;
+
+/** The Clock_Contract polarities a record may carry; a closed set, validated on read. */
+const CLOCK_POLARITY_MEMBERS: readonly ClockPolarity[] = CLOCK_POLARITIES;
+
+/**
+ * The Property_Set admission outcomes a record may carry; a closed FOUR-member set.
+ *
+ * Read from `@app/agent`, which owns it. FOUR members and not two, and never a boolean: a gate
+ * that ran and had NOTHING to hold the set to (`'no-gate-set'`) is neither an admission nor a
+ * refusal, and no gate running at all (`'not-gated'`) is a third distinct fact. Collapsing
+ * `'no-gate-set'` onto `'admitted'` would record a vacuous pass as a demonstrated one, onto
+ * `'refused'` would record a refusal that never happened, and onto a `null` would conflate "no
+ * gate ran" with "unknown".
+ */
+const PROPERTY_SET_ADMISSIONS: readonly PropertySetAdmissionOutcome[] =
+  PROPERTY_SET_ADMISSION_OUTCOMES;
+
+/**
+ * The Fallback_Routes a record may carry; a closed FOUR-member set (Req 7.21).
+ *
+ * Read from `@app/agent`, which owns it, by the rule `PROPERTY_SET_ADMISSIONS` follows: the
+ * Verification_Loop decides the route and this reader only validates it, so a fifth member
+ * added there is covered here without an edit instead of being silently refused.
+ */
+const FALLBACK_ROUTE_MEMBERS: readonly FallbackRoute[] = FALLBACK_ROUTES;
+
+/**
  * Most survived operator ids one record may carry.
  *
  * The mutant cap is well below this, so the bound is never reached by our own writer; it
@@ -403,7 +555,54 @@ const REPAIR_DECLINE_REASONS: readonly RepairDeclineReason[] = [
  */
 export const MAX_RECORDED_SURVIVORS = 64;
 
+/**
+ * What the Formal_Oracle established for one sample, rolled up to the ONE result that
+ * decided it (Req 12.11).
+ *
+ * THE PER-SAMPLE ROLL-UP RULE: `refuted` beats `could-not-verify` beats `proved`, because a
+ * REFUTATION IS THE FINDING. A Property_Set holding both a refuted property and one that
+ * could not be verified is decided `unverified` from the refutation (Req 7.17), fail-closed:
+ * the alternative lets a passing Simulation_Fallback carry `Verified` on a design a formal
+ * counterexample refuted, which is the severity-1 direction. This record matches that
+ * precedence rather than restating it, so the verdict on the record and the verdict the loop
+ * decided the sample from are the same fact.
+ *
+ * Every field below comes from the SAME chosen result, never mixed across properties: a depth
+ * read off one property beside a cause read off another would describe a run that never
+ * happened. The per-property detail stays on the sample's artifacts, which is where a reader
+ * who needs all of it looks.
+ *
+ * Nested as ONE object rather than a spread of sibling nullable columns, for the reason
+ * `mutation` is: "a property was submitted" and "none was" is a single decision that cannot
+ * half-hold, so a record cannot carry a Proof_Depth without the verdict it belongs to.
+ */
+export interface RecordedFormalRun {
+  /** The verdict the sample was decided from, under the precedence above. */
+  readonly verdict: FormalVerdict;
+  /** The single cause behind a `could-not-verify` verdict, `null` for the other two. */
+  readonly cause: CouldNotVerifyCause | null;
+  /**
+   * Which of the FIVE Proof_Conditions held for that result.
+   *
+   * A `proved` result carries its `ProvedEvidence` here, which is the same five facts in
+   * their admitting form, so the field is total over all three verdicts.
+   */
+  readonly conditions: ProofConditions;
+  /** The Proof_Depth the result was reached at. */
+  readonly depth: number;
+  /** Wall clock that result's run took, including a run that timed out (Req 7.5). */
+  readonly elapsedMs: number;
+}
+
 /** One completed sample of one arm: the unit of work, of resume, and of aggregation. */
+/** The Positive_Control run facts a record carries: four booleans, no tool-written name. */
+export interface RecordedPositiveControlRun {
+  readonly passed: boolean;
+  readonly watchdogStopped: boolean;
+  readonly waveformMissing: boolean;
+  readonly knownAnswerOnlyFailure: boolean;
+}
+
 export interface SweepSampleRecord {
   readonly schemaVersion: number;
   /** The experiment this sample belongs to; resume ignores any other. */
@@ -617,6 +816,240 @@ export interface SweepSampleRecord {
    * Golden_Judge's verdict for any sample.
    */
   readonly checkNameVisibilitySignal: boolean;
+  /** The Strategy_Arm the sample's arm declared, `control` when it declared none (Req 7.4). */
+  readonly strategyArm: StrategyArm;
+  /** How the sample's testbench decided when to compare (Req 1.8). */
+  readonly checkingApproach: CheckingApproach;
+  /** Which half of the Campaign the design reports in (Req 7.4). */
+  readonly designGroup: DesignGroup;
+  /** The `TESTBENCH_PROMPT_VERSION` the sample was generated under (Req 7.5). */
+  readonly testbenchPromptVersion: number;
+  /** The `SIMULATION_HARNESS_VERSION` every Testbench_Run of this sample compiled (Req 9.5). */
+  readonly simulationHarnessVersion: number;
+  /** Why the Testbench_Parser refused this sample's reply, or `null` when it did not (Req 7.10). */
+  readonly testbenchParseRefusal: TestbenchParseRefusal | null;
+  /**
+   * What the Positive_Control run itself showed, or `null` when none ran (Req 5.11).
+   *
+   * Four booleans: the control's own failing check NAMES are tool output and are reduced to
+   * `knownAnswerOnlyFailure` by the harness before they could reach a record.
+   */
+  readonly positiveControlRun: RecordedPositiveControlRun | null;
+  /**
+   * Failure reports in the measured testbench that carry no observed value (Req 5.4), or
+   * `null` when no testbench was measured; `null` is never folded into `0` (Req 2.8).
+   */
+  readonly valuelessFailureReports: number | null;
+  /**
+   * What the Formal_Oracle established for this sample, or `null` when no Formal_Property
+   * was submitted at all (Req 12.11).
+   *
+   * `null` is the honest value and not a placeholder: the unit of this field is a submitted
+   * property, so no submission is no record - the same reasoning `FormalProvenance.results`
+   * applies to its own empty array. It covers three real cases the sibling fields below then
+   * tell apart: no formal gate was wired, a gate ran over an empty Property_Set, and the
+   * oracle port failed before any property could be submitted (where `formalFallbackReason`
+   * is non-`null` over an absent run).
+   *
+   * See `RecordedFormalRun` for the roll-up precedence and why the five facts are nested.
+   */
+  readonly formal: RecordedFormalRun | null;
+  /**
+   * The Could_Not_Verify_Cause that made this sample take the Simulation_Fallback, or `null`
+   * where it did not (Req 7.9).
+   *
+   * FLAT rather than inside `formal` above, and that is load-bearing: a run whose oracle port
+   * threw records `toolchain-unavailable` here with NO submitted property, so nesting it would
+   * delete the fallback from exactly the samples whose fallback is least expected.
+   *
+   * Copied verbatim from `FormalProvenance.fallbackReason`, so the closed shape the loop
+   * recorded is the closed shape persisted (Req 7.8) - never re-derived from a note.
+   */
+  readonly formalFallbackReason: CouldNotVerifyCause | null;
+  /**
+   * WHY this sample did or did not take the Simulation_Fallback: one member of the closed
+   * four-member Fallback_Route vocabulary, persisted for EVERY sample (Req 7.21).
+   *
+   * THE FIELD THAT MAKES A FALL BACK EXPLICABLE ON EVERY ROUTE. `formalFallbackReason` alone
+   * answers only the cause-driven route: a REFUSED Property_Set and a Property_Set holding no
+   * Formal_Property both reach the Simulation_Fallback with no cause to name, so both used to
+   * persist as an all-`null` formal block that reads exactly like a sample no formal gate was
+   * wired for. Reading them back took a join across `formal`, `formalFallbackReason`, and
+   * `propertySetAdmitted`, and the join could not tell the empty set from the absent gate at
+   * all. The route states the fact directly, which is why Req 7.22's per-route counts rest on
+   * this field and not on a re-derivation.
+   *
+   * NEITHER OF THOSE TWO ROUTES IS A `CouldNotVerifyCause`, deliberately: every cause-keyed
+   * count in the summary is built on that vocabulary, and a refusal says the Property_Set was
+   * blunt while an empty set says nothing was asked - neither is a fact about the
+   * Formal_Oracle's verdict. See `FALLBACK_ROUTES` in `@app/agent` for the whole argument.
+   *
+   * REQUIRED PRESENT and non-nullable, by the rule `propertySetAdmitted` follows:
+   * `'not-applicable'` already states the fact an absent field would carry, so a deleted key
+   * must refuse the record rather than read as "this sample did not fall back".
+   *
+   * Copied verbatim from `FormalProvenance.fallbackRoute`, never re-derived here, so the
+   * record and the loop cannot disagree about which gate decided a sample.
+   */
+  readonly formalFallbackRoute: FallbackRoute;
+  /**
+   * The derived Reset_Contract this sample's formal run was taken under - its reset net, its
+   * polarity, its kind as synchronous or asynchronous, its free-initial-state fact, and the
+   * enable it fires under where one was named - or `null` where the pre-pass was NEVER REACHED
+   * (Req 12.21).
+   *
+   * `null` AND `{ derived: false }` ARE DIFFERENT FACTS AND STAY SO THROUGH THE ROUND TRIP.
+   * `null` means no contract was derived at all, because the pre-pass did not run or its
+   * report could not be read. `{ derived: false }` means the pre-pass RAN and positively
+   * REFUSED to derive one - two reset nets, two polarities, no net at all - which is a
+   * recorded outcome rather than an error (Req 14.20). An enable-gated reset is NOT among them:
+   * it derives, and the contract carries the enable (criterion 4.15 of
+   * `formal-gate-first-light`, which AMENDS Req 14.19). The assertion-gate emission below is a
+   * FUNCTION of this contract, so a record conflating the two could not explain its own gate.
+   *
+   * The `ResetContract` union `app/tools` already owns, not a parallel shape, for the reason
+   * `FormalProvenance` gives: that union is `renderPropertyWrapper`'s own parameter, so a
+   * second structurally-similar type would let the record and the wrapper drift apart on the
+   * one value they must agree about.
+   */
+  readonly formalResetContract: ResetContract | null;
+  /**
+   * Whether the `if (!$initstate)` assertion gate was emitted into the Property_Wrapper
+   * (Req 12.21).
+   *
+   * A separate persisted fact rather than one re-derived from the contract on read: the gate's
+   * emission is the OUTPUT of a two-condition rule over a synchronous reset AND a free initial
+   * state, and `emitsAssertionGate` also reads the PROPERTY, which this record does not carry.
+   * Re-deriving it here would be a second implementation of that rule, free to disagree with
+   * the wrapper that was actually built.
+   *
+   * A plain non-nullable boolean across every no-run case, because the gate genuinely was not
+   * emitted in any of them; `formalResetContract` is the field that distinguishes a refusal
+   * from a reading that never happened.
+   */
+  readonly formalAssertionGateEmitted: boolean;
+  /**
+   * The Clock_Contract this sample's formal run was taken under, or `null` where the pre-pass
+   * was never reached (Req 12.21).
+   *
+   * `null` is NOT `'none'`: `'none'` is the SUPPORTED no-clocked-state finding, a real reading
+   * of a real design, and collapsing an absent reading onto it would record a clock contract
+   * the run was never taken under. A value outside the four-member vocabulary REFUSES the
+   * record rather than defaulting, for the reason `goldenVerdict` is refused.
+   */
+  readonly formalClockPolarity: ClockPolarity | null;
+  /**
+   * What the Property_Set_Admission gate made of the Property_Set this sample's formal verdict
+   * would have rested on (Req 10.8).
+   *
+   * One member of a closed FOUR-member vocabulary, never a boolean: the gate admitted the set,
+   * the gate ran and had nothing to hold it to (`'no-gate-set'`), the gate refused it, or no
+   * gate ran at all (`'not-gated'`). Never nullable, for the reason `instrumentValidity` is
+   * never nullable - a sample nothing could be gated for is `'not-gated'`, which is a
+   * statement, where an absent field would silently read as gated-and-passed.
+   *
+   * EVIDENCE ABOUT THE PROPERTY SET AND NEVER ABOUT THE CANDIDATE DESIGN (Req 10.10). A
+   * refusal says the instrument is blunt; `passed` is still the simulation oracle's own
+   * verdict for that sample (Req 10.3).
+   */
+  readonly propertySetAdmitted: PropertySetAdmissionOutcome;
+  /**
+   * Whether the harness authored this sample's Property_Set before the runner was called.
+   *
+   * REQUIRED PRESENT and non-nullable, by the rule `propertySetAdmitted` follows. It cannot be
+   * derived from the admission outcome, which is the reason it exists: a gate that found no
+   * reference design, or that threw, records `'not-gated'` AFTER the set was authored and
+   * charged, so `'not-gated'` covers two samples with different `costCents`. A deleted key must
+   * refuse the record rather than read as `false`, which would assert this sample paid for no
+   * authoring.
+   *
+   * Rides task 7.5's bump of `RESULTS_SCHEMA_VERSION` to 14 and bumps nothing itself, so the
+   * schema moves once and no sweep record is written between the two changes.
+   */
+  readonly propertySetAuthoredUpFront: boolean;
+  /**
+   * How many reference-design mutants survived this sample's Property_Set (Req 10.8).
+   *
+   * Zero for every outcome other than `'refused'`, and genuinely zero rather than defaulted:
+   * an admitted set refuted every mutant in a non-empty gate set, and the other two outcomes
+   * had no gate set for a mutant to survive. The survivor IDENTITIES stay in the eval layer's
+   * own refusal, because a count is all a record needs to say how blunt the instrument was.
+   */
+  readonly propertySetSurvivorCount: number;
+  /**
+   * What the Property_Set_Admission gate's own calibrated mutant population measured, or
+   * `null` where NO GATE RAN for this sample (Req 9.4, 9.6, 9.9).
+   *
+   * THE FIELD REQUIREMENT 9.4 HAD NO DATA PATH FOR. `couldNotVerifyCount` is the count of
+   * mutants the Formal_Oracle could not reason about at all - a Yosys frontend rejection, a
+   * proof timeout - and those mutants are COUNTED AND EXCLUDED rather than scored either way,
+   * because counting one as a kill inflates the gate with mutants it never read and counting
+   * one as a survival would refuse a Property_Set for a weakness nobody demonstrated. Until
+   * this field existed the excluded mutant was tallied by `formalMutationCounts` and then
+   * DROPPED one layer up, before the record, so no Sweep_Summary could report it.
+   *
+   * Nested as ONE object rather than five sibling nullable columns, for the reason `mutation`
+   * is: the counts PARTITION one population - `totalCount === killedCount + survivedCount +
+   * couldNotVerifyCount` - so a record cannot carry an excluded count without the denominator
+   * it was excluded FROM. `denominator` here is the FORMAL gate's own and is NOT `mutation`'s
+   * `validCount`: the two gates exclude different mutants, which is exactly why
+   * `FormalMutationCounts` is its own type (Req 9.6).
+   *
+   * `null` IS A STATEMENT AND NOT A PLACEHOLDER, and it is the reading EVERY record carries
+   * today: no production `PropertySetGate` is wired yet, so every sweep sample runs with the
+   * gate absent and these counts read "NOT MEASURED" - which is the honest thing for the
+   * summary to print, and is a reason to carry the field rather than a reason to defer it. A
+   * `0` in its place would read as a gate that scored nothing, which is a different claim.
+   * The key is therefore REQUIRED PRESENT on every record, explicitly `null` where no gate
+   * ran (Req 12.34): deleting it from a line must not be able to assert a fact nobody
+   * measured.
+   */
+  readonly formalMutationCounts: FormalMutationCounts | null;
+}
+
+/**
+ * Project one run's `FormalProvenance` onto the fields a record persists (pure, total).
+ *
+ * THE PER-SAMPLE ROLL-UP RULE LIVES HERE: `refuted` beats `could-not-verify` beats `proved`,
+ * because a refutation is the finding. See `RecordedFormalRun` for why, and Req 7.17 for the
+ * fail-closed precedence this matches rather than restates.
+ *
+ * `propertySetAdmitted` and `propertySetSurvivorCount` are deliberately NOT derived here, even
+ * though `FormalProvenance` carries an admission outcome: the authoritative measurement is the
+ * eval-side gate's own, which the harness holds and the loop only receives a copy of. Deriving
+ * it from the provenance would give one fact two sources, free to disagree.
+ */
+export function recordedFormalRun(formal: FormalProvenance): RecordedFormalRun | null {
+  const deciding = decidingResult(formal.results);
+  if (deciding === null) {
+    return null;
+  }
+  return {
+    verdict: deciding.verdict,
+    cause: deciding.verdict === 'could-not-verify' ? deciding.cause : null,
+    // A `proved` result carries its `ProvedEvidence`, the same five facts in admitting form.
+    conditions: deciding.verdict === 'proved' ? deciding.evidence : deciding.conditions,
+    depth: deciding.depth,
+    elapsedMs: deciding.elapsedMs,
+  };
+}
+
+/**
+ * The ONE result a sample is recorded from, under the roll-up precedence, or `null` when no
+ * Formal_Property was submitted.
+ *
+ * Fail-closed in the same direction `#runFormalGate` decides the sample: a refutation is looked
+ * for before a `could-not-verify`, so a set holding both records the refutation. The first
+ * member of the winning verdict is taken, which is deterministic because `results` is in
+ * submission order.
+ */
+export function decidingResult(results: readonly PropertyResult[]): PropertyResult | null {
+  return (
+    results.find((result) => result.verdict === 'refuted') ??
+    results.find((result) => result.verdict === 'could-not-verify') ??
+    results.find((result) => result.verdict === 'proved') ??
+    null
+  );
 }
 
 /** The key identifying one sample slot within one experiment. */
@@ -669,6 +1102,102 @@ interface RecordIdentity {
   readonly modelSignature: string;
   readonly problemId: string;
   readonly sampleIndex: number;
+}
+
+/** The Campaign and harness fields of a v17 record. */
+interface RecordStrategy {
+  readonly strategyArm: StrategyArm;
+  readonly checkingApproach: CheckingApproach;
+  readonly designGroup: DesignGroup;
+  readonly testbenchPromptVersion: number;
+  readonly simulationHarnessVersion: number;
+  readonly testbenchParseRefusal: TestbenchParseRefusal | null;
+  readonly positiveControlRun: RecordedPositiveControlRun | null;
+  readonly valuelessFailureReports: number | null;
+}
+
+/** Decode the four Positive_Control booleans; any non-boolean makes the record undecodable. */
+function decodePositiveControlRun(raw: unknown): RecordedPositiveControlRun | null | undefined {
+  if (raw === null) {
+    return null;
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const fields = raw as Record<string, unknown>;
+  const read = (name: string): boolean | undefined => {
+    const value = fields[name];
+    return typeof value === 'boolean' ? value : undefined;
+  };
+  const passed = read('passed');
+  const watchdogStopped = read('watchdogStopped');
+  const waveformMissing = read('waveformMissing');
+  const knownAnswerOnlyFailure = read('knownAnswerOnlyFailure');
+  if (
+    passed === undefined ||
+    watchdogStopped === undefined ||
+    waveformMissing === undefined ||
+    knownAnswerOnlyFailure === undefined
+  ) {
+    return undefined;
+  }
+  return { passed, watchdogStopped, waveformMissing, knownAnswerOnlyFailure };
+}
+
+/**
+ * Decode the Campaign fields by set membership, refusing a `control` record that claims the
+ * scoreboard: the Control_Arm routes Cycle_Timed by construction, so that pair is not real.
+ */
+function decodeStrategyFields(raw: Record<string, unknown>): RecordStrategy | null {
+  const strategyArm = member(raw.strategyArm, STRATEGY_ARMS);
+  const checkingApproach = member(raw.checkingApproach, CHECKING_APPROACHES);
+  const designGroup = member(raw.designGroup, DESIGN_GROUPS);
+  const version = raw.testbenchPromptVersion;
+  const harnessVersion = raw.simulationHarnessVersion;
+  if (strategyArm === null || checkingApproach === null || designGroup === null) {
+    return null;
+  }
+  for (const value of [version, harnessVersion]) {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+      return null;
+    }
+  }
+  // The scoreboard is the Treatment_Arm's alone, so `control` and `grounded` both refuse it.
+  if (checkingApproach === 'in-order-scoreboard' && strategyArm !== 'treatment') {
+    return null;
+  }
+  // An unknown refusal code is undecodable rather than dropped: it would read as "parsed".
+  const refusal =
+    raw.testbenchParseRefusal === null
+      ? null
+      : member(raw.testbenchParseRefusal, TESTBENCH_PARSE_REFUSALS);
+  if (refusal === null && raw.testbenchParseRefusal !== null) {
+    return null;
+  }
+  const positiveControlRun = decodePositiveControlRun(raw.positiveControlRun);
+  if (positiveControlRun === undefined) {
+    return null;
+  }
+  // A malformed or absent count refuses the record: reading it as 0 would claim a measurement.
+  const valuelessFailureReports = raw.valuelessFailureReports;
+  if (
+    valuelessFailureReports !== null &&
+    (typeof valuelessFailureReports !== 'number' ||
+      !Number.isSafeInteger(valuelessFailureReports) ||
+      valuelessFailureReports < 0)
+  ) {
+    return null;
+  }
+  return {
+    strategyArm,
+    checkingApproach,
+    designGroup,
+    testbenchPromptVersion: version as number,
+    simulationHarnessVersion: harnessVersion as number,
+    testbenchParseRefusal: refusal,
+    positiveControlRun,
+    valuelessFailureReports,
+  };
 }
 
 /** Validate the identity fields; every one is required for the record to be keyable. */
@@ -909,6 +1438,386 @@ function decodeRepairDeclineReason(
 }
 
 /**
+ * An optional closed-set member, validated STRICTLY: absent and explicit `null` are readable
+ * and mean "this fact does not apply", and any other non-member REFUSES the whole record.
+ *
+ * The strict counterpart of `optionalMember` above, which silently reads a non-member as `null`.
+ * Used where `null` is itself a claim rather than a neutral placeholder - a `null`
+ * `formalFallbackReason` asserts the sample did NOT take the Simulation_Fallback - which is the
+ * same reasoning `readsAsGoldenKind` applies to a golden outcome.
+ */
+function strictOptionalMember<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): T | null | typeof INVALID_SHAPE {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return member(value, allowed) ?? INVALID_SHAPE;
+}
+
+/** The Presat_Check values a record may carry; a closed set, validated on read. */
+const PRESAT_CONDITIONS: readonly ProofConditions['presat'][] = [
+  'satisfiable',
+  'preunsat',
+  'not-run',
+];
+
+/** The Base_Check values a record may carry; a closed set, validated on read. */
+const BASE_CONDITIONS: readonly ProofConditions['base'][] = ['passed', 'failed', 'not-run'];
+
+/** The Induction_Check values a record may carry; a closed set, validated on read. */
+const INDUCTION_CONDITIONS: readonly ProofConditions['induction'][] = [
+  'successful',
+  'inconclusive',
+  'not-run',
+];
+
+/** The Reset_Contract kinds a record may carry; a closed set, validated on read. */
+const RESET_KINDS: readonly ('async' | 'sync')[] = ['async', 'sync'];
+
+/**
+ * Decode the antecedent Cover_Check, or `null` when it is unreadable.
+ *
+ * All three members stay distinct: a reached cover carries the STEP it was reached at,
+ * `reached: false` is a cover that ran and was not reached, and `'not-applicable'` is the
+ * unclocked case where no Cover_Check ran because an absent antecedent cannot be vacuous
+ * (Req 5.10). A `reached: true` with no readable step is refused rather than read as
+ * `reached: false`, which would turn a satisfied condition into a failed one.
+ */
+function decodeCoverCondition(raw: unknown): CoverCondition | null {
+  const cover = asRecord(raw);
+  if (cover === null) {
+    return null;
+  }
+  if (cover.reached === true) {
+    const step = nonNegativeInt(cover.step);
+    return step === null ? null : { reached: true, step };
+  }
+  if (cover.reached === false) {
+    return { reached: false };
+  }
+  return cover.reached === 'not-applicable' ? { reached: 'not-applicable' } : null;
+}
+
+/**
+ * Decode the FIVE Proof_Conditions, or `null` when any one of them is unreadable.
+ *
+ * Strict and whole, like `decodeMutationCounts`: a partially readable set is dropped rather
+ * than repaired, because four conditions beside a defaulted fifth is a record claiming a
+ * condition was measured when it was not - and `admitProved` weighs all five.
+ */
+function decodeProofConditions(raw: unknown): ProofConditions | null {
+  const conditions = asRecord(raw);
+  if (conditions === null) {
+    return null;
+  }
+  const assertionCount = nonNegativeInt(conditions.assertionCount);
+  const presat = member(conditions.presat, PRESAT_CONDITIONS);
+  const cover = decodeCoverCondition(conditions.cover);
+  const base = member(conditions.base, BASE_CONDITIONS);
+  const induction = member(conditions.induction, INDUCTION_CONDITIONS);
+  if (
+    assertionCount === null ||
+    presat === null ||
+    cover === null ||
+    base === null ||
+    induction === null
+  ) {
+    return null;
+  }
+  return { assertionCount, presat, cover, base, induction };
+}
+
+/**
+ * Decode the derived Reset_Contract, keeping `null` and `{ derived: false }` DISTINCT.
+ *
+ * The whole point of this decoder. Absent or explicit `null` means the pre-pass was never
+ * reached; `{ derived: false }` means it RAN and refused to derive a contract. Reading either
+ * one as the other would leave the record unable to explain its own gate emission, because
+ * `formalAssertionGateEmitted` is the output of a rule over this very value.
+ *
+ * A `derived: true` arm missing any of its four facts is refused rather than degraded to the
+ * refused arm, which would record a refusal that never happened.
+ */
+function decodeResetContract(raw: unknown): ResetContract | null | typeof INVALID_SHAPE {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  const contract = asRecord(raw);
+  if (contract === null) {
+    return INVALID_SHAPE;
+  }
+  if (contract.derived === false) {
+    return { derived: false };
+  }
+  if (contract.derived !== true) {
+    return INVALID_SHAPE;
+  }
+  const resetName = str(contract.resetName);
+  const resetKind = member(contract.resetKind, RESET_KINDS);
+  if (
+    resetName === null ||
+    resetKind === null ||
+    typeof contract.resetActiveLow !== 'boolean' ||
+    typeof contract.initialStateFree !== 'boolean'
+  ) {
+    return INVALID_SHAPE;
+  }
+  return {
+    derived: true,
+    resetName,
+    resetActiveLow: contract.resetActiveLow,
+    resetKind,
+    initialStateFree: contract.initialStateFree,
+  };
+}
+
+/**
+ * Decode the rolled-up formal run, or `null` when no Formal_Property was submitted.
+ *
+ * Strict, like `readsAsGoldenKind` and for the same reason: `null` is not a neutral
+ * placeholder here, it asserts that nothing was submitted, so a present-but-unreadable block
+ * REFUSES the whole record rather than degrading to a claim nobody measured. Accepts only
+ * members of the Formal_Verdict and Could_Not_Verify_Cause vocabularies (Req 12.12), and holds
+ * the cause to the verdict it belongs to - exactly as `decodeUncheckedReason` holds a reason to
+ * its own validity - so a `proved` record carrying a cause is as untrustworthy as a
+ * `could-not-verify` record missing one.
+ */
+function decodeFormalRun(raw: unknown): RecordedFormalRun | null | typeof INVALID_SHAPE {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  const run = asRecord(raw);
+  const verdict = run === null ? null : member(run.verdict, FORMAL_VERDICT_MEMBERS);
+  if (run === null || verdict === null) {
+    return INVALID_SHAPE;
+  }
+  const conditions = decodeProofConditions(run.conditions);
+  const depth = nonNegativeInt(run.depth);
+  const elapsedMs = nonNegative(run.elapsedMs);
+  const cause = decodeFormalCause(verdict, run.cause);
+  if (conditions === null || depth === null || elapsedMs === null || cause === INVALID_SHAPE) {
+    return INVALID_SHAPE;
+  }
+  return { verdict, cause, conditions, depth, elapsedMs };
+}
+
+/**
+ * Decode the Could_Not_Verify_Cause against the verdict it belongs to, or `INVALID_SHAPE` when
+ * the shape is wrong for that verdict.
+ *
+ * `decodeUncheckedReason`'s exact reasoning, one vocabulary over: a `could-not-verify` verdict
+ * carries exactly one cause (Req 1.5), and a `proved` or `refuted` verdict has no cause to
+ * carry, so a record claiming BOTH is exactly as untrustworthy as one missing a cause it needs
+ * - and both are refused rather than one being defaulted.
+ */
+function decodeFormalCause(
+  verdict: FormalVerdict,
+  value: unknown,
+): CouldNotVerifyCause | null | typeof INVALID_SHAPE {
+  if (verdict !== 'could-not-verify') {
+    return value === null || value === undefined ? null : INVALID_SHAPE;
+  }
+  return member(value, COULD_NOT_VERIFY_MEMBERS) ?? INVALID_SHAPE;
+}
+
+/**
+ * Decode the Property_Set_Admission gate's own mutant counts, keeping ABSENT and `null`
+ * DIFFERENT.
+ *
+ * Explicit `null` is readable and means NO GATE RAN, which is the state every sweep sample is
+ * in until a production `PropertySetGate` is wired. An ABSENT key is `INVALID_SHAPE`, which
+ * refuses the whole record: Req 12.34 requires every formal key present, because a deleted key
+ * would otherwise read as that same "no gate ran" statement, letting a hand-edited line assert
+ * a fact nobody measured. `strictOptionalMember` is therefore deliberately NOT the model here -
+ * it reads absent as `null` - and the sentinel is used instead.
+ *
+ * Strict and WHOLE, like `decodeMutationCounts`: a partially readable block is dropped rather
+ * than repaired, because an excluded-mutant count beside a defaulted denominator is a kill rate
+ * that is not a fraction of anything real. The two internal refusals are the arithmetic this
+ * type documents, and a block failing either did not come from `formalMutationCounts`, so
+ * inventing a reading of it would put a fabricated exclusion tally in a cited number:
+ *
+ *   - THE PARTITION. Every calibrated mutant is killed, survived, or excluded, and nothing
+ *     else: `totalCount === killedCount + survivedCount + couldNotVerifyCount`.
+ *   - THE DENOMINATOR (Req 12.33). `denominator === killedCount + survivedCount`, because
+ *     `formalMutationCounts` admits a mutant to the denominator on exactly the condition
+ *     `formalMutantIsScorable` names, and the only unscorable calibration is the one
+ *     `couldNotVerifyCount` tallies. So the denominator is not a free number beside the two
+ *     scored counts, it IS their sum - which is what makes `formalKillRateOf`'s quotient a
+ *     fraction of the mutants the oracle actually reasoned about. A denominator larger than
+ *     that sum understates the kill rate over mutants nobody scored, and a smaller one
+ *     overstates it; both read as a measurement.
+ */
+function decodeFormalMutationCounts(
+  raw: unknown,
+): FormalMutationCounts | null | typeof INVALID_SHAPE {
+  if (raw === null) {
+    return null;
+  }
+  const counts = asRecord(raw);
+  if (counts === null) {
+    return INVALID_SHAPE;
+  }
+  const totalCount = nonNegativeInt(counts.totalCount);
+  const denominator = nonNegativeInt(counts.denominator);
+  const killedCount = nonNegativeInt(counts.killedCount);
+  const survivedCount = nonNegativeInt(counts.survivedCount);
+  const couldNotVerifyCount = nonNegativeInt(counts.couldNotVerifyCount);
+  if (
+    totalCount === null ||
+    denominator === null ||
+    killedCount === null ||
+    survivedCount === null ||
+    couldNotVerifyCount === null ||
+    totalCount !== killedCount + survivedCount + couldNotVerifyCount ||
+    denominator !== killedCount + survivedCount
+  ) {
+    return INVALID_SHAPE;
+  }
+  return { totalCount, denominator, killedCount, survivedCount, couldNotVerifyCount };
+}
+
+/** The formal fields of a record, validated together; `null` when any one is unreadable. */
+interface RecordFormal {
+  readonly formal: RecordedFormalRun | null;
+  readonly formalFallbackReason: CouldNotVerifyCause | null;
+  readonly formalFallbackRoute: FallbackRoute;
+  readonly formalResetContract: ResetContract | null;
+  readonly formalAssertionGateEmitted: boolean;
+  readonly formalClockPolarity: ClockPolarity | null;
+  readonly propertySetAdmitted: PropertySetAdmissionOutcome;
+  readonly propertySetAuthoredUpFront: boolean;
+  readonly propertySetSurvivorCount: number;
+  readonly formalMutationCounts: FormalMutationCounts | null;
+}
+
+/**
+ * Every formal key a record of this schema version defines, as a TOTAL record of
+ * `RecordFormal`'s own keys (Req 12.34).
+ *
+ * `satisfies` rather than a hand-kept list, so a tenth formal field added to `RecordFormal` is
+ * a COMPILE ERROR here instead of a key that silently stops being required - which is the one
+ * failure mode a presence rule has, since the rule is enforced by iterating this list.
+ */
+const FORMAL_KEY_PRESENCE = {
+  formal: true,
+  formalFallbackReason: true,
+  formalFallbackRoute: true,
+  formalResetContract: true,
+  formalAssertionGateEmitted: true,
+  formalClockPolarity: true,
+  propertySetAdmitted: true,
+  propertySetAuthoredUpFront: true,
+  propertySetSurvivorCount: true,
+  formalMutationCounts: true,
+} satisfies Record<keyof RecordFormal, true>;
+
+/** The formal keys, read off the total record above so the two cannot drift. */
+const FORMAL_KEYS: readonly string[] = Object.keys(FORMAL_KEY_PRESENCE);
+
+/** The ONE Fallback_Route a Fallback_Reason belongs to. `satisfies`, so a rename breaks here. */
+const CAUSE_ROUTE = 'cause' satisfies FallbackRoute;
+
+/** The ONE admission outcome a surviving mutant can be counted under. */
+const REFUSED_ADMISSION = 'refused' satisfies PropertySetAdmissionOutcome;
+
+/**
+ * Validate the formal fields, or `null` when any one of them is unreadable.
+ *
+ * EVERY FORMAL KEY IS REQUIRED PRESENT (Req 12.34), and an explicit `null` is the only spelling
+ * of a formal fact that does not apply. The guard is a single presence sweep over `FORMAL_KEYS`
+ * rather than nine per-field checks, because the per-field decoders below read `undefined` as
+ * `null` by design - `decodeFormalRun` reads it as "no Formal_Property was submitted",
+ * `decodeResetContract` as "the pre-pass was never reached" - and each of those is a FACT, so a
+ * deleted key would otherwise assert one nobody measured. `formalFallbackRoute`,
+ * `formalAssertionGateEmitted`, `propertySetAdmitted`, `propertySetSurvivorCount`, and
+ * `formalMutationCounts` already refuse an absent key on their own; the sweep makes the rule one
+ * owner's rather than five separate accidents.
+ *
+ * `propertySetAdmitted` is non-nullable over its four members, matching `instrumentValidity`: a
+ * sample nothing could be gated for carries `'not-gated'`, which is a statement, so an absent
+ * field has no honest reading. `formalFallbackRoute` is non-nullable for the identical reason -
+ * `'not-applicable'` is the statement an absent field would have to stand in for (Req 7.21).
+ * Every other field here is optional in VALUE and strict in SHAPE - an explicit `null` means
+ * the fact does not apply, and a non-member refuses the record rather than defaulting to a fact
+ * nobody measured.
+ *
+ * TWO CROSS-FIELD RULES LIVE HERE, both over fields this function already holds, and each one
+ * makes unreadable only a record no writer of this schema can produce:
+ *
+ *   - THE FALLBACK IFF (Req 12.31, 7.19). A Fallback_Reason sits beside the Fallback_Route
+ *     `'cause'` and beside no other member. `formalProvenanceOf` in the Verification_Loop makes
+ *     that true BY CONSTRUCTION off a discriminated `TakenRoute`, so neither half is
+ *     producible: a reason under `'property-set-refused'` would name a Could_Not_Verify_Cause
+ *     for a fall back no cause drove, and a `'cause'` route with no reason would claim a cause
+ *     decided the sample while refusing to say which. Both read as measurements, and Req 7.22's
+ *     per-route counts are computed off the route while the per-cause counts are computed off
+ *     the reason, so a record violating the iff would be counted under a route and a cause that
+ *     describe two different samples.
+ *   - THE SURVIVOR RULE (Req 12.32, 10.8). A non-zero surviving-mutant count appears only
+ *     beside `'refused'`. `recordedPropertySetAdmission` in the harness writes the count from
+ *     the refusal's own survivors and zero for the other three outcomes, and that is not a
+ *     convention but the arithmetic: an ADMITTED set refuted every mutant in a non-empty gate
+ *     set, and `'no-gate-set'` and `'not-gated'` had no gate set for a mutant to survive. A
+ *     survivor count under any of those three would report a demonstrated weakness in a
+ *     Property_Set that was never refused for it.
+ */
+function decodeFormalFields(raw: Record<string, unknown>): RecordFormal | null {
+  if (FORMAL_KEYS.some((key) => !Object.hasOwn(raw, key))) {
+    return null;
+  }
+  const formal = decodeFormalRun(raw.formal);
+  const formalResetContract = decodeResetContract(raw.formalResetContract);
+  const formalFallbackReason = strictOptionalMember(
+    raw.formalFallbackReason,
+    COULD_NOT_VERIFY_MEMBERS,
+  );
+  const formalFallbackRoute = member(raw.formalFallbackRoute, FALLBACK_ROUTE_MEMBERS);
+  const formalClockPolarity = strictOptionalMember(raw.formalClockPolarity, CLOCK_POLARITY_MEMBERS);
+  const propertySetAdmitted = member(raw.propertySetAdmitted, PROPERTY_SET_ADMISSIONS);
+  const propertySetSurvivorCount = nonNegativeInt(raw.propertySetSurvivorCount);
+  const formalMutationCounts = decodeFormalMutationCounts(raw.formalMutationCounts);
+  if (
+    formal === INVALID_SHAPE ||
+    formalResetContract === INVALID_SHAPE ||
+    formalFallbackReason === INVALID_SHAPE ||
+    formalClockPolarity === INVALID_SHAPE ||
+    formalMutationCounts === INVALID_SHAPE ||
+    formalFallbackRoute === null ||
+    propertySetAdmitted === null ||
+    propertySetSurvivorCount === null ||
+    typeof raw.formalAssertionGateEmitted !== 'boolean' ||
+    // Required present: an absent key would read as `false` and assert this sample paid for no
+    // authoring, which is a fact nobody measured.
+    typeof raw.propertySetAuthoredUpFront !== 'boolean'
+  ) {
+    return null;
+  }
+  if (
+    // Req 12.31: the Fallback_Reason sits beside the `cause` route and beside nothing else.
+    (formalFallbackReason !== null) !== (formalFallbackRoute === CAUSE_ROUTE) ||
+    // Req 12.32: a survivor is counted only where the Property_Set was actually refused.
+    (propertySetSurvivorCount > 0 && propertySetAdmitted !== REFUSED_ADMISSION)
+  ) {
+    return null;
+  }
+  return {
+    formal,
+    formalFallbackReason,
+    formalFallbackRoute,
+    formalResetContract,
+    formalAssertionGateEmitted: raw.formalAssertionGateEmitted,
+    formalClockPolarity,
+    propertySetAdmitted,
+    propertySetAuthoredUpFront: raw.propertySetAuthoredUpFront,
+    propertySetSurvivorCount,
+    formalMutationCounts,
+  };
+}
+
+/**
  * Decode one untrusted record, or `null` when it is not a complete, valid record.
  *
  * Strict on purpose: a half-written or hand-edited line is DROPPED rather than
@@ -970,11 +1879,29 @@ export function decodeSampleRecord(raw: unknown): SweepSampleRecord | null {
   if (repairDeclineReason === INVALID_SHAPE) {
     return null;
   }
+  const formalFields = decodeFormalFields(record);
+  const strategy = decodeStrategyFields(record);
+  if (formalFields === null || strategy === null) {
+    return null;
+  }
+  // Req 12.29, the one cross-field rule that spans two decoders and therefore sits here rather
+  // than in `decodeFormalFields`, which never sees the outcome status. A `setup-failed` sample
+  // failed BEFORE a candidate or an independent testbench existed - `VerificationLoop#verify`
+  // returns that outcome straight out of `#setup`, so no Formal_Property can have been
+  // submitted and `recordedFormalRun` returns `null` for it by construction. A `setup-failed`
+  // record carrying a formal run therefore did not come from real code, and reading one would
+  // credit a Formal_Verdict to a sample whose candidate was never generated, putting it into
+  // the per-verdict counts Req 12.17 reports.
+  if (outcomeStatus === SETUP_FAILED && formalFields.formal !== null) {
+    return null;
+  }
   return {
     schemaVersion: RESULTS_SCHEMA_VERSION,
     ...identity,
     ...measurement,
     ...tokens,
+    ...formalFields,
+    ...strategy,
     passed: record.passed,
     outcomeStatus,
     costKnown: record.costKnown,
@@ -1030,11 +1957,16 @@ export interface ResultsLogHealth {
   /** Non-blank lines that did not decode; surfaced so corruption is visible. */
   readonly malformedLines: number;
   /**
-   * Lines that ARE records but were written at an older schema version.
+   * Lines that ARE records but were written at a DIFFERENT schema version - older or newer.
    *
    * Counted separately from `malformedLines` because they are not corruption and the
-   * remedy is different: corruption costs the affected lines, whereas a stale schema means
-   * the whole file must not be aggregated at all (see `STALE_SCHEMA_ADVICE`).
+   * remedy is different: corruption costs the affected lines, whereas another schema version
+   * means the whole file must not be aggregated at all (see `STALE_SCHEMA_ADVICE`).
+   *
+   * Named for the older case, which is the one an operator meets: a lower version is what a
+   * directory written before a bump holds. A HIGHER version is counted here too (Req 12.28)
+   * and refuses the file by the same rule - see `readsAsOtherSchema` for why a record a newer
+   * build wrote is history from the other direction rather than noise.
    */
   readonly staleSchemaLines: number;
 }
@@ -1047,7 +1979,7 @@ export interface ParsedResultsLog extends ResultsLogHealth {
 /** How one line of a results log classified. */
 type LineOutcome =
   | { readonly kind: 'record'; readonly record: SweepSampleRecord }
-  | { readonly kind: 'stale' }
+  | { readonly kind: 'other-schema' }
   | { readonly kind: 'malformed' };
 
 /**
@@ -1068,7 +2000,7 @@ export function parseResultsLog(text: string): ParsedResultsLog {
     const outcome = decodeLine(line);
     if (outcome.kind === 'record') {
       records.push(outcome.record);
-    } else if (outcome.kind === 'stale') {
+    } else if (outcome.kind === 'other-schema') {
       staleSchemaLines += 1;
     } else {
       malformedLines += 1;
@@ -1077,7 +2009,7 @@ export function parseResultsLog(text: string): ParsedResultsLog {
   return { records, malformedLines, staleSchemaLines };
 }
 
-/** Decode one line's JSON then its shape, classifying a stale schema separately. */
+/** Decode one line's JSON then its shape, classifying another schema version separately. */
 function decodeLine(line: string): LineOutcome {
   let raw: unknown;
   try {
@@ -1090,21 +2022,57 @@ function decodeLine(line: string): LineOutcome {
   if (record !== null) {
     return { kind: 'record', record };
   }
-  return readsAsOlderSchema(raw) ? { kind: 'stale' } : { kind: 'malformed' };
+  return readsAsOtherSchema(raw) ? { kind: 'other-schema' } : { kind: 'malformed' };
 }
 
 /**
- * Whether a line looks like a real record written at an EARLIER schema version.
+ * Whether a line looks like a real record written at a DIFFERENT schema version - older or
+ * NEWER (Req 12.10, 12.28).
  *
- * Deliberately narrow: it must be an object carrying an integer `schemaVersion` below the
- * current one. A line with a garbage or future version is corruption, not history, and is
- * counted as malformed so the stale-schema refusal cannot be triggered by noise.
+ * Deliberately narrow: it must be an object carrying an integer `schemaVersion` that is not the
+ * current one. A line with a garbage version - a string, a float, an array - is corruption
+ * rather than history, and stays malformed so the whole-file refusal cannot be triggered by
+ * noise.
+ *
+ * A HIGHER VERSION USED TO BE COUNTED AS CORRUPTION, AND THAT WAS THE WRONG DIRECTION. The
+ * reasoning was that nothing writes a future version, so one can only be noise. But a well-
+ * formed record at a higher version is precisely what a NEWER BUILD writes, which happens
+ * whenever an operator resumes into a directory a later build already wrote, or concatenates
+ * two runs' files. Such a record carries fields this reader cannot interpret, and worse, it may
+ * REDEFINE a field this reader thinks it understands - which is exactly what every bump
+ * documented on `RESULTS_SCHEMA_VERSION` did to the version below it. Counting it as
+ * `malformedLines` reports it as damage to a handful of lines and then AGGREGATES the file
+ * anyway; counting it here refuses the file whole. The results file is read back as EVIDENCE a
+ * cited number comes from, so its reader is a trust boundary, and refusal is the fail-safe
+ * direction in both directions along the version axis.
  */
-function readsAsOlderSchema(raw: unknown): boolean {
+function readsAsOtherSchema(raw: unknown): boolean {
   const record = asRecord(raw);
   const version = record?.schemaVersion;
   return (
-    typeof version === 'number' && Number.isInteger(version) && version < RESULTS_SCHEMA_VERSION
+    typeof version === 'number' && Number.isInteger(version) && version !== RESULTS_SCHEMA_VERSION
+  );
+}
+
+/** What the running build and its arms are, so resume never counts a record made by another. */
+export interface RunningArms {
+  readonly testbenchPromptVersion: number;
+  /** The `SIMULATION_HARNESS_VERSION` the running build compiles into every Testbench_Run. */
+  readonly simulationHarnessVersion: number;
+  /** The Strategy_Arm the running config gives this arm name. */
+  readonly strategyOf: (armName: string) => StrategyArm;
+}
+
+/**
+ * Whether a record was made by the running prompt version and arm strategy (Req 7.5). The
+ * config hash already folds both, so this is the rule stated on its own rather than new power.
+ */
+function matchesRunning(record: SweepSampleRecord, running: RunningArms | undefined): boolean {
+  return (
+    running === undefined ||
+    (record.testbenchPromptVersion === running.testbenchPromptVersion &&
+      record.simulationHarnessVersion === running.simulationHarnessVersion &&
+      record.strategyArm === running.strategyOf(record.armName))
   );
 }
 
@@ -1147,11 +2115,12 @@ export class CompletedSampleIndex {
   static fromRecords(
     records: readonly SweepSampleRecord[],
     configHash: string,
+    running?: RunningArms,
   ): CompletedSampleIndex {
     const keys = new Set<string>();
     const deferred = new Set<string>();
     for (const record of records) {
-      if (record.configHash !== configHash) {
+      if (record.configHash !== configHash || !matchesRunning(record, running)) {
         continue;
       }
       const key = sampleKey(record.armName, record.problemId, record.sampleIndex);

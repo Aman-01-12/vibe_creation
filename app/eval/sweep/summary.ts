@@ -91,9 +91,37 @@
 //   from an existing population to make room for it - a deferred slot was still dispatched
 //   and may still have cost tokens - so no previously cited number moves.
 //
+// A FORMAL PROOF IS REPORTED AS EXACTLY WHAT IT IS, AND NOTHING MORE
+//   The formal block counts what the Formal_Oracle decided, per arm, from the record's own
+//   typed fields: the deciding Formal_Verdict and its Could_Not_Verify_Cause, the
+//   Fallback_Reason that sent a sample to the Simulation_Fallback, and the Property_Set
+//   admission outcome. The three verdicts plus `none-submitted` partition the arm, so all four
+//   always print; a cause row prints only when it holds a sample, so the causes that fired are
+//   never buried under a wall of zeros. The Fallback_Route rows follow that same rule over their
+//   own closed four-member vocabulary, read from `@app/agent` rather than restated here, so a
+//   fifth route is a compile error instead of a row this file silently never prints.
+//
+//   The block ends with the FORMAL mutant tally: killed, survived, EXCLUDED, and the calibrated
+//   total, summed over the samples carrying one, with the kill rate taken over the formal gate's
+//   OWN denominator. The excluded count is the one that used to exist nowhere a reader could
+//   reach it. Both no-rate cases - no sample carrying a tally, and a tally whose denominator is
+//   zero - render NOT MEASURED and never `0`, because a `0` is a claim about a gate that ran and
+//   killed nothing, which is the distinction `killRateOf` already draws on the simulation side.
+//
+//   A fixed caveat sits directly under the verdicts, because `proved` is the number most easily
+//   read as more than it is: a proof of a STATED property is not a proof of correctness
+//   (ADR-019), and the correlated-failure risk of one model writing both the design and its
+//   properties is layer 3's work (ADR-018), which no number in this block measures.
+//
 // Pure: no clock, no I/O, no randomness.
 
-import type { RepairDeclineReason } from '@app/agent';
+import { FALLBACK_ROUTES, type FallbackRoute, type RepairDeclineReason } from '@app/agent';
+import {
+  COULD_NOT_VERIFY_CAUSES,
+  FORMAL_VERDICTS,
+  type CouldNotVerifyCause,
+  type FormalVerdict,
+} from '@app/tools';
 
 import {
   countsInGoldenPassAtK,
@@ -124,6 +152,7 @@ import {
   type SurvivedOperatorCount,
 } from '../mutation-control.js';
 import { meanPassAtK, passAtK } from '../metrics.js';
+import { formalKillRateOf, type FormalMutationCounts } from '../property-set-admission.js';
 import {
   describeNoVerdictCause,
   isDeferredSample,
@@ -255,6 +284,23 @@ export interface RepairDeclineReasonCount {
 }
 
 /**
+ * One Could_Not_Verify_Cause and how many samples carried it.
+ *
+ * Serves the Fallback_Reason breakdown as well, because a Fallback_Reason IS the
+ * Could_Not_Verify_Cause that sent its sample to the Simulation_Fallback.
+ */
+export interface CouldNotVerifyCauseCount {
+  readonly cause: CouldNotVerifyCause;
+  readonly count: number;
+}
+
+/** One Fallback_Route member and how many samples took it (Req 7.22). */
+export interface FallbackRouteCount {
+  readonly route: FallbackRoute;
+  readonly count: number;
+}
+
+/**
  * The `InstrumentUncheckedReason` members, in a fixed tie-break order.
  *
  * `../instrument-control.js` exports the type but no enumerable array of its members
@@ -294,6 +340,107 @@ const REPAIR_DECLINE_REASONS: readonly RepairDeclineReason[] = [
   'port-threw',
   'port-unavailable',
 ];
+
+/**
+ * What the FORMAL oracle established across one arm, read off the persisted records alone.
+ *
+ * THE VERDICT BUCKETS PARTITION THE ARM. Every record lands in exactly one of the three
+ * Formal_Verdict buckets or in `noneSubmittedSamples`, so the four sum to
+ * `ArmSummary.sampleCount` by construction - the discipline the golden exclusion tally keeps -
+ * and the formal population can never be mistaken for the whole arm.
+ *
+ * EVERY COUNT IS READ FROM ONE RECORD FIELD, never re-derived from a different one. The verdict
+ * and its cause are the record's rolled-up `formal` run, the Fallback_Reason is
+ * `formalFallbackReason`, the ROUTE is `formalFallbackRoute`, and a refusal is
+ * `propertySetAdmitted`. The record keeps those apart for a reason the counts must not erase: a
+ * Property_Set source that THREW falls back on `toolchain-unavailable` with no property
+ * submitted, and a REFUSED Property_Set reaches the loop empty and falls back under the
+ * Fallback_Route `property-set-refused` with no Fallback_Reason, because no
+ * Could_Not_Verify_Cause caused it (Req 10.3) - which is precisely why the route is its own
+ * closed vocabulary and `routeCounts` is tallied separately from `fallbackReasonCounts`.
+ *
+ * THE MUTANT COUNTS ARE SUMMED, NEVER RE-DERIVED, and `null` where no sample carried a tally:
+ * no gate ran, so there is nothing to report, which is a different claim from an all-zero tally
+ * (Req 9.12). The formal kill rate comes from `formalKillRateOf` over the SUMMED denominator and
+ * is `null` where that denominator is zero (Req 9.11).
+ */
+export interface ArmFormalReport {
+  /** Samples under each Formal_Verdict; all three members, always, even at zero (Req 12.17). */
+  readonly verdictCounts: Readonly<Record<FormalVerdict, number>>;
+  /** Samples whose record carries no formal run, because no Formal_Property was submitted. */
+  readonly noneSubmittedSamples: number;
+  /**
+   * The `could-not-verify` samples by Could_Not_Verify_Cause, most frequent first (Req 12.17).
+   *
+   * Only a cause holding at least one sample has an entry, so the causes that fired are not
+   * buried under zeros; the entries sum to exactly `verdictCounts['could-not-verify']`.
+   */
+  readonly causeCounts: readonly CouldNotVerifyCauseCount[];
+  /** Samples decided from the Simulation_Fallback: those carrying a Fallback_Reason (Req 7.10). */
+  readonly fallbackSamples: number;
+  /** Those samples by Fallback_Reason, most frequent first, zero entries dropped; sums to them. */
+  readonly fallbackReasonCounts: readonly CouldNotVerifyCauseCount[];
+  /**
+   * Samples whose candidate design the formal frontend rejected (Req 8.7).
+   *
+   * The `frontend-rejected` entry of `causeCounts`, kept as its own count because that entry is
+   * dropped at zero and this one is the named quarantine, reported whether or not it fired.
+   */
+  readonly frontendRejectedSamples: number;
+  /**
+   * Samples whose Property_Set the admission gate refused as inadmissible (Req 10.9), or `null`
+   * where NO sample in the arm was gated at all (Req 9.5).
+   *
+   * `null` is NOT MEASURED and a `0` is a gate that ran and refused nothing (Req 9.6): reporting
+   * both as `0` would claim a clean gate for an arm no gate ran for - the same distinction
+   * `mutationCounts` draws below.
+   *
+   * Over `'refused'` ALONE. `'no-gate-set'` is a gate that ran with nothing to hold the set to,
+   * so tallying it here would report a refusal that never happened.
+   */
+  readonly propertySetRefusedSamples: number | null;
+  /**
+   * Samples under each Fallback_Route member HOLDING AT LEAST ONE, most frequent first (Req 7.22).
+   *
+   * A member with no sample yields no entry, so the routes that fired are not buried under four
+   * rows of zeros - the rule `causeCounts` already follows. Every record carries exactly one
+   * route (`formalFallbackRoute` is required and non-nullable), so these entries PARTITION the
+   * arm and sum to `ArmSummary.sampleCount`, which is what makes a missing route visible rather
+   * than merely absent.
+   */
+  readonly routeCounts: readonly FallbackRouteCount[];
+  /**
+   * The arm's Formal_Mutation_Counts, SUMMED over the samples carrying one (Req 9.4).
+   *
+   * `null` where NO sample in the arm carries a tally: no Property_Set_Admission ran, so the
+   * excluded count is NOT MEASURED rather than zero (Req 9.12). An all-zero tally would read as
+   * a gate that calibrated mutants and scored none of them, which is the opposite claim - the
+   * same distinction `SweepSampleRecord.formalMutationCounts` draws one layer down.
+   */
+  readonly mutationCounts: FormalMutationCounts | null;
+  /**
+   * The FORMAL kill rate: `killedCount / denominator` over the summed counts, or `null`.
+   *
+   * Computed through `formalKillRateOf` rather than inline, so this file is not a second owner
+   * of the rule that excludes an unscorable mutant from the denominator. `null` at a zero
+   * denominator and at absent counts alike (Req 9.11, 9.12), rendered "not measured": a `0`
+   * reads as a gate that killed nothing where no rate reads as nothing to rate.
+   *
+   * NOT comparable to `MutationControlReport.killRate`: the two gates exclude different mutants,
+   * so the two denominators are different populations over the same mutant set (Req 9.6).
+   */
+  readonly mutationKillRate: number | null;
+}
+
+/** One arm's reportability figures, reported BESIDE Instrument_Valid and never inside it. */
+export interface ArmReportabilityReport {
+  /** Samples whose measured testbench held at least one Valueless_Failure_Report. */
+  readonly withReport: number;
+  /** Samples that HAD a measured testbench: a `null` count is not a denominator member. */
+  readonly sources: number;
+  /** `withReport / sources`, or `null` when no sample had a measured testbench (Req 8.11). */
+  readonly valuelessReportRate: number | null;
+}
 
 /** One arm's aggregated result. */
 export interface ArmSummary {
@@ -357,6 +504,8 @@ export interface ArmSummary {
    * generator rather than the model.
    */
   readonly instrument: InstrumentControlReport;
+  /** Valueless_Failure_Report figures, reported beside `instrument` and never an input to it. */
+  readonly reportability: ArmReportabilityReport;
   /**
    * What the NEGATIVE CONTROL established about this arm's own testbenches.
    *
@@ -366,6 +515,14 @@ export interface ArmSummary {
    * whole sweep for improving it.
    */
   readonly mutation: MutationControlReport;
+  /**
+   * What the FORMAL oracle established for this arm: its verdicts, why it could not verify,
+   * what fell back, what the frontend rejected, and what the admission gate refused.
+   *
+   * Read the caveat the rendered block prints under the verdicts before citing `proved`: a proof
+   * of a STATED property is not a proof of correctness (Req 10.11, 10.12).
+   */
+  readonly formal: ArmFormalReport;
   readonly verifiedSamples: number;
   /** Passing samples whose FIRST candidate passed (iterations === 1). */
   readonly firstTrySamples: number;
@@ -396,12 +553,11 @@ export interface ArmSummary {
   /**
    * Of `testbenchRepairAttempted`, how many were accepted on re-check.
    *
-   * Read from `SweepSampleRecord.repairAccepted`, which owns this field's meaning and
-   * carries the loop's own `RepairProvenance.accepted` verbatim: the revised testbench
-   * passed the Testbench_Precheck RE-CHECK, so it is the testbench the sample's final
-   * `instrumentValidity` was decided from (`VerificationLoop#repairPrecheckFailure`).
-   * Acceptance is a statement about the instrument BUILDING, not about the Positive_Control
-   * subsequently finding it `valid`.
+   * Read from `SweepSampleRecord.repairAccepted`. ACCEPTANCE IS NOT INSTRUMENT VALIDITY: the
+   * precheck path accepts on the repaired testbench passing its PRECHECK re-check, a build
+   * check, so that sample goes on to `#iterate` and can still end `invalid`. Measured in
+   * `.eval-runs/reportability-slice-v1`: 14 accepted, 0 of them instrument-valid.
+   * `validAfterRepair` below is therefore a strictly smaller count, never this one.
    */
   readonly testbenchRepairAccepted: number;
   /**
@@ -418,17 +574,19 @@ export interface ArmSummary {
   /**
    * Of `instrument.validSamples`, how many needed no Testbench_Repair at all.
    *
-   * Derived as `instrument.validSamples - testbenchRepairAccepted`, which treats the
-   * accepted count as a SUBSET of the headline valid total, so subtracting it leaves the
-   * samples that were valid on the FIRST testbench with no repair attempt in their history.
+   * `instrument.validSamples - validAfterRepair`. Subtracting `validAfterRepair` and not
+   * `testbenchRepairAccepted` is what keeps this non-negative: an accepted repair need not
+   * have ended `valid`, so the accepted count can exceed the headline total, which drove
+   * this field to -10 on a measured run.
    */
   readonly validNoRepair: number;
   /**
    * Of `instrument.validSamples`, how many reached `valid` only after a Testbench_Repair.
    *
-   * Equal to `testbenchRepairAccepted`; see that field for what acceptance means and where
-   * the flag comes from. A repair that was attempted but NOT accepted left its sample on
-   * the original testbench and is not part of this count.
+   * The INTERSECTION of accepted-on-re-check and instrument-valid, recounted from the
+   * records rather than read off `testbenchRepairAccepted`, because acceptance does not
+   * imply validity. A repair accepted that still ended `invalid` belongs to neither part of
+   * this decomposition, which is of the valid total alone.
    */
   readonly validAfterRepair: number;
   /**
@@ -523,6 +681,15 @@ export interface SweepSummary {
    * the arms, so it is exactly `arms.flatMap(deferredSamples)` and cannot disagree with them.
    */
   readonly deferredSamples: number;
+  /**
+   * How many of the aggregated records carry no oracle verdict; 0 when every one does.
+   *
+   * A SUPERSET of `deferredSamples`, and the reason both are carried: a deferred slot is only
+   * the INFRASTRUCTURE half, so a file whose no-verdict records are findings reports 0 deferred
+   * and a non-zero count here. Taken over the same config-scoped population as `totalSamples`,
+   * from the one `hasOracleVerdict` predicate, so the two numbers describe one file.
+   */
+  readonly noVerdictSamples: number;
   /**
    * Whether this summary REFUSED to aggregate.
    *
@@ -652,13 +819,30 @@ function goldenOf(record: SweepSampleRecord): RecordedGoldenVerdict | null {
   return { kind: record.goldenVerdict, failureCount: record.goldenFailureCount };
 }
 
-/** The verdict pairs the agreement aggregator consumes. */
-function verdictPairs(records: readonly SweepSampleRecord[]): readonly VerdictPair[] {
+/**
+ * The verdict pairs the agreement aggregator consumes.
+ *
+ * Exported so `./campaign-table.ts` reads Missed_Bug, Over_Strict, and Golden_Agreement through
+ * the SAME projection this summary does; two readers of one word could otherwise disagree.
+ */
+export function verdictPairs(records: readonly SweepSampleRecord[]): readonly VerdictPair[] {
   return records.map((record) => ({ loopPassed: record.passed, golden: goldenOf(record) }));
 }
 
-/** The per-sample instrument facts the control aggregator consumes. */
-function instrumentSamples(records: readonly SweepSampleRecord[]): readonly InstrumentSample[] {
+/**
+ * The records golden agreement is read over: an invalid instrument's verdict measured nothing, so
+ * it is reported as an instrument defect instead. Exported so the Campaign table uses this filter.
+ */
+export function agreementRecords(
+  records: readonly SweepSampleRecord[],
+): readonly SweepSampleRecord[] {
+  return records.filter((record) => record.instrumentValidity !== 'invalid');
+}
+
+/** The per-sample instrument facts the control aggregator consumes; exported with `verdictPairs`. */
+export function instrumentSamples(
+  records: readonly SweepSampleRecord[],
+): readonly InstrumentSample[] {
   return records.map((record) => ({
     outcomeStatus: record.outcomeStatus,
     instrument: instrumentVerdictOf(record),
@@ -799,6 +983,176 @@ function repairDeclinedByReason(
   }).sort((left, right) => right.count - left.count);
 }
 
+/**
+ * Tally Could_Not_Verify_Causes over their closed vocabulary, most frequent first (pure).
+ *
+ * Iterated over `COULD_NOT_VERIFY_CAUSES` rather than over the observed values, for the reason
+ * `deferredCauses` iterates `NO_VERDICT_CAUSES`: the declaration order is the tie break, so the
+ * breakdown is byte-identical whatever order concurrent samples finished in. A cause holding no
+ * sample yields no entry (Req 12.17), so a healthy arm gains no noise.
+ */
+function causeCounts(causes: readonly CouldNotVerifyCause[]): readonly CouldNotVerifyCauseCount[] {
+  const counts = new Map<CouldNotVerifyCause, number>();
+  for (const cause of causes) {
+    counts.set(cause, (counts.get(cause) ?? 0) + 1);
+  }
+  return COULD_NOT_VERIFY_CAUSES.flatMap((cause) => {
+    const count = counts.get(cause) ?? 0;
+    return count === 0 ? [] : [{ cause, count }];
+  }).sort((left, right) => right.count - left.count);
+}
+
+/**
+ * The cause behind each `could-not-verify` deciding verdict, one per such record (pure).
+ *
+ * Read only where the verdict IS `could-not-verify`, the pairing `decodeFormalCause` in
+ * `./results-log.ts` already holds on read, so the cause entries can only ever sum to that
+ * verdict's bucket - the same double guard `uncheckedReasonCounts` keeps on its own pairing.
+ */
+function couldNotVerifyCauses(
+  records: readonly SweepSampleRecord[],
+): readonly CouldNotVerifyCause[] {
+  return records.flatMap((record) => {
+    const run = record.formal;
+    return run?.verdict === 'could-not-verify' && run.cause !== null ? [run.cause] : [];
+  });
+}
+
+/**
+ * Tally the Fallback_Routes, most frequent first, dropping the members nothing took (pure).
+ *
+ * Iterated over `FALLBACK_ROUTES` - imported from `@app/agent`, which OWNS the vocabulary -
+ * rather than over the observed values, for the reason `causeCounts` iterates
+ * `COULD_NOT_VERIFY_CAUSES`: the declaration order is the tie break, so the breakdown is
+ * byte-identical whatever order concurrent samples finished in. Reading the owner's array also
+ * means a FIFTH route is a compile error here rather than a row this file silently never prints.
+ */
+function routeCounts(records: readonly SweepSampleRecord[]): readonly FallbackRouteCount[] {
+  const counts = new Map<FallbackRoute, number>();
+  for (const record of records) {
+    const route = record.formalFallbackRoute;
+    counts.set(route, (counts.get(route) ?? 0) + 1);
+  }
+  return FALLBACK_ROUTES.flatMap((route) => {
+    const count = counts.get(route) ?? 0;
+    return count === 0 ? [] : [{ route, count }];
+  }).sort((left, right) => right.count - left.count);
+}
+
+/** A tally with nothing in it: the summation seed, never a reported value. */
+const NO_FORMAL_MUTANTS: FormalMutationCounts = {
+  totalCount: 0,
+  denominator: 0,
+  killedCount: 0,
+  survivedCount: 0,
+  couldNotVerifyCount: 0,
+};
+
+/**
+ * Sum the arm's Formal_Mutation_Counts, or report that nothing carried any (pure).
+ *
+ * `null` for an arm where NO sample carries a tally, which is every arm until a production
+ * `PropertySetGate` is wired: the summation of nothing is an all-zero tally, and that reads as a
+ * gate that calibrated mutants and scored none of them (Req 9.12). The guard is on the length of
+ * the carrying population rather than on the summed totals, so an arm whose gate genuinely
+ * calibrated ZERO mutants still reports a measured tally.
+ *
+ * Every field is summed, including `couldNotVerifyCount`, which is the whole point: an excluded
+ * mutant is reported rather than dropped on the way to the report (Req 9.4).
+ */
+function formalMutationTotals(records: readonly SweepSampleRecord[]): FormalMutationCounts | null {
+  const tallied = records.flatMap((record) =>
+    record.formalMutationCounts === null ? [] : [record.formalMutationCounts],
+  );
+  if (tallied.length === 0) {
+    return null;
+  }
+  return tallied.reduce<FormalMutationCounts>(
+    (totals, counts) => ({
+      totalCount: totals.totalCount + counts.totalCount,
+      denominator: totals.denominator + counts.denominator,
+      killedCount: totals.killedCount + counts.killedCount,
+      survivedCount: totals.survivedCount + counts.survivedCount,
+      couldNotVerifyCount: totals.couldNotVerifyCount + counts.couldNotVerifyCount,
+    }),
+    NO_FORMAL_MUTANTS,
+  );
+}
+
+/** Tally the deciding Formal_Verdicts; every member is present, so a zero still prints (pure). */
+function formalVerdictCounts(
+  records: readonly SweepSampleRecord[],
+): Readonly<Record<FormalVerdict, number>> {
+  const counts: Record<FormalVerdict, number> = { proved: 0, refuted: 0, 'could-not-verify': 0 };
+  for (const record of records) {
+    if (record.formal !== null) {
+      counts[record.formal.verdict] += 1;
+    }
+  }
+  return counts;
+}
+
+/**
+ * One arm's refused-Property_Set count, or `null` where NO sample was gated (Req 9.5, 9.6).
+ *
+ * Decided ONE STEP EARLIER than the refusal filter: an arm whose every record reads `'not-gated'`
+ * had nothing gated, so it has no refusal count to report, which is a different claim from a gate
+ * that ran and refused nothing. `'no-gate-set'` is a gate that RAN with nothing to hold the set
+ * to, so it counts as gated here while still not counting as a refusal.
+ */
+function refusedSamplesOf(records: readonly SweepSampleRecord[]): number | null {
+  const gated = records.filter((record) => record.propertySetAdmitted !== 'not-gated');
+  return gated.length === 0
+    ? null
+    : gated.filter((record) => record.propertySetAdmitted === 'refused').length;
+}
+
+/**
+ * Aggregate one arm's FORMAL numbers (pure).
+ *
+ * Each total and its breakdown come from ONE list, so the cause entries cannot disagree with the
+ * frontend-rejected count and the Fallback_Reason entries cannot disagree with the fallback
+ * total - the one-filter discipline `deferredSamples` and `deferredCauses` already follow.
+ */
+function armFormal(records: readonly SweepSampleRecord[]): ArmFormalReport {
+  const causes = couldNotVerifyCauses(records);
+  const fallbackReasons = records.flatMap((record) =>
+    record.formalFallbackReason === null ? [] : [record.formalFallbackReason],
+  );
+  const mutationCounts = formalMutationTotals(records);
+  return {
+    verdictCounts: formalVerdictCounts(records),
+    noneSubmittedSamples: records.filter((record) => record.formal === null).length,
+    causeCounts: causeCounts(causes),
+    fallbackSamples: fallbackReasons.length,
+    fallbackReasonCounts: causeCounts(fallbackReasons),
+    frontendRejectedSamples: causes.filter((cause) => cause === 'frontend-rejected').length,
+    propertySetRefusedSamples: refusedSamplesOf(records),
+    routeCounts: routeCounts(records),
+    mutationCounts,
+    // THE EXISTING ESTIMATOR, not a second inline division: `formalKillRateOf` owns both the
+    // denominator rule and the no-rate case, and a copy here could drift from it.
+    mutationKillRate: mutationCounts === null ? null : formalKillRateOf(mutationCounts),
+  };
+}
+
+/**
+ * Count an arm's Valueless_Failure_Report sources, a `null` count in neither numerator nor
+ * denominator. The rate is `null` at zero sources, because "no sample had a testbench" and
+ * "no testbench had a valueless report" are opposite findings (pure).
+ */
+function armReportability(records: readonly SweepSampleRecord[]): ArmReportabilityReport {
+  const counts = records.flatMap((record) =>
+    record.valuelessFailureReports === null ? [] : [record.valuelessFailureReports],
+  );
+  const withReport = counts.filter((count) => count > 0).length;
+  return {
+    withReport,
+    sources: counts.length,
+    valuelessReportRate: counts.length === 0 ? null : withReport / counts.length,
+  };
+}
+
 /** Order two strings deterministically, so every rendered list is stable. */
 function compareText(left: string, right: string): number {
   if (left === right) {
@@ -888,62 +1242,143 @@ function meanOrNull(values: readonly number[]): number | null {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-/** Aggregate one arm's records into its summary (pure). */
-function summarizeArm(
+/** The pass@k population of one arm, and whether the instrument controls validated it. */
+interface PassAtKPopulation {
+  /** Whether the positive control was exercised at all; `false` labels pass@k NOT VALIDATED. */
+  readonly validated: boolean;
+  /**
+   * The samples pass@k is taken over. ONE list, handed to `armEfficiency` as well, so the
+   * per-artifact rates and pass@k are computed over one identical set of samples.
+   */
+  readonly eligible: readonly SweepSampleRecord[];
+}
+
+/** Decide one arm's pass@k population from what its instrument controls established (pure). */
+function passAtKPopulation(
+  records: readonly SweepSampleRecord[],
+  instrument: InstrumentControlReport,
+): PassAtKPopulation {
+  const validated = instrumentControlMeasured(instrument);
+  return {
+    validated,
+    eligible: validated ? denominatorRecords(records) : unvalidatedRecords(records),
+  };
+}
+
+/** Name an arm and size it: its model set, its sample count, and its problem count (pure). */
+function armIdentity(
   armName: string,
   records: readonly SweepSampleRecord[],
-  ks: readonly number[],
-): ArmSummary {
+): Pick<
+  ArmSummary,
+  'armName' | 'modelSignature' | 'signatureConflict' | 'sampleCount' | 'problemCount'
+> {
   const signatures = new Set(records.map((record) => record.modelSignature));
-  const passing = records.filter((record) => record.passed);
-  const firstTrySamples = passing.filter((record) => record.iterations <= 1).length;
-  const sampleCount = records.length;
-  const instrument = summarizeInstrumentControl(instrumentSamples(records));
-  const testbenchRepairAttempted = records.filter((record) => record.repairAttempted).length;
-  const testbenchRepairAccepted = records.filter(
-    (record) => record.repairAttempted && record.repairAccepted,
-  ).length;
-  const checkNameVisibilitySignalSamples = records.filter(
-    (record) => record.checkNameVisibilitySignal,
-  ).length;
-  const validated = instrumentControlMeasured(instrument);
-  const eligible = validated ? denominatorRecords(records) : unvalidatedRecords(records);
-  const goldenEligible = goldenDenominatorRecords(records);
-  const deferred = deferredRecords(records);
   return {
     armName,
     modelSignature: [...signatures].sort().join(' | '),
     signatureConflict: signatures.size > 1,
-    sampleCount,
+    sampleCount: records.length,
     problemCount: new Set(records.map((record) => record.problemId)).size,
+  };
+}
+
+/** Estimate an arm's self-graded and golden pass@k, each over its own denominator (pure). */
+function armPassAtKFigures(
+  records: readonly SweepSampleRecord[],
+  population: PassAtKPopulation,
+  ks: readonly number[],
+): Pick<ArmSummary, 'passAtK' | 'passAtKValidated' | 'goldenPassAtK' | 'goldenReport'> {
+  return {
     // ONE estimator, TWO numerators: `oraclePassed` is our own verdict, `goldenPassed` is the
     // independent judge's. Passing the predicate keeps a single implementation and a single
     // aggregation shape, so the two numbers cannot drift in the direction nobody checks.
-    passAtK: armPassAtK(eligible, ks, oraclePassed),
-    passAtKValidated: validated,
+    passAtK: armPassAtK(population.eligible, ks, oraclePassed),
+    passAtKValidated: population.validated,
     // The golden denominator is decided ENTIRELY by the independent judge, never by the
     // instrument controls, so this list is built and passed independently of `eligible`.
-    goldenPassAtK: armPassAtK(goldenEligible, ks, goldenPassed),
+    goldenPassAtK: armPassAtK(goldenDenominatorRecords(records), ks, goldenPassed),
     goldenReport: summarizeGoldenPassAtK(records.map((record) => goldenEligibilityOf(record))),
-    instrument,
-    mutation: summarizeMutationControl(mutationSamples(records)),
+  };
+}
+
+/** Count an arm's passing samples, split into first-try and repaired, with both rates (pure). */
+function armVerifiedCounts(
+  sampleCount: number,
+  passing: readonly SweepSampleRecord[],
+): Pick<
+  ArmSummary,
+  'verifiedSamples' | 'firstTrySamples' | 'repairedSamples' | 'firstTryRate' | 'repairedRate'
+> {
+  const firstTrySamples = passing.filter((record) => record.iterations <= 1).length;
+  const repairedSamples = passing.length - firstTrySamples;
+  return {
     verifiedSamples: passing.length,
     firstTrySamples,
-    repairedSamples: passing.length - firstTrySamples,
+    repairedSamples,
     firstTryRate: sampleCount === 0 ? 0 : firstTrySamples / sampleCount,
-    repairedRate: sampleCount === 0 ? 0 : (passing.length - firstTrySamples) / sampleCount,
-    testbenchRepairAttempted,
-    testbenchRepairAccepted,
+    repairedRate: sampleCount === 0 ? 0 : repairedSamples / sampleCount,
+  };
+}
+
+/** Count an arm's Testbench_Repair attempts and the normalization signal beside them (pure). */
+function armTestbenchRepair(
+  records: readonly SweepSampleRecord[],
+  instrument: InstrumentControlReport,
+): Pick<
+  ArmSummary,
+  | 'testbenchRepairAttempted'
+  | 'testbenchRepairAccepted'
+  | 'testbenchRepairDeclinedByReason'
+  | 'validNoRepair'
+  | 'validAfterRepair'
+  | 'checkNameVisibilitySignalSamples'
+> {
+  const accepted = records.filter((record) => record.repairAttempted && record.repairAccepted);
+  // The decomposition is OF the valid total, so it counts the intersection: a repair can be
+  // accepted on a build re-check and still end invalid (see `testbenchRepairAccepted`).
+  const validAfterRepair = accepted.filter(
+    (record) => record.instrumentValidity === 'valid',
+  ).length;
+  return {
+    testbenchRepairAttempted: records.filter((record) => record.repairAttempted).length,
+    testbenchRepairAccepted: accepted.length,
     testbenchRepairDeclinedByReason: repairDeclinedByReason(records),
-    validNoRepair: instrument.validSamples - testbenchRepairAccepted,
-    validAfterRepair: testbenchRepairAccepted,
-    checkNameVisibilitySignalSamples,
+    validNoRepair: instrument.validSamples - validAfterRepair,
+    validAfterRepair,
+    checkNameVisibilitySignalSamples: records.filter((record) => record.checkNameVisibilitySignal)
+      .length,
+  };
+}
+
+/** Measure what an arm's artifacts took: iterations per pass, efficiency, and dollars (pure). */
+function armEffort(
+  records: readonly SweepSampleRecord[],
+  passing: readonly SweepSampleRecord[],
+  eligible: readonly SweepSampleRecord[],
+): Pick<ArmSummary, 'meanIterationsToPass' | 'efficiency' | 'cost'> {
+  return {
     meanIterationsToPass: meanOrNull(passing.map((record) => record.iterations)),
     efficiency: armEfficiency(records, eligible),
     cost: armCost(records, passing.length),
-    agreement: summarizeAgreement(
-      verdictPairs(records.filter((record) => record.instrumentValidity !== 'invalid')),
-    ),
+  };
+}
+
+/** Break down how an arm's samples ended, and why the rest reached no verdict (pure). */
+function armOutcomeBreakdowns(
+  records: readonly SweepSampleRecord[],
+): Pick<
+  ArmSummary,
+  | 'agreement'
+  | 'statusCounts'
+  | 'noVerdictNotes'
+  | 'uncheckedReasonCounts'
+  | 'deferredSamples'
+  | 'deferredCauses'
+> {
+  const deferred = deferredRecords(records);
+  return {
+    agreement: summarizeAgreement(verdictPairs(agreementRecords(records))),
     statusCounts: statusCounts(records),
     noVerdictNotes: noVerdictNotes(records),
     uncheckedReasonCounts: uncheckedReasonCounts(records),
@@ -951,6 +1386,34 @@ function summarizeArm(
     // one population by construction and `deferredCauses` is empty exactly when the count is 0.
     deferredSamples: deferred.length,
     deferredCauses: deferredCauses(deferred),
+  };
+}
+
+/**
+ * Aggregate one arm's records into its summary (pure).
+ *
+ * The slices are spread in `ArmSummary`'s declaration order, so the assembled object carries its
+ * fields in the order it always has.
+ */
+function summarizeArm(
+  armName: string,
+  records: readonly SweepSampleRecord[],
+  ks: readonly number[],
+): ArmSummary {
+  const instrument = summarizeInstrumentControl(instrumentSamples(records));
+  const population = passAtKPopulation(records, instrument);
+  const passing = records.filter((record) => record.passed);
+  return {
+    ...armIdentity(armName, records),
+    ...armPassAtKFigures(records, population, ks),
+    instrument,
+    reportability: armReportability(records),
+    mutation: summarizeMutationControl(mutationSamples(records)),
+    formal: armFormal(records),
+    ...armVerifiedCounts(records.length, passing),
+    ...armTestbenchRepair(records, instrument),
+    ...armEffort(records, passing, population.eligible),
+    ...armOutcomeBreakdowns(records),
   };
 }
 
@@ -981,7 +1444,14 @@ export function summarizeRecords(
   if (health.staleSchemaLines > 0) {
     // Zero because nothing was aggregated, not because the file has no holes: a refused file
     // has no arms to sum, and the REFUSAL is the finding a reader must act on.
-    return { ...base, arms: [], totalSamples: 0, deferredSamples: 0, refusedStaleSchema: true };
+    return {
+      ...base,
+      arms: [],
+      totalSamples: 0,
+      deferredSamples: 0,
+      noVerdictSamples: 0,
+      refusedStaleSchema: true,
+    };
   }
   const scoped =
     configHash === null ? records : records.filter((record) => record.configHash === configHash);
@@ -996,6 +1466,9 @@ export function summarizeRecords(
     // Summed over the arms rather than recomputed from `scoped`, so the banner and the arm
     // blocks cannot disagree: there is one filter, applied once, per arm.
     deferredSamples: arms.reduce((total, arm) => total + arm.deferredSamples, 0),
+    // Taken from `scoped` rather than the arms, because no arm carries this count and the
+    // claim is about the file: one filter over the same records `totalSamples` counts.
+    noVerdictSamples: scoped.filter((record) => !hasOracleVerdict(record)).length,
     refusedStaleSchema: false,
   };
 }
@@ -1573,6 +2046,173 @@ function instrumentRefusedComparabilityNote(summary: ArmSummary): readonly strin
   ];
 }
 
+/** The label that opens the could-not-verify cause breakdown; sets the value column. */
+const FORMAL_CAUSE_LABEL = '  formal why:      ';
+
+/** The label that opens the Fallback_Reason breakdown; sets the value column. */
+const FALLBACK_REASON_LABEL = '  fallback why:    ';
+
+/** The label that opens the Fallback_Route breakdown; sets the value column. */
+const FALLBACK_ROUTE_LABEL = '  fallback route:  ';
+
+/**
+ * The fixed caveat under the formal verdict line: what a proof is NOT (Req 10.11, 10.12).
+ *
+ * A constant because it never varies with the numbers, and placed directly under the verdicts
+ * the way `GOLDEN_PASS_AT_K_NOTE` sits under its number, because `proved` is the count a reader
+ * is most tempted to cite as "this many correct designs". The standing reason is ADR-019's
+ * property-strength limit: two `JC_counter` mutants survived a TRUE invariant under UNBOUNDED
+ * induction, and a property strong enough to kill them trends toward restating the RTL, so one
+ * model writing both can make the two agree and both be wrong.
+ */
+const FORMAL_CAVEAT_NOTE: readonly string[] = [
+  `${CONTINUATION_COLUMN}<== NOT A CORRECTNESS CLAIM. A formal proof of a STATED property`,
+  `${CONTINUATION_COLUMN}does not establish correctness on its own: two JC_counter mutants`,
+  `${CONTINUATION_COLUMN}survived a TRUE invariant under unbounded induction (ADR-019), and`,
+  `${CONTINUATION_COLUMN}Property_Set_Admission does not close the correlated-failure risk of one`,
+  `${CONTINUATION_COLUMN}model writing both design and properties: that is layer 3's work, the`,
+  `${CONTINUATION_COLUMN}separate differential-consensus spec of ADR-018.`,
+];
+
+/**
+ * Render a keyed tally, one entry per line under its label (pure).
+ *
+ * Only the entries the tally kept are rendered, so a breakdown with nothing in it gains no line
+ * at all - matching every other conditional breakdown in this file.
+ */
+function tallyLines(label: string, entries: readonly (readonly [string, number])[]): string[] {
+  const continuation = ' '.repeat(label.length);
+  return entries.map(
+    ([key, count], index) => `${index === 0 ? label : continuation}${key} x${count}`,
+  );
+}
+
+/** Render a Could_Not_Verify_Cause breakdown under its label (pure). */
+function causeLines(label: string, counts: readonly CouldNotVerifyCauseCount[]): readonly string[] {
+  return tallyLines(
+    label,
+    counts.map(({ cause, count }) => [cause, count] as const),
+  );
+}
+
+/** Render the Fallback_Route breakdown under its label (pure). */
+function routeLines(counts: readonly FallbackRouteCount[]): readonly string[] {
+  return tallyLines(
+    FALLBACK_ROUTE_LABEL,
+    counts.map(({ route, count }) => [route, count] as const),
+  );
+}
+
+/**
+ * Render the FORMAL oracle block: the verdicts under their caveat, then why the oracle could not
+ * verify, what fell back, what the frontend rejected, and what the admission gate refused
+ * (Req 7.10, 8.7, 10.9, 12.17).
+ *
+ * EVERY VERDICT PRINTS, EVEN AT ZERO, with `none-submitted` beside them, because the four
+ * buckets partition the arm and a reader must be able to see that they sum to its recorded
+ * sample count. The cause and Fallback_Reason entries are the opposite: only the ones holding a
+ * sample print, because a wall of zeros buries the causes that fired. The headline counts below
+ * them print at zero too, one spelling each, so they stay greppable across a campaign's
+ * summaries whether or not any turned up - the rule `instrument-invalid` already follows. The
+ * refused count is the one exception: an arm no gate ran for has no count to print at all, and
+ * `propertySetRefusedLines` prints NOT MEASURED there rather than a `0` (Req 9.5, 9.6).
+ */
+function formalLines(summary: ArmSummary): readonly string[] {
+  const { formal } = summary;
+  const verdicts = FORMAL_VERDICTS.map((verdict) => `${verdict} ${formal.verdictCounts[verdict]}`);
+  return [
+    `  formal verdict:  ${verdicts.join('  ')}  none-submitted ${formal.noneSubmittedSamples}  ` +
+      `(of ${summary.sampleCount} recorded sample(s))`,
+    ...FORMAL_CAVEAT_NOTE,
+    ...causeLines(FORMAL_CAUSE_LABEL, formal.causeCounts),
+    `  fallback:        ${formal.fallbackSamples} sample(s) decided by the Simulation_Fallback ` +
+      'on a recorded Fallback_Reason',
+    ...causeLines(FALLBACK_REASON_LABEL, formal.fallbackReasonCounts),
+    `  frontend-rejected: ${formal.frontendRejectedSamples} sample(s) whose candidate design the ` +
+      'formal frontend rejected',
+    ...propertySetRefusedLines(formal.propertySetRefusedSamples),
+    // BELOW the three named counts rather than beside the Fallback_Reason rows, because the
+    // routes account for ALL of them at once - the cause-decided samples, the refusal, the
+    // unexpressed Property_Set, and the samples that never fell back - and sum to the arm.
+    ...routeLines(formal.routeCounts),
+    ...formalMutantLines(formal),
+  ];
+}
+
+/**
+ * Render the refused-Property_Set count, NOT MEASURED where no sample was gated (Req 9.5, 9.6).
+ *
+ * `null` is an arm no Property_Set_Gate gated at all, so there is no refusal count; a `0` is a
+ * gate that ran and refused nothing. A renderer printing `0` for both would report a clean gate
+ * where none ran, which is the distinction `formalMutantLines` already draws just below.
+ *
+ * THE ROW STAYS BELOW `frontend-rejected:` AND KEEPS ITS PROSE TAIL. `assertRendered` in
+ * `app/test/formal-summary-aggregation.property.test.ts` scrapes every `<key> x<n>` line between
+ * `fallback:` and `frontend-rejected:` into the Fallback_Reason tally, so an `x<n>`-tailed row
+ * moved into that window is read as a reason it is not
+ * (`chipAgent/_inbox/gotcha-a-new-tally-row-between-the-fallback-and-frontend-rejected-lines-breaks-property-28s-rendered-scraper.md`).
+ */
+function propertySetRefusedLines(refusedSamples: number | null): readonly string[] {
+  if (refusedSamples === null) {
+    return [
+      '  property-set-refused: NOT MEASURED - no sample in this arm was gated, so there is no',
+      `${CONTINUATION_COLUMN}refused count over them. This is NOT a gate that refused nothing.`,
+    ];
+  }
+  return [
+    `  property-set-refused: ${refusedSamples} sample(s), of the samples this arm gated, whose ` +
+      'Property_Set was refused as inadmissible',
+  ];
+}
+
+/**
+ * Render the FORMAL mutant tally and its OWN kill rate (Req 9.4, 9.6, 9.11, 9.12).
+ *
+ * THE EXCLUDED COUNT IS ON THE LINE, beside the killed and survived ones, because it is the
+ * number that previously existed nowhere a reader could reach: a mutant the Formal_Oracle could
+ * not reason about was counted by the gate and then dropped before the report, so a kill rate of
+ * 2/3 and a kill rate of 2/3-with-one-mutant-unseen were indistinguishable. The calibrated total
+ * is printed too, so `killed + survived + excluded` can be checked against it on sight.
+ *
+ * THE DENOMINATOR IS NAMED AND SO IS WHAT IT IS NOT. This rate and the Negative_Control's kill
+ * rate a few lines above are over DIFFERENT populations of the same mutant set - one excludes
+ * what the formal oracle could not reason about, the other what iverilog could not build - so
+ * the block says they are not comparable rather than leaving two bare rates to be averaged.
+ *
+ * NOT MEASURED, NEVER `0`, in both no-rate cases: an arm no gate ran for carries no tally at all
+ * (Req 9.12), and a tally whose denominator is zero has nothing to rate (Req 9.11). A `0` reads
+ * as a gate that killed nothing, which is a claim about a gate that ran - the exact distinction
+ * `formalKillRateOf` draws by returning `null`, and the one `killRateOf` already draws on the
+ * simulation side.
+ */
+function formalMutantLines(formal: ArmFormalReport): readonly string[] {
+  const counts = formal.mutationCounts;
+  if (counts === null) {
+    return [
+      '  formal mutants:  NOT MEASURED - no sample in this arm carries a formal mutant tally, so',
+      `${CONTINUATION_COLUMN}there is no excluded count and NO formal kill rate. This is what every`,
+      `${CONTINUATION_COLUMN}arm reads until a production Property_Set gate is wired, and it is NOT`,
+      `${CONTINUATION_COLUMN}a gate that scored zero.`,
+    ];
+  }
+  const killRate = formal.mutationKillRate;
+  return [
+    `  formal mutants:  killed ${counts.killedCount}/${counts.denominator} scored  ` +
+      `survived ${counts.survivedCount}  excluded ${counts.couldNotVerifyCount}  ` +
+      `of ${counts.totalCount} calibrated mutant(s)`,
+    `  formal kill rate: ${killRate === null ? 'NOT MEASURED' : rate(killRate)}`,
+    `${CONTINUATION_COLUMN}<== ITS OWN DENOMINATOR: the mutants the Formal_Oracle REASONED about.`,
+    `${CONTINUATION_COLUMN}The excluded ones are counted and OUT of it. NOT comparable to the`,
+    `${CONTINUATION_COLUMN}mutation kill rate above: the two gates exclude different mutants.`,
+    ...(killRate === null
+      ? [
+          `${CONTINUATION_COLUMN}NOT MEASURED rather than 0, because nothing was scorable: a 0 would`,
+          `${CONTINUATION_COLUMN}read as a gate that killed nothing where there was nothing to rate.`,
+        ]
+      : []),
+  ];
+}
+
 /** Render one arm's block. */
 function armLines(summary: ArmSummary, ks: readonly number[]): readonly string[] {
   const passAtKText = ks.map((k) => `pass@${k}=${rate(summary.passAtK[k] ?? 0)}`).join('  ');
@@ -1604,6 +2244,7 @@ function armLines(summary: ArmSummary, ks: readonly number[]): readonly string[]
     ...agreementLines(summary),
     ...instrumentLines(summary),
     ...mutationLines(summary),
+    ...formalLines(summary),
     `  statuses:        ${renderStatuses(summary)}`,
     ...noVerdictLines(summary),
   ];
@@ -1663,13 +2304,130 @@ function deferredBannerLines(summary: SweepSummary): readonly string[] {
   ];
 }
 
+/** The literal tag on every line that sets another run's figure beside this run's (Req 8.10). */
+export const CROSS_RUN_TAG = '[cross-run]';
+
+/**
+ * The Confirmatory_Run's Control_Arm Coverage_Gap_Survivors over its Scored_Mutants (Req 8.9).
+ * Recounted from `.eval-runs/grounding-confirmatory-v1/results.jsonl`, last record per slot.
+ */
+export const CONFIRMATORY_CONTROL_COVERAGE_GAP = Object.freeze({ survivors: 171, scored: 2249 });
+
+/** What the reportability block needs beyond the records themselves. */
+export interface ReportabilityContext {
+  /** Every arm the config declares; an arm with no records still renders a 0/0 row (Req 8.8). */
+  readonly declaredArms: readonly string[];
+  /** The committed Pinned_Baseline total, or null when none was supplied to this summary. */
+  readonly baseline: Pick<ArmReportabilityReport, 'withReport' | 'sources'> | null;
+}
+
+/** A numerator over its denominator, as one rendered table cell pair. */
+interface Fraction {
+  readonly numerator: number;
+  readonly denominator: number;
+}
+
+/** The column widths after the label column, in render order. */
+const REPORTABILITY_COLUMNS = [19, 11, 22] as const;
+
+/** Render `n/d` and its rate; a zero denominator is `undefined`, never a zero rate (Req 8.11). */
+function fractionCells(fraction: Fraction | null): readonly string[] {
+  if (fraction === null) {
+    return ['', ''];
+  }
+  const { numerator, denominator } = fraction;
+  return [
+    `${numerator}/${denominator}`,
+    denominator === 0 ? 'undefined' : rate(numerator / denominator),
+  ];
+}
+
+/** One table row: the label, then the valueless pair beside the coverage-gap pair. */
+function reportabilityRow(label: string, labelWidth: number, cells: readonly string[]): string {
+  const padded = cells.map((cell, index) => cell.padEnd(REPORTABILITY_COLUMNS[index] ?? 0));
+  return `  ${label.padEnd(labelWidth)}${padded.join('')}`.trimEnd();
+}
+
+/** The cells of a row holding the valueless pair, the coverage-gap pair, or both. */
+function pairCells(valueless: Fraction | null, gap: Fraction | null): readonly string[] {
+  return [...fractionCells(valueless), ...fractionCells(gap)];
+}
+
+/** One arm's two fractions, zero over zero when the arm recorded nothing. */
+function armFractions(arm: ArmSummary | undefined): readonly [Fraction, Fraction] {
+  return [
+    { numerator: arm?.reportability.withReport ?? 0, denominator: arm?.reportability.sources ?? 0 },
+    {
+      numerator: arm?.mutation.coverageGapSurvivors ?? 0,
+      denominator: arm?.mutation.validMutants ?? 0,
+    },
+  ];
+}
+
+/**
+ * Render both rates side by side, one row per declared arm, a run total, and the two cross-run
+ * rows. Undeclared arms that recorded samples still get a row, so the total is the rows' sum.
+ */
+function reportabilityLines(summary: SweepSummary, context: ReportabilityContext): string[] {
+  const byName = new Map(summary.arms.map((arm) => [arm.armName, arm]));
+  const names = [...new Set([...context.declaredArms, ...byName.keys()])];
+  if (names.length === 0) {
+    return [];
+  }
+  const rows = names.map((name) => [name, ...armFractions(byName.get(name))] as const);
+  const sum = (pick: (row: (typeof rows)[number]) => Fraction): Fraction => ({
+    numerator: rows.reduce((total, row) => total + pick(row).numerator, 0),
+    denominator: rows.reduce((total, row) => total + pick(row).denominator, 0),
+  });
+  const baselineLabel = `Pinned_Baseline ${CROSS_RUN_TAG}`;
+  const confirmatoryLabel = `Confirmatory control ${CROSS_RUN_TAG}`;
+  const width = Math.max(...names.map((name) => name.length), confirmatoryLabel.length) + 2;
+  const { survivors, scored } = CONFIRMATORY_CONTROL_COVERAGE_GAP;
+  const { baseline } = context;
+  return [
+    '',
+    'reportability (Valueless_Report_Rate beside Coverage_Gap_Survivor_Rate, per declared arm)',
+    reportabilityRow('arm', width, ['valueless/sources', 'rate', 'gap-survivors/scored', 'rate']),
+    ...rows.map(([name, valueless, gap]) =>
+      reportabilityRow(name, width, pairCells(valueless, gap)),
+    ),
+    reportabilityRow(
+      'run total',
+      width,
+      pairCells(
+        sum((row) => row[1]),
+        sum((row) => row[2]),
+      ),
+    ),
+    baseline === null
+      ? reportabilityRow(baselineLabel, width, ['unavailable: no Pinned_Baseline was supplied'])
+      : reportabilityRow(
+          baselineLabel,
+          width,
+          pairCells({ numerator: baseline.withReport, denominator: baseline.sources }, null),
+        ),
+    reportabilityRow(
+      confirmatoryLabel,
+      width,
+      pairCells(null, { numerator: survivors, denominator: scored }),
+    ),
+  ];
+}
+
 /**
  * Render the summary as plain text lines.
  *
  * Plain text on purpose: it is written next to the results file, printed to stdout, and
- * pasted into a report, and it must be readable in all three without a renderer.
+ * pasted into a report, and it must be readable in all three without a renderer. Without a
+ * `context`, the declared arms are the ones recorded and no Pinned_Baseline is shown.
  */
-export function renderSummary(summary: SweepSummary): readonly string[] {
+export function renderSummary(
+  summary: SweepSummary,
+  context: ReportabilityContext = {
+    declaredArms: summary.arms.map((arm) => arm.armName),
+    baseline: null,
+  },
+): readonly string[] {
   const title = `eval sweep summary  (config ${summary.configHash ?? 'unfiltered'})`;
   if (summary.refusedStaleSchema) {
     return [
@@ -1684,12 +2442,24 @@ export function renderSummary(summary: SweepSummary): readonly string[] {
     // otherwise take for the size of the matrix.
     ...deferredBannerLines(summary),
     `samples aggregated: ${summary.totalSamples}`,
+    // Beside the total, not in an arm block: a re-dispatched file has to state how many of
+    // its records the oracle never judged. `0` and not NOT MEASURED, because this count is
+    // taken whenever anything was aggregated - there is no population it cannot be read over.
+    `no oracle verdict: ${summary.noVerdictSamples} of those ${summary.totalSamples} record(s)`,
     ...(summary.malformedLines > 0
       ? [`WARNING: ${summary.malformedLines} results line(s) could not be decoded and were skipped`]
       : []),
   ];
   if (summary.arms.length === 0) {
-    return [...header, 'no samples recorded for this configuration yet'];
+    return [
+      ...header,
+      'no samples recorded for this configuration yet',
+      ...reportabilityLines(summary, context),
+    ];
   }
-  return [...header, ...summary.arms.flatMap((arm) => ['', ...armLines(arm, summary.ks)])];
+  return [
+    ...header,
+    ...summary.arms.flatMap((arm) => ['', ...armLines(arm, summary.ks)]),
+    ...reportabilityLines(summary, context),
+  ];
 }

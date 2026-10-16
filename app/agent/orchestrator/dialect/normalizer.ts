@@ -31,6 +31,7 @@
 
 import { scanSource, type SourceMask } from '@app/tools';
 import { NORMALIZER_VERSION } from '../normalizer-version.js';
+import { planModelDumpTaskRemovals } from './model-dump-task.js';
 import { findProseAsStatements } from './prose-as-statement.js';
 import { planSizedLiteralRewrites } from './sized-literal.js';
 import {
@@ -237,12 +238,16 @@ export function normalizeDialect(source: string): NormalizerOutcome {
     takenIdentifiers,
   });
   const sizedLiteralEdits = planSizedLiteralRewrites({ source, mask });
+  const dumpTaskEdits = planModelDumpTaskRemovals({ source, mask });
   const proseFindings = findProseAsStatements({ source, mask });
 
-  const editFindings = [...beginLabelEdits, ...sizedLiteralEdits].map((edit) => edit.finding);
-  const findings: readonly DialectFinding[] = [...editFindings, ...proseFindings];
+  const edits = [...beginLabelEdits, ...sizedLiteralEdits, ...dumpTaskEdits];
+  const findings: readonly DialectFinding[] = [
+    ...edits.map((edit) => edit.finding),
+    ...proseFindings,
+  ];
 
-  const normalizedSource = applyEdits(source, [...beginLabelEdits, ...sizedLiteralEdits]);
+  const normalizedSource = applyEdits(source, edits);
 
   return {
     source: normalizedSource,

@@ -48,6 +48,7 @@ import {
   type ResourceLimits,
   type SimulatorAdapter,
   type SourceFile,
+  type TestbenchRun,
 } from '@app/tools';
 import type { DialectClass } from './dialect/normalizer.js';
 import { findProseAsStatements } from './dialect/prose-as-statement.js';
@@ -65,6 +66,12 @@ const INTERFACE_STUB_MODULE = 'testbench_precheck_stub' as const;
  * rather than line LENGTH.
  */
 const MAX_DIAGNOSTIC_FIELD_CHARS = 500;
+
+/**
+ * The precheck decides from `failureCause === 'build-failed'` only, so it names no checks:
+ * a Watchdog stop reads as any finished run (Req 5.8).
+ */
+const PRECHECK_TESTBENCH_RUN: TestbenchRun = { requiredCheckNames: [] };
 
 /** `text`, cut to at most `MAX_DIAGNOSTIC_FIELD_CHARS` characters. */
 function capField(text: string): string {
@@ -341,7 +348,12 @@ export class TestbenchPrecheck {
   ): Promise<{ outcome: PrecheckOutcome; diagnostic: PrecheckDiagnostic }> {
     const stub = buildInterfaceStub(moduleInterface);
     try {
-      const verdict = await this.#simulator.simulate([stub], testbench, limits);
+      const verdict = await this.#simulator.simulate(
+        [stub],
+        testbench,
+        limits,
+        PRECHECK_TESTBENCH_RUN,
+      );
       if (verdict.failureCause !== 'build-failed') {
         // Any other cause - including `output-incomplete`, a testbench that built
         // and simply wrote no waveform - is not a build defect (Req 1.12).

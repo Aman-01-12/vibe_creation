@@ -21,6 +21,15 @@
 //                            kept when long); present only when the transform changed
 //                            this sample's testbench, and distinct from every other
 //                            testbench-shaped file above
+//     property-wrapper.v     the Property_Wrapper the Formal_Oracle rendered for the ONE
+//                            property that decided the sample (HEAD kept when long); present
+//                            only for a sample the formal gate ran on, and distinct from
+//                            `candidate.v` and from every testbench-shaped file above
+//     counterexample.vcd     the Counterexample trace of a `refuted` sample, WHOLE: never cut
+//                            and never bannered, because a cut VCD is not a readable trace;
+//                            the capture carries the bytes, the store writes them only once
+//                            they hash to the reference `outcome.json` records, and writes no
+//                            file at all when it cannot
 //     normalizer-report.json what the Dialect_Normalizer did to this sample's testbench:
 //                            which rules fired, which sites were rewritten or declined
 //     precheck-diagnostic.txt
@@ -37,7 +46,9 @@
 //   Keyed by arm first because a bake-off is read arm by arm, then by problem so one
 //   design's samples sit together, then by sample index. A file that is ABSENT was never
 //   produced (a `blocked` or `setup-failed` sample has no RTL and no testbench); absence
-//   is the record, and `outcome.json` names exactly which files exist.
+//   is the record, and `outcome.json` names exactly which files exist. The one absence
+//   that means something else is `counterexample.vcd` beside a recorded
+//   `formalCounterexample`: the trace existed, and its bytes were not persisted here.
 //
 //   The control's files sit deliberately BESIDE `testbench.v`: when the instrument is
 //   invalid, the evidence for that finding and the testbench that caused it are in the same
@@ -54,13 +65,15 @@
 // TRUNCATION IS LABELED IN THE FILE ITSELF
 //   A cut Verilog source looks exactly like a model that stopped mid-module, and a cut log
 //   looks like a run that ended early. So a truncated artifact carries a banner as its
-//   first line, and `outcome.json` repeats the fact per file for a machine reader.
+//   first line, and `outcome.json` repeats the fact per file for a machine reader. The
+//   Counterexample trace is the exception: it is never truncated at all, because no banner
+//   can make a cut VCD readable, so it is written whole or not at all.
 //
 // Pure: no clock, no I/O, no randomness.
 
 import type { BudgetStopReason } from '@app/core';
 import type { NormalizerReport, RepairDeclineReason } from '@app/agent';
-import type { RunFailureCause } from '@app/tools';
+import type { ArtifactBlobRef, RunFailureCause } from '@app/tools';
 
 import type {
   CapturedFailingCase,
@@ -143,8 +156,27 @@ export const ARTIFACTS_DIRNAME = 'artifacts';
  * cannot say whether the testbench it holds was desugared before it was built, because the
  * Dialect_Normalizer did not exist when it was written, so there is no honest default for its
  * absence - the same "new fields, not a redefinition" character as the v7 -> v8 bump above.
+ *
+ * v9 -> v10: the document now carries what a FORMAL verdict rested on, as exactly three facts,
+ * all read from the ONE Formal_Property that decided the sample under the same precedence the
+ * results record's `formal` block is projected by: the Property_Wrapper source the
+ * Formal_Oracle rendered for that property, in a new sibling file `property-wrapper.v`; the
+ * generated SMT2 assertion count its result carries, as `formalAssertionCount`; and, for a
+ * `refuted` sample alone, the Counterexample REFERENCE - its name, size, and SHA-256 - as
+ * `formalCounterexample`. The trace BYTES behind that third fact are a second new sibling file,
+ * `counterexample.vcd`, written WHOLE or not at all by `./artifact-store-node.ts`, which checks
+ * the bytes the capture carries against that reference's digest before any of them reach a
+ * disk. They are
+ * that fact's evidence rather than a fourth fact, so they move no field's meaning and share this
+ * version: the reference still means the trace's locator, and `files` still names exactly which
+ * files exist. The reference's own fields are never written into a `.vcd` file, which would hand
+ * a waveform viewer JSON, so a recorded reference whose `files` lacks `counterexample.vcd` says
+ * the trace existed and its bytes were not persisted - a different fact from a sample that never
+ * produced one. A v9 document cannot say what a formal verdict was taken over, because its
+ * capture never recorded it, so there is no honest default for these fields' absence - the same
+ * "new fields, not a redefinition" character as the v8 -> v9 bump above.
  */
-export const ARTIFACT_DOCUMENT_SCHEMA_VERSION = 9;
+export const ARTIFACT_DOCUMENT_SCHEMA_VERSION = 10;
 
 /** The filenames one sample's directory may hold. */
 export const ARTIFACT_FILENAMES = Object.freeze({
@@ -193,6 +225,22 @@ export const ARTIFACT_FILENAMES = Object.freeze({
    * diagnostic exists to stop reporting.
    */
   precheckDiagnostic: 'precheck-diagnostic.txt',
+  /**
+   * The Property_Wrapper the Formal_Oracle rendered for the ONE Formal_Property that decided
+   * the sample. Distinct from `candidate.v` and from every testbench-shaped name above because a
+   * wrapper is neither: it is the formal instrument, instantiating the candidate unmodified and
+   * carrying the assertions the proof was taken over. A Yosys diagnostic names it by its sandbox
+   * workspace name, `formal_property_wrapper.v`; here it follows this directory's own naming.
+   */
+  propertyWrapper: 'property-wrapper.v',
+  /**
+   * The Counterexample trace of a `refuted` sample, byte for byte the trace its reference names.
+   * Never planned by `planArtifactFiles`, because the bytes are the one captured value a writer
+   * must verify before it writes: the store checks them against the reference and plans this
+   * file through `counterexampleTracePlan`. The reference keeps the name the worker registered the trace
+   * under; here it follows this directory's own naming, as `property-wrapper.v` does.
+   */
+  counterexampleTrace: 'counterexample.vcd',
   outcome: 'outcome.json',
 });
 
@@ -282,6 +330,7 @@ export function planArtifactFiles(artifacts: EvalSampleArtifacts): readonly Arti
     sourcePlan(ARTIFACT_FILENAMES.rejectedTestbench, artifacts.rejectedTestbenchDraft),
     sourcePlan(ARTIFACT_FILENAMES.preRepairTestbench, artifacts.rejectedPreRepairTestbench),
     sourcePlan(ARTIFACT_FILENAMES.preNormalizationTestbench, artifacts.preNormalizationTestbench),
+    sourcePlan(ARTIFACT_FILENAMES.propertyWrapper, artifacts.propertyWrapperSource),
     normalizerReportPlan(artifacts.normalizerReport),
     diagnosticsPlan(
       ARTIFACT_FILENAMES.precheckDiagnostic,
@@ -330,6 +379,23 @@ function normalizerReportPlan(
     contents,
     truncated: false,
     originalChars: contents.length,
+  };
+}
+
+/**
+ * The `counterexample.vcd` file for a Counterexample trace resolved WHOLE (Req 12.16).
+ *
+ * Written verbatim: never truncated and never bannered, because a VCD missing its step-0 block or
+ * carrying a prefix line is not a readable trace. The caller hands over only bytes it has already
+ * checked against the recorded reference and the trace's own cap, and bytes it could not check
+ * produce no plan at all - there is no placeholder for a trace, only the trace or its absence.
+ */
+export function counterexampleTracePlan(trace: string): ArtifactFilePlan {
+  return {
+    filename: ARTIFACT_FILENAMES.counterexampleTrace,
+    contents: trace,
+    truncated: false,
+    originalChars: trace.length,
   };
 }
 
@@ -475,7 +541,26 @@ export interface ArtifactDocument {
    * same convention `missingCheckNames` already follows for `rejected-testbench.v`.
    */
   readonly normalizerReport: NormalizerReport | null;
-  /** Files written for this sample; a filename ABSENT here was never produced. */
+  /**
+   * The generated SMT2 assertion count of the result that decided the sample, or `null` where no
+   * Formal_Property decided it; see `EvalSampleArtifacts.formalAssertionCount`. The wrapper the
+   * count was taken over is never repeated here - it lives only in the sibling
+   * `property-wrapper.v`, the same convention `missingCheckNames` follows for
+   * `rejected-testbench.v`.
+   */
+  readonly formalAssertionCount: number | null;
+  /**
+   * The Counterexample REFERENCE of a `refuted` sample - name, size, and SHA-256, with no bytes -
+   * or `null` for every other sample; see `EvalSampleArtifacts.formalCounterexample`. Recorded
+   * here so a reader can locate the trace by its hash even once the bytes are gone. The bytes
+   * themselves are the sibling `counterexample.vcd` exactly when `files` lists it.
+   */
+  readonly formalCounterexample: ArtifactBlobRef | null;
+  /**
+   * Files written for this sample; a filename ABSENT here was never produced - except
+   * `counterexample.vcd` beside a non-null `formalCounterexample`, whose absence says the trace
+   * existed and its bytes could not be persisted whole.
+   */
   readonly files: Readonly<Record<string, ArtifactFileNote>>;
 }
 
@@ -531,6 +616,8 @@ export function artifactDocument(
     repairDeclineReason: artifacts.repairDeclineReason,
     checkNameVisibilitySignal: artifacts.checkNameVisibilitySignal,
     normalizerReport: artifacts.normalizerReport,
+    formalAssertionCount: artifacts.formalAssertionCount,
+    formalCounterexample: artifacts.formalCounterexample,
     files: fileNotes(files),
   };
 }

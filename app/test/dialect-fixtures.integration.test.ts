@@ -185,6 +185,8 @@ const PINNED_CLASS_SIZES: Readonly<Record<DialectClass, number>> = {
   'unnamed-begin-declaration': 29,
   'malformed-sized-literal': 7,
   'prose-as-statement': 4,
+  // No captured syntax-error fixture is a dump task: the class removes calls that compile.
+  'model-dump-task': 0,
 };
 
 /**
@@ -207,6 +209,7 @@ const PINNED_FIXED_COUNTS: Readonly<Record<DialectClass, number>> = {
   'unnamed-begin-declaration': 25,
   'malformed-sized-literal': 3,
   'prose-as-statement': 0,
+  'model-dump-task': 0,
 };
 
 /** The closed decline vocabulary, read off `DialectFinding` rather than re-exported for a test. */
@@ -621,6 +624,7 @@ const SMALLEST_FIXTURE_ERROR_LINE = 34;
  * by machine was rejected (see this file's header); writing one by hand is not a parser.
  */
 const JC_COUNTER_INTERFACE: ModuleInterface = {
+  validityOutputName: null,
   moduleName: 'JC_counter',
   ports: [
     port({ name: 'clk', direction: 'input', width: 1 }),

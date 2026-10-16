@@ -83,4 +83,8 @@
 //   code declines where a rewrite would CREATE `#(`, which are different rules. `iverilog -g2012`
 //   was re-measured on both sides of the guard and the guard's BEHAVIOUR was left unchanged, so
 //   this one is documentation only and moves nothing a sample could see.
-export const NORMALIZER_VERSION = 4;
+//
+// WHY 4 -> 5 (testbench-spec-grounding, C10): the rewrite set gained the Model_Dump_Task
+//   removal, applied identically under every Strategy_Arm, because the Simulation_Harness now
+//   owns `dump.vcd` and a model's own dump call would compete with it.
+export const NORMALIZER_VERSION = 5;

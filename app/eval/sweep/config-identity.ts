@@ -23,11 +23,13 @@
 //   stays pure and testable.
 
 import {
+  FORMAL_ORACLE_VERSION,
   INSTRUMENT_POLICY_VERSION,
   NORMALIZER_VERSION,
   TESTBENCH_PROMPT_VERSION,
   TESTBENCH_REPAIR_POLICY_VERSION,
 } from '@app/agent';
+import { SIMULATION_HARNESS_VERSION } from '@app/tools';
 
 import type { SweepConfig } from './config.js';
 
@@ -73,6 +75,49 @@ const TESTBENCH_REPAIR_POLICY_VERSION_KEY = '__testbenchRepairPolicyVersion';
 const NORMALIZER_VERSION_KEY = '__normalizerVersion';
 
 /**
+ * The canonical JSON key `FORMAL_ORACLE_VERSION` is folded in under (Req 12.2, 12.4).
+ *
+ * Reserved rather than a `SweepConfig` field, for the same reason and in the same way as
+ * `NORMALIZER_VERSION_KEY` above; see `../../agent/orchestrator/formal-oracle-version.ts`
+ * for why this is a distinct constant rather than a reuse of `NORMALIZER_VERSION`, and for
+ * the six things - the Lowering_Sequence, the five-condition rule, the Property_Dialect, the
+ * Proof_Depth ladder, the solver, and the default Property_Time_Budget - a change to any of
+ * which moves this value and so moves the identity.
+ */
+const FORMAL_ORACLE_VERSION_KEY = '__formalOracleVersion';
+
+/**
+ * The canonical JSON key `SIMULATION_HARNESS_VERSION` is folded in under (Req 9.3).
+ *
+ * A SIXTH distinct constant for the reason the five above are distinct: the harness text, the
+ * Watchdog_Budget, the Dump_Limit, and the Default_Timescale_Entry decide how every
+ * Testbench_Run ENDS, so two runs under different harness versions are not poolable.
+ */
+const SIMULATION_HARNESS_VERSION_KEY = '__simulationHarnessVersion';
+
+/**
+ * The canonical JSON key the Formal_Gate's enabled-or-not choice is folded in under (Req 11.17).
+ *
+ * The SIXTH reserved key, and the first one whose value is read from the CONFIG rather than from
+ * a build constant - which is why it is worth saying what it buys. `config.formalGateEnabled` is
+ * an ordinary `SweepConfig` field, so it already participates verbatim like every other field;
+ * this key states the same choice in the identity's own reserved block, so a reader auditing what
+ * the fingerprint covers finds the second oracle beside the five versions rather than having to
+ * notice one boolean among thirty config fields. The redundancy is deliberate and costs nothing:
+ * the canonical form is a value, not a schema, and the alternative - excluding the raw field -
+ * would mean listing an identity-BEARING field in `IDENTITY_EXCLUDED_FIELDS`, whose rule is
+ * "only a field that cannot move a measured number", which this field flatly does not satisfy.
+ *
+ * THE CONTRAST THAT MAKES THIS THE RIGHT SIDE OF THE LINE. `captureArtifacts` is excluded and
+ * `manifest.test.ts` pins it as hashing IDENTICALLY on and off, because capturing evidence
+ * changes nothing about what a sample measures. Enabling a second oracle does: a run with the
+ * Formal_Gate on can decide a sample by proof and can fall back for a formal reason, and a run
+ * with it off takes the simulation path for every sample. Those answer different questions, so
+ * their samples must not pool under one fingerprint.
+ */
+const FORMAL_GATE_ENABLED_KEY = '__formalGateEnabled';
+
+/**
  * The config fields DELIBERATELY excluded from the experiment's identity.
  *
  * The rule for this list is narrow: a field belongs here only if it cannot move a measured
@@ -95,13 +140,17 @@ const IDENTITY_EXCLUDED_FIELDS: readonly (keyof SweepConfig)[] = ['captureArtifa
 /**
  * The config's identity-bearing fields: everything except the excluded ones, plus the
  * prompt version, the instrument-policy version, the testbench-repair-policy version,
- * and the normalizer version the running code carries.
+ * the normalizer version, and the formal-oracle version the running code carries, plus
+ * whether this campaign runs the Formal_Gate.
  *
  * `TESTBENCH_PROMPT_VERSION`, `INSTRUMENT_POLICY_VERSION`,
- * `TESTBENCH_REPAIR_POLICY_VERSION`, and `NORMALIZER_VERSION` are all read directly from
- * the import rather than taken as a parameter, so `sweepConfigHash`'s signature - and
- * every call site - stays unchanged: a manifest or a resume check can never pass a stale
- * or fabricated version, only the one the code that is actually running was built with.
+ * `TESTBENCH_REPAIR_POLICY_VERSION`, `NORMALIZER_VERSION`, and `FORMAL_ORACLE_VERSION` are
+ * all read directly from the import rather than taken as a parameter, so
+ * `sweepConfigHash`'s signature - and every call site - stays unchanged: a manifest or a
+ * resume check can never pass a stale or fabricated version, only the one the code that is
+ * actually running was built with. The Formal_Gate choice is read from the config for the
+ * same reason in the other direction: it is the operator's decision, not the build's, and
+ * the config is its single owner.
  */
 function identityBearingFields(config: SweepConfig): Record<string, unknown> {
   const excluded = new Set<string>(IDENTITY_EXCLUDED_FIELDS);
@@ -114,6 +163,9 @@ function identityBearingFields(config: SweepConfig): Record<string, unknown> {
     [INSTRUMENT_POLICY_VERSION_KEY]: INSTRUMENT_POLICY_VERSION,
     [TESTBENCH_REPAIR_POLICY_VERSION_KEY]: TESTBENCH_REPAIR_POLICY_VERSION,
     [NORMALIZER_VERSION_KEY]: NORMALIZER_VERSION,
+    [SIMULATION_HARNESS_VERSION_KEY]: SIMULATION_HARNESS_VERSION,
+    [FORMAL_ORACLE_VERSION_KEY]: FORMAL_ORACLE_VERSION,
+    [FORMAL_GATE_ENABLED_KEY]: config.formalGateEnabled,
   };
 }
 

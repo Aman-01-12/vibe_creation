@@ -529,7 +529,12 @@ class SpecDerivedTestbenchGenerator implements IndependentTestbenchGenerator {
       sourceAttribution: 'spec',
       coversCriteria: this.#spec.acceptanceCriteria.map((criterion) => criterion.id),
     };
-    return Promise.resolve({ status: 'generated', testbench, checks: [] });
+    return Promise.resolve({
+      status: 'generated',
+      checkingApproach: 'cycle-timed',
+      testbench,
+      checks: [],
+    });
   }
   repairTestbench(
     _request: RepairTestbenchRequest,
@@ -923,6 +928,7 @@ function normalizedOutcome(changed: boolean): VerificationOutcome {
     normalization: {
       report: { normalizerVersion: 3, changed, findings: [], refusedWholeSource: null },
       preNormalizationCheckNames: VISIBILITY_CHECK_NAMES,
+      valuelessFailureReports: 0,
     },
   } as unknown as VerificationOutcome;
 }
@@ -949,6 +955,7 @@ class VisibilityControl implements InstrumentControl {
       stderr: '',
       exitCode: 0,
       mutation: null,
+      positiveRun: null,
     };
   }
   check(): Promise<InstrumentControlResult> {

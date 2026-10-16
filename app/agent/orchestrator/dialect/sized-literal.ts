@@ -96,7 +96,7 @@ const SIZE_PREFIX_PATTERN = /(\d+)'([sS]?)([dD])/g;
 const NUMBER_BEFORE_BRACE_PATTERN = /\d+(?=\{)/g;
 
 /** The 1-based line number containing `offset`, from the mask's recorded line starts. */
-function lineAt(mask: SourceMask, offset: number): number {
+export function lineAt(mask: SourceMask, offset: number): number {
   let line = 1;
   for (let index = 0; index < mask.lineStarts.length; index += 1) {
     const lineStart = mask.lineStarts[index];

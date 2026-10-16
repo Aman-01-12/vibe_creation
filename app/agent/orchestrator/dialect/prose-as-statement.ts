@@ -28,7 +28,7 @@
 //   `SourceMask`, so they can never satisfy this detector's code-span requirement.
 
 import { CHECK_KEYWORD } from '../../roles/testbench/signalling.js';
-import { precedingCodeOffset, type SourceMask } from '@app/tools';
+import { isEntirelyCode, precedingCodeOffset, type SourceMask } from '@app/tools';
 import type { DialectFinding } from './types.js';
 
 export type { DialectClass, DialectDeclineCause, DialectFinding } from './types.js';
@@ -42,16 +42,6 @@ interface CheckSignalMatch {
 }
 
 const CHECK_SIGNAL_PATTERN = new RegExp(`\\b${CHECK_KEYWORD}\\s+(\\S+)\\s+(PASS|FAIL)\\b`, 'g');
-
-/** Whether every character of `source` in `[start, end)` lies in a code span of `mask`. */
-function isEntirelyCode(mask: SourceMask, start: number, end: number): boolean {
-  for (let index = start; index < end; index += 1) {
-    if (mask.code[index] !== 1) {
-      return false;
-    }
-  }
-  return true;
-}
 
 /** Whether `source` ends with the keyword `keyword` immediately before `offset` (exclusive). */
 function endsWithKeyword(source: string, offset: number, keyword: string): boolean {

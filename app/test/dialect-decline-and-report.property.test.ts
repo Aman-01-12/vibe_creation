@@ -243,6 +243,56 @@ function declineCaseArbitrary(): fc.Arbitrary<DeclineCase> {
   );
 }
 
+/**
+ * Grades ONE case against Property 8's three conjuncts: no throw, byte-identical, reported.
+ *
+ * Named rather than inlined into the `fc.property` callback so the SAME grading runs over the
+ * generated space and over `STATIC_CASES` exhaustively. `fc.oneof` weights the eight static shapes
+ * at 1/8 of half the draws, so at `numRuns` 100 a shape is missed roughly 1 run in 100 - the
+ * non-vacuity assertion below was seed-dependent, failing on an unlucky seed with nothing wrong in
+ * the transform. Exhausting the closed part of the space makes coverage a fact rather than a sample,
+ * and weakens no conjunct: every static shape is now graded on EVERY run instead of usually.
+ */
+function assertDeclineCase(declineCase: DeclineCase): void {
+  // Never throws, on any input: a shape the transform cannot classify is DECLINED and
+  // reported, because the only fail-safe direction for a rewriter of the measuring instrument
+  // is to hand back exactly what it was given.
+  expect(() => normalizeDialect(declineCase.source)).not.toThrow();
+  const { source: output, report } = normalizeDialect(declineCase.source);
+  // Bound to a local so the narrowing below survives into the `filter` callback: a property
+  // read off the parameter is re-widened inside a closure.
+  const expectation = declineCase.expectation;
+
+  // Byte-identical: every case here is a pure decline or a clean source, so the whole source
+  // is the declined site and byte-identity of the whole is the strongest available form.
+  expect(output).toBe(declineCase.source);
+  expect(report.changed).toBe(false);
+
+  if (expectation.form === 'whole-source-refusal') {
+    expect(report.refusedWholeSource).toBe('lexically-malformed');
+    expect(report.findings).toEqual([]);
+    return;
+  }
+
+  expect(report.refusedWholeSource).toBeNull();
+
+  if (expectation.form === 'no-finding') {
+    expect(report.findings).toEqual([]);
+    return;
+  }
+
+  // The declined site appears in the report under its class with its cause, and no finding
+  // anywhere claims a rewrite - a declined site is never also an attempted one.
+  const matching = report.findings.filter(
+    (finding) =>
+      finding.dialectClass === expectation.dialectClass &&
+      finding.action === 'declined' &&
+      finding.declinedBecause === expectation.declinedBecause,
+  );
+  expect(matching.length).toBeGreaterThan(0);
+  expect(report.findings.filter((finding) => finding.action === 'rewritten')).toEqual([]);
+}
+
 describe(PROPERTY, () => {
   it('returns without throwing, byte-identical at every declined site, and reports each one', () => {
     const observedKinds = new Set<string>();
@@ -250,50 +300,21 @@ describe(PROPERTY, () => {
     fc.assert(
       fc.property(declineCaseArbitrary(), (declineCase) => {
         observedKinds.add(declineCase.kind);
-
-        // Never throws, on any input: a shape the transform cannot classify is DECLINED and
-        // reported, because the only fail-safe direction for a rewriter of the measuring instrument
-        // is to hand back exactly what it was given.
-        expect(() => normalizeDialect(declineCase.source)).not.toThrow();
-        const { source: output, report } = normalizeDialect(declineCase.source);
-        // Bound to a local so the narrowing below survives into the `filter` callback: a property
-        // read off the parameter is re-widened inside a closure.
-        const expectation = declineCase.expectation;
-
-        // Byte-identical: every case here is a pure decline or a clean source, so the whole source
-        // is the declined site and byte-identity of the whole is the strongest available form.
-        expect(output).toBe(declineCase.source);
-        expect(report.changed).toBe(false);
-
-        if (expectation.form === 'whole-source-refusal') {
-          expect(report.refusedWholeSource).toBe('lexically-malformed');
-          expect(report.findings).toEqual([]);
-          return;
-        }
-
-        expect(report.refusedWholeSource).toBeNull();
-
-        if (expectation.form === 'no-finding') {
-          expect(report.findings).toEqual([]);
-          return;
-        }
-
-        // The declined site appears in the report under its class with its cause, and no finding
-        // anywhere claims a rewrite - a declined site is never also an attempted one.
-        const matching = report.findings.filter(
-          (finding) =>
-            finding.dialectClass === expectation.dialectClass &&
-            finding.action === 'declined' &&
-            finding.declinedBecause === expectation.declinedBecause,
-        );
-        expect(matching.length).toBeGreaterThan(0);
-        expect(report.findings.filter((finding) => finding.action === 'rewritten')).toEqual([]);
+        assertDeclineCase(declineCase);
       }),
       propertyParameters(),
     );
 
+    // The closed part of the space, exhaustively: the generated draws grade these too, but only the
+    // ones a seed happened to draw.
+    for (const declineCase of STATIC_CASES) {
+      observedKinds.add(declineCase.kind);
+      assertDeclineCase(declineCase);
+    }
+
     // Non-vacuity: every one of the eight declined shapes, plus the admissible source, was actually
-    // produced. A shape the generated space missed would otherwise pass unasserted.
+    // produced. The admissible source is the one kind still carried by the generated space alone, so
+    // this assertion still fails if the generator stops producing it.
     expect([...observedKinds].sort()).toEqual([...REQUIRED_KINDS].sort());
   });
 });

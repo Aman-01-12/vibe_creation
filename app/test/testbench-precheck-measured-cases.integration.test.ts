@@ -81,6 +81,7 @@ function port(input: {
 // Verbatim from the persisted artifact; only the leading blank line is trimmed.
 
 const ADDER_8BIT_INTERFACE: ModuleInterface = {
+  validityOutputName: null,
   moduleName: 'adder_8bit',
   ports: [
     port({ name: 'a', direction: 'input', width: 8 }),
@@ -176,6 +177,7 @@ endmodule
 // parse error; the declarations themselves are what Icarus refuses).
 
 const MULTI_BOOTH_8BIT_INTERFACE: ModuleInterface = {
+  validityOutputName: null,
   moduleName: 'multi_booth_8bit',
   ports: [
     port({ name: 'a', direction: 'input', width: 8 }),
@@ -280,6 +282,7 @@ endmodule
 // cases add real-toolchain runtime without adding coverage of this decision.
 
 const ADDER_16BIT_INTERFACE: ModuleInterface = {
+  validityOutputName: null,
   moduleName: 'adder_16bit',
   ports: [
     port({ name: 'a', direction: 'input', width: 16 }),
