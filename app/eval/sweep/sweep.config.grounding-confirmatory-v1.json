@@ -1,0 +1,173 @@
+{
+  "_README": [
+    "The Confirmatory Grounding Campaign (grounding-adoption-confirmatory): the Exploratory_Run",
+    "showed the grounding treatment raises Instrument_Valid from 13.2% to 21.8%, but was judged",
+    "by a Bluntness_Guard measured on 58 and 97 Judged_Samples, too thin to decide. This run",
+    "re-states the same primary clauses and replaces that guard with a per-mutant one.",
+    "1064 slots: 4 Model_Arms x {control, grounded} x 19 Campaign_Designs x 7 samples.",
+    "Every arm pair shares one model, so each Control slot is dispatched immediately before its",
+    "Grounded slot and the two are compared as a Slot_Pair.",
+    "Start it with `npm run eval:grounding-confirmatory`, which runs the prompt-version and",
+    "RTL-isolation pins first and only then the sweep CLI."
+  ],
+  "schemaVersion": 1,
+  "runName": "grounding-confirmatory-v1",
+  "arms": [
+    {
+      "name": "moonshotai.kimi-k2.5.control",
+      "model": "moonshotai.kimi-k2.5",
+      "strategy": "control"
+    },
+    {
+      "name": "moonshotai.kimi-k2.5.grounded",
+      "model": "moonshotai.kimi-k2.5",
+      "strategy": "grounded"
+    },
+    {
+      "name": "zai.glm-5.control",
+      "model": "zai.glm-5",
+      "strategy": "control"
+    },
+    {
+      "name": "zai.glm-5.grounded",
+      "model": "zai.glm-5",
+      "strategy": "grounded"
+    },
+    {
+      "name": "zai.glm-4.7.control",
+      "model": "zai.glm-4.7",
+      "strategy": "control"
+    },
+    {
+      "name": "zai.glm-4.7.grounded",
+      "model": "zai.glm-4.7",
+      "strategy": "grounded"
+    },
+    {
+      "name": "deepseek.v3.2.control",
+      "model": "deepseek.v3.2",
+      "strategy": "control"
+    },
+    {
+      "name": "deepseek.v3.2.grounded",
+      "model": "deepseek.v3.2",
+      "strategy": "grounded"
+    }
+  ],
+  "problems": {
+    "kind": "ids",
+    "ids": [
+      "rtllm/arithmetic/adder_8bit",
+      "rtllm/arithmetic/adder_16bit",
+      "rtllm/arithmetic/adder_pipe_64bit",
+      "rtllm/arithmetic/multi_16bit",
+      "rtllm/arithmetic/multi_pipe_8bit",
+      "rtllm/arithmetic/multi_booth_8bit",
+      "rtllm/arithmetic/div_16bit",
+      "rtllm/control/fsm",
+      "rtllm/control/counter_12",
+      "rtllm/control/JC_counter",
+      "rtllm/memory/right_shifter",
+      "rtllm/memory/asyn_fifo",
+      "rtllm/miscellaneous/signal_generator",
+      "rtllm/miscellaneous/calendar",
+      "rtllm/miscellaneous/traffic_light",
+      "rtllm/arithmetic/accu",
+      "rtllm/miscellaneous/parallel2serial",
+      "rtllm/miscellaneous/serial2parallel",
+      "rtllm/miscellaneous/width_8to16"
+    ]
+  },
+  "sampleCount": 7,
+  "ks": [1, 3],
+  "seed": 20240601,
+  "temperature": 0,
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+  "limits": {
+    "cpu": 1,
+    "memMb": 512,
+    "procs": 128,
+    "diskMb": 128,
+    "wallMs": 30000
+  },
+  "costEnvelopeCents": 25,
+  "modelHost": {
+    "region": "us-east-1",
+    "maxOutputTokens": 6000,
+    "requestTimeoutMs": 240000
+  },
+  "prices": {},
+  "outputDir": ".eval-runs/grounding-confirmatory-v1",
+  "captureArtifacts": true,
+  "concurrency": 3,
+  "transportRetry": {
+    "maxAttempts": 4,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "jitterRatio": 0.5,
+    "breakerFailureThreshold": 8,
+    "breakerCooldownMs": 60000,
+    "breakerMaxTrips": 3
+  },
+  "_killSwitch": [
+    "maxSamples 1183 is 1064 slots plus 119, so two resumes of the deferred tail cannot be cut",
+    "off by the switch while a runaway still stops. maxWallClockMs 46429092 is the Exploratory",
+    "Run's own wall budget scaled from 760 slots to 1064."
+  ],
+  "killSwitch": {
+    "maxWallClockMs": 46429092,
+    "maxSamples": 1183
+  },
+  "groundingCampaign": {
+    "successCriterion": {
+      "alphaPercent": 5,
+      "modelArmCount": 4,
+      "minModelArmsGreater": 3,
+      "designCount": 19,
+      "minDesignsGreater": 5,
+      "minNetDesignsGreater": 3,
+      "sampleCount": 7,
+      "tieCountsAsGreater": false,
+      "coverageGapMarginPercent": 2,
+      "missedBugMarginPercent": 3,
+      "agreementMarginPercent": 3,
+      "minGuardDenominator": 34,
+      "minScoredMutantDenominator": 1
+    },
+    "powerArithmetic": {
+      "exploratoryConfigHash": "773b798cf6bbe129",
+      "exploratorySlotPairs": 380,
+      "exploratoryGroundedOnlyValid": 56,
+      "exploratoryControlOnlyValid": 23,
+      "exploratoryJudgedControl": 58,
+      "exploratoryJudgedGrounded": 97,
+      "exploratoryCoverageGapSurvivorsControl": 87,
+      "exploratoryCoverageGapSurvivorsGrounded": 100,
+      "exploratoryScoredMutantsControl": 1493,
+      "exploratoryScoredMutantsGrounded": 2230,
+      "slotPairs": 532,
+      "expectedGroundedOnlyValid": 78,
+      "expectedControlOnlyValid": 32,
+      "expectedDiscordantPairs": 110,
+      "minGroundedOnlyToHold": 65,
+      "expectedJudgedControl": 81,
+      "expectedJudgedGrounded": 136,
+      "expectedCoverageGapSurvivorsControl": 122,
+      "expectedCoverageGapSurvivorsGrounded": 140,
+      "expectedScoredMutantsControl": 2090,
+      "expectedScoredMutantsGrounded": 3122
+    },
+    "referenceCampaign": {
+      "resultsPath": ".eval-runs/scoreboard-ab-v1/results.jsonl",
+      "configHash": "09bf541fcae9dbb9",
+      "schemaVersion": 15
+    },
+    "replayGateReportPath": ".eval-runs/grounding-confirmatory-v1/replay-gate.json",
+    "maxResumes": 2
+  }
+}
