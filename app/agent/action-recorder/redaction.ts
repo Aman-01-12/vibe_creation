@@ -12,7 +12,7 @@
 // fixed placeholders. It NEVER logs, prints, or otherwise emits the raw value on
 // any path, and it never throws.
 
-import type { Json } from '@app/core';
+import { SECRET_PATTERN_SOURCES, type Json } from '@app/core';
 
 /** Replacement written in place of a detected secret or credential. */
 export const SECRET_PLACEHOLDER = '[REDACTED_SECRET]';
@@ -20,22 +20,11 @@ export const SECRET_PLACEHOLDER = '[REDACTED_SECRET]';
 /** Replacement written in place of detected personally identifiable information. */
 export const PII_PLACEHOLDER = '[REDACTED_PII]';
 
-/**
- * Regex sources (flag-free, so `.test` is not stateful) for secret-shaped tokens.
- *
- * These mirror the synthetic shapes produced by `@app/test`'s secret generators
- * (OpenAI `sk-`, AWS `AKIA`, GitHub `ghp_`, `Bearer`, JWT triples, hex `api_`)
- * so the redaction is testable by the Property 12 test, and also catch the same
- * shapes when embedded inside a larger string.
- */
-const SECRET_PATTERN_SOURCES: readonly string[] = [
-  'sk-[A-Za-z0-9]{20,}',
-  'AKIA[A-Z2-7]{16}',
-  'ghp_[A-Za-z0-9]{30,}',
-  'Bearer\\s+[A-Za-z0-9._-]{20,}',
-  '\\b[A-Za-z0-9]{10,}\\.[A-Za-z0-9]{10,}\\.[A-Za-z0-9]{20,}\\b',
-  'api_[0-9a-f]{32,}',
-];
+// `SECRET_PATTERN_SOURCES` is NOT declared here. It moved down into `@app/core`
+// (`app/core/redaction/index.ts`) when `sanitizeDiagnostic` in `app/tools/formal/interpret.ts`
+// became its second reader, so the Action_Recorder and the Formal_Oracle's diagnostic
+// sanitizer apply one Secret_Pattern_Set rather than two copies that can drift
+// (formal-property-oracle Req 11.20). Import it; never restate the shapes here.
 
 /** Regex source for an email address, the one PII shape detected by value. */
 const EMAIL_PATTERN_SOURCE = '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}';
