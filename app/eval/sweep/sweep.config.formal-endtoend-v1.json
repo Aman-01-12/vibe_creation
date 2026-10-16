@@ -1,0 +1,63 @@
+{
+  "_README": [
+    "formal-property-oracle task 15: the END-TO-END formal measurement the property-only run does not contain.",
+    "Formal gate ON through the full Student_Path, so each sample records formalMutationCounts -",
+    "the GENERATED-property kill rate over its own denominator, which is the pre-registered primary gate.",
+    "Population: the 6 designs at 0 valid instruments in 56 simulation attempts each, plus adder_16bit",
+    "and adder_8bit as controls that DO pass under simulation (62% and 43%), so both kill rates come",
+    "from one run and are compared on the same operators.",
+    "No credential lives here: .secrets/bedrock-token is the one source the loader reads.",
+    "prices is EMPTY on purpose: dollars stay UNKNOWN, tokens and wall clock are what is recorded."
+  ],
+  "schemaVersion": 1,
+  "runName": "formal-endtoend-v1",
+  "arms": [{ "name": "glm-5", "model": "zai.glm-5" }],
+  "problems": {
+    "kind": "ids",
+    "ids": [
+      "rtllm/arithmetic/accu",
+      "rtllm/arithmetic/multi_16bit",
+      "rtllm/arithmetic/adder_pipe_64bit",
+      "rtllm/control/counter_12",
+      "rtllm/miscellaneous/serial2parallel",
+      "rtllm/miscellaneous/traffic_light",
+      "rtllm/arithmetic/adder_16bit",
+      "rtllm/arithmetic/adder_8bit"
+    ]
+  },
+  "sampleCount": 2,
+  "ks": [1],
+  "seed": 20260601,
+  "temperature": 0,
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+  "limits": { "cpu": 1, "memMb": 512, "procs": 128, "diskMb": 128, "wallMs": 30000 },
+  "costEnvelopeCents": 50,
+  "modelHost": {
+    "region": "us-east-1",
+    "maxOutputTokens": 6000,
+    "requestTimeoutMs": 240000
+  },
+  "prices": {},
+  "outputDir": ".eval-runs/formal-endtoend-v1",
+  "captureArtifacts": true,
+  "formalGateEnabled": true,
+  "concurrency": 2,
+  "transportRetry": {
+    "maxAttempts": 4,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "jitterRatio": 0.5,
+    "breakerFailureThreshold": 8,
+    "breakerCooldownMs": 60000,
+    "breakerMaxTrips": 3
+  },
+  "killSwitch": {
+    "maxWallClockMs": 7200000,
+    "maxSamples": 16
+  }
+}

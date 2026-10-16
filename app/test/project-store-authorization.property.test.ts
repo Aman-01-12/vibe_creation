@@ -53,7 +53,7 @@ import {
   type Ulid,
   type VerificationResult,
 } from '@app/core';
-import { propertyParameters, propertyTag } from '@app/test';
+import { propertyParameters, propertyTag, timingContractFor } from '@app/test';
 
 // --- ULID + principal generators ---------------------------------------------
 // ULIDs are built from the Crockford base32 alphabet with a timestamp-high first
@@ -148,11 +148,18 @@ function mustBuild<T>(result: Result<T, unknown>): T {
 function buildApprovedSpec(ids: StateIds): Spec {
   const port = mustBuild(makePort({ name: 'clk', direction: 'input', width: 1 }));
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'counter',
+      ports: [port],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: ids.specId,
     projectId: ids.projectId,
     goal: 'a 1-bit counter',
     constraints: ['synchronous reset'],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'counter',
       ports: [port],
       clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },

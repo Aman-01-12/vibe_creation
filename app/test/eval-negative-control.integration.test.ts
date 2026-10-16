@@ -327,13 +327,23 @@ async function realControls(): Promise<{
 /** Probe one testbench through the negative control alone. */
 async function probeMutants(testbench: string): Promise<MutationProbeOutcome> {
   const { negative } = await realControls();
-  return negative.probe({ problemId: PROBLEM_ID, testbench, limits: REAL_LIMITS });
+  return negative.probe({
+    problemId: PROBLEM_ID,
+    testbench,
+    limits: REAL_LIMITS,
+    requiredCheckNames: [],
+  });
 }
 
 /** Check one testbench through BOTH controls, as the harness does. */
 async function checkInstrument(testbench: string): Promise<InstrumentControlResult> {
   const { instrument } = await realControls();
-  const result = await instrument.check({ problemId: PROBLEM_ID, testbench, limits: REAL_LIMITS });
+  const result = await instrument.check({
+    problemId: PROBLEM_ID,
+    testbench,
+    limits: REAL_LIMITS,
+    requiredCheckNames: [],
+  });
   if (result === null) {
     throw new Error(`the control reported no reference design for ${PROBLEM_ID}`);
   }
@@ -447,6 +457,7 @@ describe.skipIf(!RUNNABLE)('the multi_pipe_8bit regression, on the real toolchai
         problemId: PROBLEM_ID,
         testbench: await smokeRunTestbench(),
         limits: REAL_LIMITS,
+        requiredCheckNames: [],
       });
 
       expect(instrument).toBeDefined();

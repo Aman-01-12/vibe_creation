@@ -103,7 +103,7 @@ import {
   type SpecUpdateFailure,
   type TestbenchGenerationOutcome,
 } from '@app/agent';
-import { propertyParameters, propertyTag } from '@app/test';
+import { propertyParameters, propertyTag, timingContractFor } from '@app/test';
 
 const PROPERTY = propertyTag(20, 'Editing a Verified module demotes it until re-verified');
 
@@ -167,11 +167,22 @@ const LIMITS: ResourceLimits = { cpu: 1, memMb: 512, procs: 128, diskMb: 128, wa
 /** An approved single-module Spec (its interface is held constant across the edit). */
 function counterSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: COUNTER_MODULE_NAME,
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst', direction: 'input', width: 1 },
+        { name: 'count', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A 4-bit synchronous up-counter that clears to zero on reset.',
     constraints: [],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: COUNTER_MODULE_NAME,
       ports: [
         { name: 'clk', direction: 'input', width: 1 },
@@ -652,6 +663,7 @@ describe(`${PROPERTY} (agent: intermediate is Unverified; Verified iff a fresh o
         const cand = evalOf(candidate(spec, 'module counter; endmodule'));
         const testbench: TestbenchGenerationOutcome = {
           status: 'generated',
+          checkingApproach: 'cycle-timed',
           testbench: testbenchFor(spec),
           checks: [],
         };

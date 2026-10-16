@@ -21,13 +21,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  makeTimingContract,
   newUlid,
   ok,
   unverified,
   type ArtifactRef,
+  type ModuleInterface,
   type Result,
   type Spec,
   type Testbench,
+  type TimingContract,
   type SessionBudget,
 } from '@app/core';
 import type { ResourceLimits, SimulationVerdict, SimulatorAdapter, SourceFile } from '@app/tools';
@@ -56,21 +59,36 @@ const LIMITS: ResourceLimits = { cpu: 1, memMb: 256, procs: 64, diskMb: 64, wall
 
 // --- Domain fixtures -------------------------------------------------------
 
+/** A placeholder Timing_Contract placing every output port at `registered`; nothing here reads it. */
+function timingContractFor(moduleInterface: ModuleInterface): TimingContract {
+  const entries = moduleInterface.ports
+    .filter((port) => port.direction === 'output')
+    .map((port) => ({ portName: port.name, timing: 'registered' as const }));
+  const built = makeTimingContract(moduleInterface, entries);
+  if (!built.ok) {
+    throw new Error(`fixture built an invalid timing contract: ${built.error.message}`);
+  }
+  return built.value;
+}
+
 /** An approved single-module Spec with one simulation-verifiable acceptance criterion. */
 function approvedSpec(): Spec {
+  const moduleInterface: ModuleInterface = {
+    validityOutputName: null,
+    moduleName: 'byte_reg',
+    ports: [
+      { name: 'd', direction: 'input', width: 8 },
+      { name: 'q', direction: 'output', width: 8 },
+    ],
+    clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
+  };
   return {
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A byte register that captures d on the clock edge.',
     constraints: [],
-    moduleInterface: {
-      moduleName: 'byte_reg',
-      ports: [
-        { name: 'd', direction: 'input', width: 8 },
-        { name: 'q', direction: 'output', width: 8 },
-      ],
-      clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
-    },
+    moduleInterface,
+    timingContract: timingContractFor(moduleInterface),
     acceptanceCriteria: [
       { id: newUlid(), text: 'q captures d', measurable: true, method: 'simulation' },
     ],
@@ -131,6 +149,7 @@ function contextFor(spec: Spec): RecoveryContext {
     genInput: genInputFor(spec),
     failingCandidate: candidate(spec, 'module byte_reg; // failing'),
     testbench: testbenchFor(spec),
+    requiredCheckNames: ['q_captures_d'],
     diagnostics: 'compile error near q_captures_d',
     limits: LIMITS,
     failedSpanId: newUlid(),
@@ -151,6 +170,7 @@ function passVerdict(): SimulationVerdict {
     resourceUsage: { wallMs: 12, maxMemMb: 8, cpuMs: 10 },
     failureCause: 'none',
     attributedFiles: [],
+    watchdog: { stopped: false },
   };
 }
 
@@ -166,6 +186,7 @@ function failVerdict(): SimulationVerdict {
     resourceUsage: { wallMs: 9, maxMemMb: 8, cpuMs: 7 },
     failureCause: 'none',
     attributedFiles: [],
+    watchdog: { stopped: false },
   };
 }
 
@@ -181,6 +202,7 @@ function timeoutVerdict(): SimulationVerdict {
     resourceUsage: { wallMs: LIMITS.wallMs, maxMemMb: 8, cpuMs: LIMITS.wallMs },
     failureCause: 'timed-out',
     attributedFiles: [],
+    watchdog: { stopped: false },
   };
 }
 
@@ -196,6 +218,7 @@ function compileErrorVerdict(): SimulationVerdict {
     resourceUsage: { wallMs: 4, maxMemMb: 8, cpuMs: 3 },
     failureCause: 'build-failed',
     attributedFiles: [],
+    watchdog: { stopped: false },
   };
 }
 
@@ -211,6 +234,7 @@ function toolCrashVerdict(): SimulationVerdict {
     resourceUsage: { wallMs: 3, maxMemMb: 8, cpuMs: 2 },
     failureCause: 'tool-failed',
     attributedFiles: [],
+    watchdog: { stopped: false },
   };
 }
 

@@ -59,7 +59,7 @@ import {
   type ToolOutputRef,
   type WaveformReadingSource,
 } from '@app/agent';
-import { propertyParameters, propertyTag } from '@app/test';
+import { propertyParameters, propertyTag, timingContractFor } from '@app/test';
 
 const PROPERTY = propertyTag(25, 'Teach-mode grounds each claim by its type');
 
@@ -82,11 +82,22 @@ const ulidArbitrary: fc.Arbitrary<Ulid> = fc
 /** A minimal approved single-module Spec that anchors the explanation. */
 function anchorSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'counter',
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst', direction: 'input', width: 1 },
+        { name: 'count', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: 'SPEC00000000000000000000AA',
     projectId: 'PROJ00000000000000000000AA',
     goal: 'A 4-bit synchronous up-counter that clears to zero on reset.',
     constraints: [],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'counter',
       ports: [
         { name: 'clk', direction: 'input', width: 1 },

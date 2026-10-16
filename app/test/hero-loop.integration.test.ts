@@ -100,7 +100,7 @@ import {
   type VerificationOutcome,
   type VerifiedModule,
 } from '@app/agent';
-import { routedModelIdFor } from '@app/test';
+import { routedModelIdFor, timingContractFor } from '@app/test';
 import {
   createDisplayLayer,
   decideTrustTreatment,
@@ -147,11 +147,22 @@ const REQUEST = {} as unknown as GenerationAdmissionRequest;
 /** An approved single-module Spec for the 4-bit counter the harness fixtures build. */
 function counterSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: COUNTER_MODULE_NAME,
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst', direction: 'input', width: 1 },
+        { name: 'count', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A 4-bit synchronous up-counter that clears to zero on reset.',
     constraints: [],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: COUNTER_MODULE_NAME,
       ports: [
         { name: 'clk', direction: 'input', width: 1 },
@@ -527,6 +538,7 @@ async function buildAndVerify(simulator: SimulatorAdapter): Promise<BuildBundle>
   ]);
   const testbench = new RecordingTestbench({
     status: 'generated',
+    checkingApproach: 'cycle-timed',
     testbench: testbenchFor(spec),
     checks: [],
   });
@@ -565,6 +577,7 @@ class LoopReVerifier implements IterationReVerifier {
     const generator = new ScriptedGenerator(evalOf(candidate(input.spec, PASSING_COUNTER_RTL)));
     const testbench = new RecordingTestbench({
       status: 'generated',
+      checkingApproach: 'cycle-timed',
       testbench: testbenchFor(input.spec),
       checks: [],
     });

@@ -19,7 +19,7 @@ import {
   redactJson,
   type SpanDraft,
 } from '@app/agent';
-import { newUlid } from '@app/core';
+import { newUlid, type Json } from '@app/core';
 
 /** A minimal, valid draft with benign payloads; override per test. */
 function draft(overrides: Partial<SpanDraft> & Pick<SpanDraft, 'sessionId'>): SpanDraft {
@@ -181,5 +181,93 @@ describe('history read (Req 3.6)', () => {
     const lines = formatHistoryLines(trace);
     expect(lines[0]).toContain('#0 Intent_Agent: ok');
     expect(lines[1]).toContain('#1 Simulator: failed (functional-fail)');
+  });
+});
+// The formal gate step's rendering (task 23.1, Requirements 1.19 and 1.20).
+//
+// The Session_History is the live surface a Student can be shown, and before this it
+// rendered a `could-not-verify` formal step as `completed` - exactly like a fully proved
+// one - because the span carries no failure class. These are the two example checks that
+// fail if that rendering regresses. The universal Property 19 over the real
+// Verification_Loop is `app/test/formal-label-fail-closed.property.test.ts`.
+
+/** One formal gate span's outputs, shaped as `#recordFormalRun` in the loop writes them. */
+function formalOutputs(
+  properties: readonly { readonly verdict: string; readonly cause: string | null }[],
+): Json {
+  return {
+    stage: 'Formal_Oracle',
+    properties: properties.map((property, index) => ({
+      criterionRef: `c${index}`,
+      verdict: property.verdict,
+      cause: property.cause,
+      depth: 20,
+      elapsedMs: 10,
+    })),
+  };
+}
+
+/** Record one `Formal_Oracle` span and read back how the history rendered it. */
+async function renderFormalStep(outputs: Json): Promise<string | undefined> {
+  const recorder = new TraceActionRecorder(new InMemoryTracePersistence());
+  const sessionId = newUlid();
+  await recorder.record(
+    draft({
+      sessionId,
+      stageOrTool: 'Formal_Oracle',
+      // `null` is what the loop records: a formal run reports no process exit code, and it
+      // is the value that made this step render as `completed`.
+      exitCode: null,
+      outputs,
+    }),
+  );
+  const history = await recorder.getHistory(sessionId);
+  return history[0]?.result;
+}
+
+describe('formal gate step rendering (Req 1.19, 1.20)', () => {
+  it('renders the count under each verdict and every could-not-verify cause in words', async () => {
+    const proved = await renderFormalStep(
+      formalOutputs([
+        { verdict: 'proved', cause: null },
+        { verdict: 'proved', cause: null },
+      ]),
+    );
+    const unverified = await renderFormalStep(
+      formalOutputs([
+        { verdict: 'proved', cause: null },
+        { verdict: 'proved', cause: null },
+        { verdict: 'could-not-verify', cause: 'proof-timeout' },
+      ]),
+    );
+    const refuted = await renderFormalStep(
+      formalOutputs([
+        { verdict: 'proved', cause: null },
+        { verdict: 'proved', cause: null },
+        { verdict: 'refuted', cause: null },
+      ]),
+    );
+
+    expect(proved).toBe('formal: 2 proved');
+    expect(unverified).toBe('formal: 2 proved, 1 could not verify (proof timed out)');
+    expect(refuted).toBe('formal: 2 proved, 1 refuted');
+    // The three read distinctly from each other, and none reads as a bare `completed`.
+    expect(new Set([proved, unverified, refuted]).size).toBe(3);
+    expect([proved, unverified, refuted]).not.toContain('completed');
+  });
+
+  it('renders outputs it cannot read as per-property verdicts as unreadable, never completed', async () => {
+    // Every way the read can fail: no property list, a verdict outside the vocabulary, and a
+    // `could-not-verify` whose cause is outside its own vocabulary (Req 1.5, 1.20).
+    const unreadable = await Promise.all([
+      renderFormalStep({ stage: 'Formal_Oracle' }),
+      renderFormalStep(formalOutputs([{ verdict: 'passed', cause: null }])),
+      renderFormalStep(formalOutputs([{ verdict: 'could-not-verify', cause: 'gremlins' }])),
+      renderFormalStep(formalOutputs([{ verdict: 'could-not-verify', cause: null }])),
+    ]);
+
+    for (const result of unreadable) {
+      expect(result).toBe('formal: unreadable outputs');
+    }
   });
 });

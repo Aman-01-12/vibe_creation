@@ -46,7 +46,7 @@ import {
   type PortDirection,
   type Spec,
 } from '@app/core';
-import { propertyParameters, propertyTag } from '@app/test';
+import { propertyParameters, propertyTag, timingContractFor } from '@app/test';
 
 // --- Verilog identifier generation -------------------------------------------
 // The parser recognizes a module/port name as `[A-Za-z_]\w*`, and derives a
@@ -149,6 +149,7 @@ function buildSpec(shape: SpecShape, uniqueNames: readonly string[]): Spec {
   const clockName = shape.hasClock ? (uniqueNames[next++] as string) : null;
   const resetName = shape.hasReset ? (uniqueNames[next++] as string) : null;
   const moduleInterface: ModuleInterface = {
+    validityOutputName: null,
     moduleName: shape.moduleName,
     ports,
     clocking: { clockName, resetName, resetActiveLow: shape.resetActiveLow },
@@ -159,6 +160,7 @@ function buildSpec(shape: SpecShape, uniqueNames: readonly string[]): Spec {
     goal: 'A generated single-module design under interface-exactness test.',
     constraints: [],
     moduleInterface,
+    timingContract: timingContractFor(moduleInterface),
     acceptanceCriteria: [],
     architecture: 'Header-only fixture for the interface-exactness property.',
     approved: true,

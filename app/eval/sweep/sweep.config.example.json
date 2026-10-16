@@ -140,6 +140,20 @@
   ],
   "captureArtifacts": true,
 
+  "_formalGateEnabled": [
+    "Runs the FORMAL GATE beside the simulation oracle: an RTL-blind Property_Author derives",
+    "properties from the approved Spec and a Yosys + yosys-smtbmc proof attempt decides each",
+    "one before the simulation path is reached. OFF by default, because it costs one more",
+    "model call plus a pre-pass and up to four solver invocations per property per sample, and",
+    "because it needs a toolchain the simulation oracle does not: with this on, preflight",
+    "REFUSES the run unless the composed `yosys-smtbmc -s bitwuzla` invocation actually works",
+    "here (every binary can be present and spawnable while every proof fails, and a results",
+    "file full of toolchain-unavailable looks exactly like a measurement of the designs).",
+    "IN the config hash, unlike captureArtifacts above: enabling a second oracle changes what",
+    "a sample measures, so gate-on and gate-off samples must never pool."
+  ],
+  "formalGateEnabled": false,
+
   "_concurrency": [
     "Samples in flight at once, across all arms. Conservative by default because the host",
     "rate-limits before it refuses. Raise it if 429s stay rare; the backoff and the breaker",

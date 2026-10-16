@@ -10,6 +10,11 @@
 //      Verilog source is never mistaken for a model that stopped mid-module.
 //   4. `outcome.json` carries the verdict fields and the check verdicts, lists exactly the
 //      files that exist, and does not repeat the stream text that sits beside it.
+//   5. The formal evidence: the Property_Wrapper lands in `property-wrapper.v`, a name no
+//      other captured source uses, while the assertion count and the Counterexample
+//      REFERENCE live in `outcome.json` - and no `.vcd` file is ever planned from a reference.
+//      The trace's bytes reach `counterexample.vcd` only through the store, which resolves
+//      them (see `./artifact-store-node.test.ts`).
 
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -101,6 +106,10 @@ function artifacts(overrides: Partial<EvalSampleArtifacts> = {}): EvalSampleArti
     preNormalizationTestbench: null,
     normalizerReport: null,
     normalizerReportFindingsTruncated: false,
+    propertyWrapperSource: null,
+    formalAssertionCount: null,
+    formalCounterexample: null,
+    formalCounterexampleCapture: null,
     ...overrides,
   };
 }
@@ -386,5 +395,59 @@ describe('the positive control leaves its evidence beside the testbench that cau
       validity: 'unchecked',
       reason: 'no-testbench',
     });
+  });
+});
+
+describe('the formal evidence: the wrapper file and the two facts outcome.json carries', () => {
+  /** A Property_Wrapper source as the capture hands it over. */
+  const WRAPPER = 'module formal_property_wrapper(input clk);\nendmodule\n';
+  /** A refuted sample's Counterexample reference: name, size, and digest, no bytes. */
+  const COUNTEREXAMPLE = {
+    name: 'formal-trace-base-bitwuzla.vcd',
+    sizeBytes: 2_048,
+    sha256: 'c'.repeat(64),
+  };
+
+  it('writes the wrapper to property-wrapper.v, a name no other captured source uses', () => {
+    const sample = artifacts({ propertyWrapperSource: whole(WRAPPER) });
+
+    const file = planned(sample, ARTIFACT_FILENAMES.propertyWrapper);
+
+    expect(ARTIFACT_FILENAMES.propertyWrapper).toBe('property-wrapper.v');
+    expect(file?.contents).toBe(WRAPPER);
+    // Req 12.15: distinct from the candidate's and from every Testbench-shaped file, so a reader
+    // can never mistake the formal instrument for the design or for the simulation instrument.
+    expect([
+      ARTIFACT_FILENAMES.candidateRtl,
+      ARTIFACT_FILENAMES.testbench,
+      ARTIFACT_FILENAMES.rejectedTestbench,
+      ARTIFACT_FILENAMES.preRepairTestbench,
+      ARTIFACT_FILENAMES.preNormalizationTestbench,
+    ]).not.toContain(ARTIFACT_FILENAMES.propertyWrapper);
+    // Absent wrapper, absent file: the default sample was never decided by a Formal_Property.
+    expect(planned(artifacts(), ARTIFACT_FILENAMES.propertyWrapper)).toBeUndefined();
+  });
+
+  it('records the count and the counterexample REFERENCE, and plans no .vcd file from it', () => {
+    const sample = artifacts({
+      propertyWrapperSource: whole(WRAPPER),
+      formalAssertionCount: 3,
+      formalCounterexample: COUNTEREXAMPLE,
+    });
+    const files = planArtifactFiles(sample);
+
+    const document = artifactDocument(descriptor(), sample, files);
+
+    expect(document.formalAssertionCount).toBe(3);
+    expect(document.formalCounterexample).toEqual(COUNTEREXAMPLE);
+    // The reference is metadata in the index, never a file: a `.vcd` holding these fields would
+    // hand a waveform viewer JSON. The trace's BYTES are planned only from what the store
+    // resolved, because this plan derives from a capture that holds none.
+    expect(files.some((file) => file.filename.endsWith('.vcd'))).toBe(false);
+    expect(Object.keys(document.files)).toContain(ARTIFACT_FILENAMES.propertyWrapper);
+    // A sample no Formal_Property decided says so with `null`, not with an absent key.
+    const undecided = artifactDocument(descriptor(), artifacts(), planArtifactFiles(artifacts()));
+    expect(undecided.formalAssertionCount).toBeNull();
+    expect(undecided.formalCounterexample).toBeNull();
   });
 });

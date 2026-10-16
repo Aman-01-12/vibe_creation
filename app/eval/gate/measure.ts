@@ -57,8 +57,15 @@ export async function measureViaHarness(
   return { status: 'measured', k, passAtK: value };
 }
 
-/** Whether a binary is launchable on PATH (a spawn error means it is absent). */
-function binaryPresent(bin: string, args: readonly string[]): boolean {
+/**
+ * Whether a binary is launchable on PATH (a spawn error means it is absent).
+ *
+ * Exported so the FORMAL chain probe in `../sweep/host-facts.ts` applies this exact rule
+ * rather than a second copy of it: "only a spawn error counts as missing" is a measured
+ * decision (a probe flag's exit status says nothing about whether a tool works), and two
+ * copies could drift into disagreeing about whether a host can decide a verdict.
+ */
+export function binaryPresent(bin: string, args: readonly string[]): boolean {
   const result = spawnSync(bin, [...args], { encoding: 'utf8' });
   return result.error === undefined;
 }

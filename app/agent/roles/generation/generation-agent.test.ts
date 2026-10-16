@@ -11,7 +11,18 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { err, newUlid, ok, type Result, type SessionBudget, type Spec, type Ulid } from '@app/core';
+import {
+  err,
+  makeTimingContract,
+  newUlid,
+  ok,
+  type ModuleInterface,
+  type Result,
+  type SessionBudget,
+  type Spec,
+  type TimingContract,
+  type Ulid,
+} from '@app/core';
 import {
   FakeSandboxRuntime,
   IcarusSimulatorAdapter,
@@ -43,21 +54,36 @@ const COMPILE_LIMITS: ResourceLimits = { cpu: 1, memMb: 256, procs: 64, diskMb: 
 /** The model id the fake router reports as the routed selection (a fake, not config). */
 const FAKE_ROUTED_MODEL_ID = 'fake-routed-model';
 
+/** A placeholder Timing_Contract placing every output port at `registered`; nothing here reads it. */
+function timingContractFor(moduleInterface: ModuleInterface): TimingContract {
+  const entries = moduleInterface.ports
+    .filter((port) => port.direction === 'output')
+    .map((port) => ({ portName: port.name, timing: 'registered' as const }));
+  const built = makeTimingContract(moduleInterface, entries);
+  if (!built.ok) {
+    throw new Error(`fixture built an invalid timing contract: ${built.error.message}`);
+  }
+  return built.value;
+}
+
 /** An approved byte-register Spec: two data ports plus a clock/reset contract. */
 function approvedSpec(overrides: Partial<Spec> = {}): Spec {
+  const moduleInterface: ModuleInterface = {
+    validityOutputName: null,
+    moduleName: 'byte_reg',
+    ports: [
+      { name: 'd', direction: 'input', width: 8 },
+      { name: 'q', direction: 'output', width: 8 },
+    ],
+    clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
+  };
   return {
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A byte register that captures d on the clock edge.',
     constraints: [],
-    moduleInterface: {
-      moduleName: 'byte_reg',
-      ports: [
-        { name: 'd', direction: 'input', width: 8 },
-        { name: 'q', direction: 'output', width: 8 },
-      ],
-      clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
-    },
+    moduleInterface,
+    timingContract: timingContractFor(moduleInterface),
     acceptanceCriteria: [],
     architecture: 'Single always block latching d into q.',
     approved: true,

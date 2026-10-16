@@ -58,7 +58,7 @@ import {
   type Ulid,
   type VerificationResult,
 } from '@app/core';
-import { propertyParameters, propertyTag } from '@app/test';
+import { propertyParameters, propertyTag, timingContractFor } from '@app/test';
 
 // --- Result unwrapping -------------------------------------------------------
 
@@ -88,11 +88,18 @@ function buildSpec(projectId: Ulid, goal: string): Spec {
     method: 'simulation',
   };
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'counter',
+      ports: [buildPort()],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId,
     goal,
     constraints: ['synchronous reset'],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'counter',
       ports: [buildPort()],
       clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },

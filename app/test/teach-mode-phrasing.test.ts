@@ -64,7 +64,7 @@ import {
   type Verdict,
   type VerificationResult,
 } from '@app/core';
-import { routedModelIdFor } from '@app/test';
+import { routedModelIdFor, timingContractFor } from '@app/test';
 
 // --- Fixtures ----------------------------------------------------------------
 
@@ -79,12 +79,23 @@ const AVAILABLE_CITATION: Citation = {
 /** A minimal approved single-module Spec with a non-empty goal (Req 11.1 anchor). */
 function counterSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'up_counter',
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst', direction: 'input', width: 1 },
+        { name: 'count', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A 4-bit synchronous up-counter that clears to zero on reset.',
     constraints: ['single module'],
     architecture: 'One always block incrementing count on the rising clock edge.',
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'up_counter',
       ports: [
         { name: 'clk', direction: 'input', width: 1 },

@@ -34,6 +34,7 @@ import {
   type SpecApprovalSinkError,
 } from '@app/agent';
 import { err, newUlid, ok, type Result, type Spec, type TraceSpan, type Ulid } from '@app/core';
+import { timingContractFor } from '@app/test';
 
 /** The opaque outcome a fake runner returns; the gate treats it as a black box. */
 interface FakeGenerationOutcome {
@@ -101,11 +102,22 @@ function intentSession(confirmation: IntentConfirmationState): IntentSession {
 /** Build a minimal, structurally valid Spec in the requested approval state. */
 function spec(approved: boolean, projectId: Ulid = newUlid()): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'counter4',
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst_n', direction: 'input', width: 1 },
+        { name: 'count', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
+    }),
     id: newUlid(),
     projectId,
     goal: 'Count clock edges modulo 16.',
     constraints: ['synchronous'],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'counter4',
       ports: [
         { name: 'clk', direction: 'input', width: 1 },
