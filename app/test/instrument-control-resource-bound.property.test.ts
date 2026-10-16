@@ -26,6 +26,7 @@ import type {
   ResourceLimits,
   RunFailureCause,
   SimulationVerdict,
+  WatchdogReading,
   SimulatorAdapter,
 } from '@app/tools';
 import { propertyParameters } from '@app/test';
@@ -70,8 +71,9 @@ function request(testbench = 'module tb; endmodule\n'): {
   readonly problemId: string;
   readonly testbench: string;
   readonly limits: ResourceLimits;
+  readonly requiredCheckNames: readonly string[];
 } {
-  return { problemId: PROBLEM_ID, testbench, limits: LIMITS };
+  return { problemId: PROBLEM_ID, testbench, limits: LIMITS, requiredCheckNames: [] };
 }
 
 /** The two resource-bound causes Property 11 is scoped to. */
@@ -107,9 +109,18 @@ const misleadingResidueArbitrary: fc.Arbitrary<{
   .map(({ verdict, stderr, stdout, exitCode }) => ({ verdict, stderr, stdout, exitCode }));
 
 /** A `SimulationVerdict` whose `failureCause` is resource-bound, with misleading residue. */
+/** Both Watchdog readings: a Resource_Kill short-circuits whatever the harness printed. */
+const watchdogArbitrary: fc.Arbitrary<WatchdogReading> = fc.oneof(
+  fc.constant({ stopped: false as const }),
+  fc.record({
+    stopped: fc.constant(true as const),
+    timedOutChecks: fc.subarray(['a', 'b_ok', 'known_answer_x']),
+  }),
+);
+
 const resourceBoundSimulationArbitrary: fc.Arbitrary<SimulationVerdict> = fc
-  .tuple(resourceBoundCauseArbitrary, misleadingResidueArbitrary)
-  .map(([failureCause, residue]) => ({
+  .tuple(resourceBoundCauseArbitrary, misleadingResidueArbitrary, watchdogArbitrary)
+  .map(([failureCause, residue, watchdog]) => ({
     verdict: residue.verdict,
     checks: [],
     vcd: null,
@@ -122,6 +133,7 @@ const resourceBoundSimulationArbitrary: fc.Arbitrary<SimulationVerdict> = fc
     // `build-failed`); generating a non-empty list here would test an
     // unreachable `SimulationVerdict`, not the classification itself.
     attributedFiles: [],
+    watchdog,
   }));
 
 describe(PROPERTY, () => {
@@ -156,6 +168,7 @@ describe(PROPERTY, () => {
       resourceUsage: { cpuMs: 1, maxMemMb: 1, wallMs: 1 },
       failureCause: 'disk-capped',
       attributedFiles: [],
+      watchdog: { stopped: false },
     };
 
     const result = await control(simulation).check(request());

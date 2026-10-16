@@ -38,6 +38,48 @@ function job(requiredOutputs: readonly RequiredOutput[]): SandboxJob {
   };
 }
 
+/** The payload a well-formed `formal` job carries. */
+const FORMAL_PAYLOAD = { topModule: 'wrapper_top', depth: 20 } as const;
+
+/**
+ * The payload a well-formed `formalPrepass` job carries: the DESIGN's own module name.
+ *
+ * No `depth`, because the pre-pass runs no solver - it runs over the candidate design alone,
+ * before any Property_Wrapper exists (Req 14.11).
+ */
+const PREPASS_PAYLOAD = { topModule: 'counter_12' } as const;
+
+/**
+ * A job of `kind` carrying `field: payload` verbatim, or carrying no such key at all.
+ *
+ * `kind` and `payload` are deliberately untyped: almost every case below submits a
+ * combination the contract must REFUSE, and a typed builder would turn those into
+ * compile errors rather than the boundary rejections they are meant to exercise.
+ *
+ * `report` is the required output that kind's worker writes, so each job's
+ * `requiredOutputs` carries the member its own kind actually produces rather than a
+ * borrowed one.
+ */
+function jobWithPayload(
+  kind: string,
+  field: string,
+  report: RequiredOutput,
+  payload?: unknown,
+): unknown {
+  const base = { ...job(['exitCode', report]), kind };
+  return payload === undefined ? base : { ...base, [field]: payload };
+}
+
+/** A job of `kind` carrying `formal` verbatim, or carrying no `formal` key at all. */
+function jobWithFormal(kind: string, formal?: unknown): unknown {
+  return jobWithPayload(kind, 'formal', 'formalReport', formal);
+}
+
+/** A job of `kind` carrying `formalPrepass` verbatim, or carrying no such key at all. */
+function jobWithPrepass(kind: string, formalPrepass?: unknown): unknown {
+  return jobWithPayload(kind, 'formalPrepass', 'formalPrepassReport', formalPrepass);
+}
+
 /** A fully captured, successful run; override fields to model each scenario. */
 function capture(overrides: Partial<RawRunCapture> = {}): RawRunCapture {
   return {
@@ -199,6 +241,119 @@ describe('validateSandboxJob (seam contract)', () => {
   it('rejects an unknown extra property', () => {
     const bad = { ...job(['exitCode']), rogue: true };
     expect(validateSandboxJob(bad).ok).toBe(false);
+  });
+});
+
+describe('validateSandboxJob (the formal payload biconditional)', () => {
+  // `formal` is present IF AND ONLY IF `kind` is `'formal'`, and the schema carries
+  // that as an if/then/else. Both halves are asserted here because both are a real
+  // mistake: a formal job with no parameters cannot be lowered, and parameters riding
+  // on another kind are read by no code path on the far side - which makes them a
+  // caller silently believing it asked for something. The two payload values reach a
+  // command line inside the sandbox (`prep -top`, `yosys-smtbmc -t`), so their own
+  // constraints are asserted here too: this is the boundary's refusal, which has to
+  // hold whether or not the worker's second validation (task 2.2) exists yet.
+
+  it('given a formal job with NO payload, when validated, then it is rejected', () => {
+    expect(validateSandboxJob(jobWithFormal('formal')).ok).toBe(false);
+  });
+
+  it('given a well-formed formal job, when validated, then it is accepted', () => {
+    expect(validateSandboxJob(jobWithFormal('formal', FORMAL_PAYLOAD)).ok).toBe(true);
+  });
+
+  it('given a SIMULATE job carrying a formal payload, when validated, then it is rejected', () => {
+    expect(validateSandboxJob(jobWithFormal('simulate', FORMAL_PAYLOAD)).ok).toBe(false);
+  });
+
+  it('given a SYNTHESIZE job carrying a formal payload, when validated, then it is rejected', () => {
+    // The `else` covers every non-formal kind, not only the one the plan named.
+    expect(validateSandboxJob(jobWithFormal('synthesize', FORMAL_PAYLOAD)).ok).toBe(false);
+  });
+
+  it('given a topModule that is not a plain identifier, when validated, then it is rejected', () => {
+    // Refused at the boundary because this value is interpolated into `prep -top`.
+    const shellMetacharacters = { ...FORMAL_PAYLOAD, topModule: 'wrapper_top; rm -rf /' };
+
+    expect(validateSandboxJob(jobWithFormal('formal', shellMetacharacters)).ok).toBe(false);
+  });
+
+  it('given a depth of zero, when validated, then it is rejected', () => {
+    // Depth 0 checks nothing, so it is the vacuous-proof shape the whole spec exists
+    // to refuse; it must not be expressible in a job at all.
+    expect(validateSandboxJob(jobWithFormal('formal', { ...FORMAL_PAYLOAD, depth: 0 })).ok).toBe(
+      false,
+    );
+  });
+
+  it('given a fractional depth, when validated, then it is rejected', () => {
+    expect(validateSandboxJob(jobWithFormal('formal', { ...FORMAL_PAYLOAD, depth: 2.5 })).ok).toBe(
+      false,
+    );
+  });
+
+  it('given an extra key inside the formal payload, when validated, then it is rejected', () => {
+    const withRogueKey = { ...FORMAL_PAYLOAD, engine: 'z3' };
+
+    expect(validateSandboxJob(jobWithFormal('formal', withRogueKey)).ok).toBe(false);
+  });
+});
+
+describe('validateSandboxJob (the formalPrepass payload biconditional)', () => {
+  // The same three cases group 1 asserts for `formal`, because the pre-pass is a SECOND job
+  // kind with its OWN payload and its own biconditional (Req 14.11), and the two rules are
+  // independent `allOf` members rather than one combined rule. The `formalPrepassReport`
+  // required output rides along on every job built here, so these cases also exercise the
+  // widened `RequiredOutput` enum at the boundary.
+
+  it('given a formalPrepass job with NO payload, when validated, then it is rejected', () => {
+    expect(validateSandboxJob(jobWithPrepass('formalPrepass')).ok).toBe(false);
+  });
+
+  it('given a well-formed formalPrepass job, when validated, then it is accepted', () => {
+    expect(validateSandboxJob(jobWithPrepass('formalPrepass', PREPASS_PAYLOAD)).ok).toBe(true);
+  });
+
+  it('given a SIMULATE job carrying a formalPrepass payload, when validated, then it is rejected', () => {
+    expect(validateSandboxJob(jobWithPrepass('simulate', PREPASS_PAYLOAD)).ok).toBe(false);
+  });
+
+  it('given a FORMAL job carrying a formalPrepass payload, when validated, then it is rejected', () => {
+    // The two rules are independent, so the kind that is MOST like a pre-pass is still
+    // refused: a `formal` job carrying a pre-pass payload has no code path reading it.
+    const bothPayloads = {
+      ...(jobWithFormal('formal', FORMAL_PAYLOAD) as Record<string, unknown>),
+      formalPrepass: PREPASS_PAYLOAD,
+    };
+
+    expect(validateSandboxJob(bothPayloads).ok).toBe(false);
+  });
+
+  it('given a formalPrepass job carrying a formal payload too, when validated, then it is rejected', () => {
+    // The mirror image: both `allOf` members refuse at once, one for the missing field and
+    // one for the forbidden field.
+    const bothPayloads = {
+      ...(jobWithPrepass('formalPrepass', PREPASS_PAYLOAD) as Record<string, unknown>),
+      formal: FORMAL_PAYLOAD,
+    };
+
+    expect(validateSandboxJob(bothPayloads).ok).toBe(false);
+  });
+
+  it('given a topModule that is not a plain identifier, when validated, then it is rejected', () => {
+    // Refused at the boundary because this value is interpolated into `prep -top` inside the
+    // sandbox, exactly as the `formal` payload's is.
+    const shellMetacharacters = { topModule: 'counter_12; rm -rf /' };
+
+    expect(validateSandboxJob(jobWithPrepass('formalPrepass', shellMetacharacters)).ok).toBe(false);
+  });
+
+  it('given a depth inside the formalPrepass payload, when validated, then it is rejected', () => {
+    // The pre-pass runs no solver, so `depth` is a field no worker path reads. Closed
+    // (`additionalProperties: false`), so it is refused rather than ignored.
+    const withDepth = { ...PREPASS_PAYLOAD, depth: 20 };
+
+    expect(validateSandboxJob(jobWithPrepass('formalPrepass', withDepth)).ok).toBe(false);
   });
 });
 

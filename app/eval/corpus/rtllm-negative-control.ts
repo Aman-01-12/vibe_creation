@@ -53,6 +53,7 @@
 import type { SimulatorAdapter, SourceFile } from '@app/tools';
 
 import {
+  identityOf,
   mutantRunLimits,
   type Mutant,
   type MutantIdentity,
@@ -88,11 +89,6 @@ export interface RtllmNegativeControlDeps {
   readonly calibrator: RtllmMutationCalibrator;
   /** Wall clock, injected so the per-sample added time is measurable and testable. */
   readonly now?: () => number;
-}
-
-/** The identity fields of a mutant, without its RTL, for the survivor record. */
-function identityOf(mutant: Mutant): MutantIdentity {
-  return { mutantId: mutant.mutantId, operator: mutant.operator, site: mutant.site };
 }
 
 /**
@@ -243,6 +239,7 @@ export class RtllmMutationNegativeControl implements MutationNegativeControl {
       [mutantFile(mutant)],
       { path: NEGATIVE_CONTROL_TESTBENCH_FILENAME, contents: request.testbench },
       mutantRunLimits(request.limits, this.#deps.calibrator.mutantWallMs),
+      { requiredCheckNames: request.requiredCheckNames },
     );
     if (simulation.verdict === 'pass') {
       return { kind: 'survived' };

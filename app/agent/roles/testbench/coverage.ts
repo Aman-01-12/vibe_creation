@@ -13,7 +13,12 @@
 
 import type { AcceptanceCriterion, Spec } from '@app/core';
 
-import { detectStandardBlocks } from './standard-blocks.js';
+import type { StrategyArm } from './approach-router.js';
+import {
+  detectGroundedStandardBlocks,
+  detectStandardBlocks,
+  type StandardBlockReference,
+} from './standard-blocks.js';
 import { isValidCheckName } from './signalling.js';
 import type { RequiredCheck } from './types.js';
 
@@ -76,8 +81,10 @@ function criterionChecks(spec: Spec): readonly RequiredCheck[] {
  * the block's reference behavior - so a check whose truth table the declared ports
  * cannot justify never reaches this set.
  */
-function knownAnswerChecks(spec: Spec): readonly RequiredCheck[] {
-  return detectStandardBlocks(spec).map((reference) => ({
+function knownAnswerChecks(
+  references: readonly StandardBlockReference[],
+): readonly RequiredCheck[] {
+  return references.map((reference) => ({
     name: reference.checkName,
     kind: 'known-answer' as const,
     description: reference.description,
@@ -94,10 +101,28 @@ function knownAnswerChecks(spec: Spec): readonly RequiredCheck[] {
  * the set stays a clean one-check-per-signal mapping.
  */
 export function requiredChecks(spec: Spec): readonly RequiredCheck[] {
-  const checks = criterionChecks(spec);
+  return combine(criterionChecks(spec), knownAnswerChecks(detectStandardBlocks(spec)));
+}
+
+/**
+ * The Required_Check list one Strategy_Arm derives for a Spec; `requiredChecks` is Control's.
+ * Grounded drops only the up-counter known-answer check, an invented contract (Q-03).
+ */
+export function requiredChecksFor(spec: Spec, strategyArm: StrategyArm): readonly RequiredCheck[] {
+  if (strategyArm !== 'grounded') {
+    return requiredChecks(spec);
+  }
+  return combine(criterionChecks(spec), knownAnswerChecks(detectGroundedStandardBlocks(spec)));
+}
+
+/** Criterion checks first, then each valid known-answer check whose name is not taken. */
+function combine(
+  checks: readonly RequiredCheck[],
+  knownAnswers: readonly RequiredCheck[],
+): readonly RequiredCheck[] {
   const seen = new Set<string>(checks.map((check) => check.name));
   const combined = [...checks];
-  for (const knownAnswer of knownAnswerChecks(spec)) {
+  for (const knownAnswer of knownAnswers) {
     if (!seen.has(knownAnswer.name) && isValidCheckName(knownAnswer.name)) {
       seen.add(knownAnswer.name);
       combined.push(knownAnswer);

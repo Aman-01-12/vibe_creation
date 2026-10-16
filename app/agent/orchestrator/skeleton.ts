@@ -92,6 +92,7 @@ function toolFailureVerdict(): SimulationVerdict {
     // oracle produced one, so there is no cause to name beyond "the tool failed".
     failureCause: 'tool-failed',
     attributedFiles: [],
+    watchdog: { stopped: false },
   };
 }
 

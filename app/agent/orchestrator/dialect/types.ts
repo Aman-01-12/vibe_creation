@@ -13,7 +13,10 @@
 
 /** The closed vocabulary of mechanical defect classes the normalizer names (design.md Component 2). */
 export type DialectClass =
-  'unnamed-begin-declaration' | 'malformed-sized-literal' | 'prose-as-statement';
+  | 'unnamed-begin-declaration'
+  | 'malformed-sized-literal'
+  | 'prose-as-statement'
+  | 'model-dump-task';
 
 /** Why one site was left alone; closed, so a new reason cannot arrive as prose. */
 export type DialectDeclineCause =

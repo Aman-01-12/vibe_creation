@@ -132,3 +132,52 @@ export function parseJsonEnvelope(raw: string): Result<unknown, JsonEnvelopePars
   const unfenced = tryParseJson(fencedBody);
   return unfenced === null ? err(NOT_JSON) : ok(unfenced.value);
 }
+
+/** Why a reply did not hold exactly one complete fenced block. */
+export type FencedBlockFailure = 'no-fence' | 'multiple-fences' | 'unterminated-fence';
+
+/**
+ * Every fence-shaped line: indent, three or more backticks, an info string without a backtick.
+ * Adjacent quantifiers accept disjoint characters, so matching stays linear on untrusted text.
+ */
+const FENCE_SHAPED_LINE = /^[ \t]*(`{3,})([^`\r\n]*)\r?$/gmu;
+
+/** The open block's backtick count and where its body starts. */
+interface OpenFence {
+  readonly ticks: number;
+  readonly bodyStart: number;
+}
+
+/** Where the line after the fence line ending at `lineEnd` starts, or the text's end. */
+function nextLineStart(text: string, lineEnd: number): number {
+  const lineBreak = text.indexOf('\n', lineEnd);
+  return lineBreak === -1 ? text.length : lineBreak + 1;
+}
+
+/**
+ * The body of the one complete fenced block in `text`, verbatim, or why there is not exactly one.
+ * Outside a block any fence line opens one; inside, a bare fence with as many backticks closes it.
+ */
+export function extractSingleFencedBlock(text: string): Result<string, FencedBlockFailure> {
+  let open: OpenFence | null = null;
+  let body: string | null = null;
+  for (const match of text.matchAll(FENCE_SHAPED_LINE)) {
+    const ticks = match[1]?.length ?? 0;
+    const info = match[2] ?? '';
+    if (open === null) {
+      if (body !== null) {
+        return err('multiple-fences');
+      }
+      open = { ticks, bodyStart: nextLineStart(text, match.index + match[0].length) };
+      continue;
+    }
+    if (info.trim().length === 0 && ticks >= open.ticks) {
+      body = text.slice(open.bodyStart, Math.max(open.bodyStart, match.index));
+      open = null;
+    }
+  }
+  if (open !== null) {
+    return err('unterminated-fence');
+  }
+  return body === null ? err('no-fence') : ok(body);
+}

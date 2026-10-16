@@ -12,16 +12,35 @@
 
 import type { Verdict } from '@app/core';
 
-/** What a single sandbox invocation does. */
-export type SandboxJobKind = 'simulate' | 'synthesize';
+/**
+ * What a single sandbox invocation does.
+ *
+ * `formalPrepass` is a SECOND Yosys invocation over the candidate DESIGN ALONE, and it
+ * is its own kind rather than a step inside `formal` because it must complete BEFORE the
+ * Property_Wrapper exists - a `formal` job's `-top` IS that wrapper, and the wrapper is
+ * what needs the pre-pass's answers (Req 14.11).
+ */
+export type SandboxJobKind = 'simulate' | 'synthesize' | 'formal' | 'formalPrepass';
 
 /**
  * An output the invocation is required to produce.
  *
  * Capture-all-or-error (Req 2.5, 2.9): if any required output is missing, the
  * whole invocation is classified `error` rather than returning a partial result.
+ *
+ * AN OUTPUT IS REQUIRED EXACTLY WHEN ITS ABSENCE CANNOT BE A SUCCESS, and the two formal
+ * kinds sit on OPPOSITE sides of that rule, which is the whole reason it is written down
+ * here rather than decided per call site.
+ *   - `formalPrepassReport` IS required. A pre-pass that produced no report produced
+ *     nothing: its entire output is the report, and there is no success case in which the
+ *     report is legitimately absent.
+ *   - The `formal` job's counterexample trace is NOT required and is not a member of this
+ *     union at all. It is registered opportunistically, because a SUCCESSFUL PROOF writes
+ *     no trace, so naming it here would make `missingRequiredOutputs` classify every
+ *     proof as `error` (Req 12.18, 12.19).
  */
-export type RequiredOutput = 'stdout' | 'stderr' | 'exitCode' | 'vcd' | 'netlistJson';
+export type RequiredOutput =
+  'stdout' | 'stderr' | 'exitCode' | 'vcd' | 'netlistJson' | 'formalReport' | 'formalPrepassReport';
 
 /**
  * One file written into the sandbox workspace before the run.
@@ -69,12 +88,88 @@ export interface ResourceLimits {
   readonly wallMs: number;
 }
 
+/**
+ * Kind-specific parameters for a `formal` job; required when `kind` is `'formal'`.
+ *
+ * A TYPED, SCHEMA-VALIDATED FIELD rather than a JSON file smuggled through
+ * `workspaceFiles`, for two reasons. The schema is the canonical seam, so a field
+ * declared here is the single edit both languages inherit (see the note at the top
+ * of this module), whereas a workspace file would need a second, hand-written
+ * validator on the Python side - one ajv never sees, on the far side of the
+ * boundary it is supposed to guard. And because the field is in the schema, a
+ * malformed payload is rejected AT the boundary by ajv rather than by a worker
+ * that has already been handed the job.
+ *
+ * Both values reach a command line inside the sandbox (`prep -top <topModule>`,
+ * `yosys-smtbmc -t <depth>`), which is why the schema constrains `topModule` to a
+ * bounded plain Verilog identifier and `depth` to a positive integer instead of
+ * accepting any string and any number. The worker validates both again before use
+ * (task 2.2), because it is a trust boundary in its own right and must not take a
+ * job's word for a value it is about to interpolate.
+ */
+export interface FormalJobRequest {
+  /** The Property_Wrapper module name, used as `prep -top`. */
+  readonly topModule: string;
+  /** The `-t` depth every `yosys-smtbmc` invocation in this job runs at. */
+  readonly depth: number;
+}
+
+/**
+ * Kind-specific parameters for a `formalPrepass` job; required when `kind` is
+ * `'formalPrepass'` (Req 14.11).
+ *
+ * ONE FIELD, AND IT IS THE DESIGN'S OWN MODULE NAME rather than a wrapper's. That is the
+ * difference between this payload and `FormalJobRequest`, and it is the reason the pre-pass
+ * is its own job kind: it runs over the candidate design alone, BEFORE any Property_Wrapper
+ * exists, so there is no wrapper name to elaborate as `-top` and no proof depth to run at -
+ * the pre-pass runs no solver.
+ *
+ * `topModule` reaches a command line inside the sandbox (`prep -top <topModule>`), so it
+ * carries the same bounded plain-identifier constraint the schema puts on
+ * `FormalJobRequest.topModule`, and the worker validates it again before use, because the
+ * worker is a trust boundary in its own right.
+ */
+export interface FormalPrepassJobRequest {
+  /** The CANDIDATE DESIGN's own module name, used as `prep -top`. */
+  readonly topModule: string;
+}
+
 /** The complete description of one sandbox invocation (the stdin side of the seam). */
+/** The one default timescale a job may request; a closed vocabulary, re-checked by the worker. */
+export type DefaultTimescale = '1ns/1ps';
+
+/** A `simulate` job's optional compile parameters (testbench-spec-grounding, C7). */
+export interface SimulateJobRequest {
+  readonly defaultTimescale: DefaultTimescale;
+}
+
 export interface SandboxJob {
   readonly kind: SandboxJobKind;
   readonly workspaceFiles: readonly SourceFile[];
   readonly limits: ResourceLimits;
   readonly requiredOutputs: readonly RequiredOutput[];
+  /**
+   * The `formal` kind's parameters; present IF AND ONLY IF `kind` is `'formal'`.
+   *
+   * The schema carries that biconditional as a conditional rule (required under
+   * `formal`, forbidden otherwise), so both halves of the mistake are rejected at
+   * the boundary: a `formal` job with no parameters, and a `simulate` or
+   * `synthesize` job carrying parameters no code path on the other side reads.
+   */
+  readonly formal?: FormalJobRequest;
+  /**
+   * The `formalPrepass` kind's parameters; present IF AND ONLY IF `kind` is
+   * `'formalPrepass'`, by the same conditional rule and for the same two reasons.
+   *
+   * A SEPARATE FIELD rather than a widened `formal`, because the two payloads carry
+   * different facts: a `formal` job needs a wrapper name AND a proof depth, and a pre-pass
+   * needs the design's name and no depth at all. Sharing one field would make `depth`
+   * either optional-and-meaningless on the pre-pass or required-and-fabricated, and both
+   * shapes let a job say something no code path on the far side reads.
+   */
+  readonly formalPrepass?: FormalPrepassJobRequest;
+  /** Optional, and allowed only when `kind` is `'simulate'`; absent on every Golden_Judge job. */
+  readonly simulate?: SimulateJobRequest;
 }
 
 /** A reference to one captured artifact blob (for example the VCD waveform). */

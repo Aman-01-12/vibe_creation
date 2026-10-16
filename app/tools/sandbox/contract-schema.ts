@@ -23,6 +23,51 @@ export const SANDBOX_JOB_REF = `${CONTRACT_SCHEMA_ID}#/definitions/SandboxJob`;
 export const SANDBOX_RESULT_REF = `${CONTRACT_SCHEMA_ID}#/definitions/SandboxResult`;
 
 /**
+ * The rule "`<field>` is present IF AND ONLY IF `kind` is `<kind>`", as one `allOf` member.
+ *
+ * ONE OWNER OF THE SHAPE, because there are now TWO kind-specific payloads (`formal` and
+ * `formalPrepass`) and both halves of both rules are load-bearing: the `then` stops a job of
+ * that kind arriving with no parameters, and the `else` stops parameters riding along on a kind
+ * whose worker path never reads them. Expressed in the schema rather than only in the worker so
+ * ajv refuses a malformed job at the boundary, before it crosses the seam.
+ *
+ * THE BOOLEAN-SCHEMA BRANCHES ARE NOT A STYLE CHOICE - they are the schema satisfying a strict
+ * validator, never the validator relaxed for the schema. `validation.ts` builds ajv with
+ * `strict: true`, which turns `strictRequired` ON, and `strictRequired` demands that every name
+ * in a `required` be declared in the `properties` of THE SAME subschema; declaring it on the
+ * parent does not carry down. A violation throws at ajv COMPILE time, which is module load, so
+ * the failure shape is a suite reporting "0 tests" rather than a failing assertion
+ * (`chipAgent/_inbox/gotcha-ajv-strictrequired-refuses-required-in-a-then-branch.md`).
+ *   - `true` in the `then` says only "declared here", leaving the parent's `$ref` the single
+ *     owner of the payload's shape, so a payload violation is reported once rather than twice.
+ *   - `false` in the `else` IS the refusal (the field may not appear), and sidesteps the
+ *     `not: { required: [...] }` shape `strictRequired` also rejects.
+ *   - `type: 'object'` on each branch keeps `strictTypes` quiet.
+ *
+ * Returned as an `allOf` member because draft-07 permits only ONE `if`/`then`/`else` per schema
+ * object, and `SandboxJob` now needs two independent ones.
+ */
+function payloadBiconditional(kind: string, field: string): SchemaObject {
+  return {
+    if: { type: 'object', required: ['kind'], properties: { kind: { const: kind } } },
+    then: { type: 'object', required: [field], properties: { [field]: true } },
+    else: { type: 'object', properties: { [field]: false } },
+  };
+}
+
+/**
+ * "`<field>` may appear only when `kind` is `<kind>`": optional there, refused elsewhere.
+ * The `then` names no `required`, so `strictRequired` has nothing to refuse (vault gotcha).
+ */
+function payloadOnlyUnder(kind: string, field: string): SchemaObject {
+  return {
+    if: { type: 'object', required: ['kind'], properties: { kind: { const: kind } } },
+    then: { type: 'object' },
+    else: { type: 'object', properties: { [field]: false } },
+  };
+}
+
+/**
  * The canonical seam schema. Keep every constraint aligned with the TypeScript
  * types in `contract.ts` and the byte-mirror `contract.schema.json`.
  */
@@ -54,14 +99,70 @@ export const sandboxContractSchema: SchemaObject = {
     },
     RequiredOutput: {
       type: 'string',
-      enum: ['stdout', 'stderr', 'exitCode', 'vcd', 'netlistJson'],
+      // `formalPrepassReport` is a member because a pre-pass that produced no report
+      // produced nothing at all - there is no success case in which it is legitimately
+      // absent. The `formal` job's counterexample trace is deliberately NOT a member, by
+      // the same rule read the other way: a successful proof writes no trace, so requiring
+      // one would classify every proof as `error`. See `RequiredOutput` in `contract.ts`.
+      enum: [
+        'stdout',
+        'stderr',
+        'exitCode',
+        'vcd',
+        'netlistJson',
+        'formalReport',
+        'formalPrepassReport',
+      ],
+    },
+    FormalJobRequest: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['topModule', 'depth'],
+      properties: {
+        // A plain Verilog identifier, bounded, because this value is interpolated
+        // into `prep -top <topModule>` inside the sandbox. Same form and same
+        // ceiling the corpus already holds a module name to
+        // (`app/eval/corpus/design-description.ts`). The worker validates it again
+        // before use (task 2.2); this is the boundary's own refusal, not a
+        // substitute for the worker's.
+        topModule: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_$]*$', maxLength: 128 },
+        // A positive integer, for the same reason: it becomes `-t <depth>`. The
+        // upper ceiling is the worker's (task 2.2), because the ceiling is a
+        // property of what the solver can be asked to do, not of the seam.
+        depth: { type: 'integer', exclusiveMinimum: 0 },
+      },
+    },
+    FormalPrepassJobRequest: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['topModule'],
+      properties: {
+        // The CANDIDATE DESIGN's own module name, not a Property_Wrapper's: the pre-pass
+        // runs before any wrapper exists. Same bounded plain-identifier form and same
+        // ceiling as `FormalJobRequest.topModule`, for the same reason - it is interpolated
+        // into `prep -top <topModule>` inside the sandbox. The worker validates it again
+        // before use; this is the boundary's own refusal, not a substitute for the worker's.
+        topModule: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_$]*$', maxLength: 128 },
+        // NO `depth`. The pre-pass runs no solver, so there is no proof depth to carry, and
+        // a field the far side never reads is a caller silently believing it asked for
+        // something.
+      },
+    },
+    SimulateJobRequest: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['defaultTimescale'],
+      properties: {
+        // A closed value, never a path or flag: the worker writes the command file itself.
+        defaultTimescale: { type: 'string', enum: ['1ns/1ps'] },
+      },
     },
     SandboxJob: {
       type: 'object',
       additionalProperties: false,
       required: ['kind', 'workspaceFiles', 'limits', 'requiredOutputs'],
       properties: {
-        kind: { type: 'string', enum: ['simulate', 'synthesize'] },
+        kind: { type: 'string', enum: ['simulate', 'synthesize', 'formal', 'formalPrepass'] },
         workspaceFiles: {
           type: 'array',
           items: { $ref: '#/definitions/SourceFile' },
@@ -72,7 +173,21 @@ export const sandboxContractSchema: SchemaObject = {
           uniqueItems: true,
           items: { $ref: '#/definitions/RequiredOutput' },
         },
+        formal: { $ref: '#/definitions/FormalJobRequest' },
+        formalPrepass: { $ref: '#/definitions/FormalPrepassJobRequest' },
+        simulate: { $ref: '#/definitions/SimulateJobRequest' },
       },
+      // TWO independent biconditionals - `formal` under `'formal'`, `formalPrepass` under
+      // `'formalPrepass'` - carried as `allOf` members because draft-07 permits only one
+      // `if`/`then`/`else` per schema object. Independent rather than one combined rule, so a
+      // job carrying BOTH payloads is refused by both branches at once and a third kind-specific
+      // payload joins as a third member rather than as a rewrite. See `payloadBiconditional` for
+      // why each branch redeclares its field as a boolean schema.
+      allOf: [
+        payloadBiconditional('formal', 'formal'),
+        payloadBiconditional('formalPrepass', 'formalPrepass'),
+        payloadOnlyUnder('simulate', 'simulate'),
+      ],
     },
     ArtifactBlobRef: {
       type: 'object',

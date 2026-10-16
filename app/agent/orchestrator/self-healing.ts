@@ -131,6 +131,8 @@ export interface RecoveryContext {
   readonly failingCandidate: GeneratedCandidate;
   /** The independent, RTL-free testbench that re-decides correctness on recovery. */
   readonly testbench: Testbench;
+  /** The Required_Check names the testbench must print; a Watchdog stop fails the rest. */
+  readonly requiredCheckNames: readonly string[];
   /** Sanitized simulator/compiler diagnostics fed to the next revision. */
   readonly diagnostics: string;
   /** Per-invocation sandbox caps; `wallMs` is the sole time bound for a simulate. */
@@ -447,7 +449,10 @@ export class SelfHealingLoop {
       contents: context.testbench.source,
     };
     try {
-      return await this.#simulator.simulate(rtl, testbenchFile, context.limits);
+      // A Testbench_Run like the Oracle_Run's, so the harness supplies dump.vcd and the Watchdog.
+      return await this.#simulator.simulate(rtl, testbenchFile, context.limits, {
+        requiredCheckNames: context.requiredCheckNames,
+      });
     } catch {
       // A sandbox capture/contract failure is exceptional; classify it `error` and
       // never let it crash the recovery loop (fail safe).
@@ -585,6 +590,7 @@ function toolFailureVerdict(): SimulationVerdict {
     // oracle produced one, so there is no cause to name beyond "the tool failed".
     failureCause: 'tool-failed',
     attributedFiles: [],
+    watchdog: { stopped: false },
   };
 }
 

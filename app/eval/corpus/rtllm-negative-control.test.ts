@@ -24,7 +24,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { ResourceLimits, SimulationVerdict, SimulatorAdapter, SourceFile } from '@app/tools';
+import type {
+  ResourceLimits,
+  SimulationVerdict,
+  SimulatorAdapter,
+  SourceFile,
+  TestbenchRun,
+} from '@app/tools';
 
 import type { MutationConfig, MutationProbeOutcome } from '../mutation-control.js';
 import type { GoldenTestbench, ReferenceDesign } from './corpus-types.js';
@@ -89,6 +95,7 @@ function simulation(verdict: SimulationVerdict['verdict']): SimulationVerdict {
     // `SandboxResult` arbitrary in oracle-reproducibility.property.test.ts.
     failureCause: verdict === 'error' ? 'tool-failed' : 'none',
     attributedFiles: [],
+    watchdog: { stopped: false },
   };
 }
 
@@ -98,6 +105,7 @@ class SpySimulator implements SimulatorAdapter {
     readonly rtl: readonly SourceFile[];
     readonly testbench: SourceFile;
     readonly limits: ResourceLimits;
+    readonly testbenchRun?: TestbenchRun;
   }[] = [];
 
   constructor(private readonly answer: (callIndex: number) => SimulationVerdict) {}
@@ -106,9 +114,15 @@ class SpySimulator implements SimulatorAdapter {
     rtl: readonly SourceFile[],
     testbench: SourceFile,
     limits: ResourceLimits,
+    testbenchRun?: TestbenchRun,
   ): Promise<SimulationVerdict> {
     const callIndex = this.calls.length;
-    this.calls.push({ rtl, testbench, limits });
+    this.calls.push({
+      rtl,
+      testbench,
+      limits,
+      ...(testbenchRun === undefined ? {} : { testbenchRun }),
+    });
     return Promise.resolve(this.answer(callIndex));
   }
 }
@@ -204,8 +218,37 @@ function probe(
   subject: RtllmMutationNegativeControl,
   testbench = TESTBENCH,
 ): Promise<MutationProbeOutcome> {
-  return subject.probe({ problemId: PROBLEM_ID, testbench, limits: LIMITS });
+  return subject.probe({
+    problemId: PROBLEM_ID,
+    testbench,
+    limits: LIMITS,
+    requiredCheckNames: [],
+  });
 }
+
+describe('RtllmMutationNegativeControl - the Watchdog (testbench-spec-grounding, C9)', () => {
+  it('runs each mutant as a Testbench_Run and counts a Watchdog-stopped mutant as killed', async () => {
+    const stopped: SimulationVerdict = {
+      ...simulation('fail'),
+      checks: [{ name: 'b_ok', passed: false }],
+      watchdog: { stopped: true, timedOutChecks: ['b_ok'] },
+    };
+    const { subject, simulator } = control('failed', () => stopped);
+
+    const outcome = await subject.probe({
+      problemId: PROBLEM_ID,
+      testbench: TESTBENCH,
+      limits: LIMITS,
+      requiredCheckNames: ['b_ok'],
+    });
+
+    expect(outcome.kind === 'measured' ? outcome.report.killedCount : -1).toBe(4);
+    expect(simulator.calls.length).toBeGreaterThan(0);
+    for (const call of simulator.calls) {
+      expect(call.testbenchRun).toEqual({ requiredCheckNames: ['b_ok'] });
+    }
+  });
+});
 
 describe('RtllmMutationNegativeControl - what a kill and a survivor are', () => {
   it('kills a mutant our testbench FAILS, and reports a full kill rate', async () => {
@@ -457,7 +500,12 @@ describe('RtllmMutationNegativeControl - mutant runs get the MUTANT wall cap', (
     const { subject, simulator } = control('failed', () => simulation('fail'));
 
     // WHEN the probe runs our testbench against every valid mutant.
-    await subject.probe({ problemId: PROBLEM_ID, testbench: TESTBENCH, limits: studentLimits });
+    await subject.probe({
+      problemId: PROBLEM_ID,
+      testbench: TESTBENCH,
+      limits: studentLimits,
+      requiredCheckNames: [],
+    });
 
     // THEN a mutant that hangs OUR testbench costs the mutant cap, not the session's - and every
     // other cap is the session's, because only the RTL under the testbench may differ.
@@ -490,7 +538,12 @@ describe('RtllmMutationNegativeControl - mutant runs get the MUTANT wall cap', (
     await new RtllmMutationNegativeControl({
       simulator,
       calibrator: calibratorAtOneSecond,
-    }).probe({ problemId: PROBLEM_ID, testbench: TESTBENCH, limits: LIMITS });
+    }).probe({
+      problemId: PROBLEM_ID,
+      testbench: TESTBENCH,
+      limits: LIMITS,
+      requiredCheckNames: [],
+    });
 
     expect(calibratorAtOneSecond.mutantWallMs).toBe(1_000);
     expect(simulator.calls.map((call) => call.limits.wallMs)).toEqual([1_000, 1_000, 1_000, 1_000]);

@@ -40,17 +40,28 @@ export {
 // exhaustion presents the failing case labeled `Unverified` with a Teach_Mode
 // handoff seam. Its integration test is task 14.2; its self-healing loop is 14.3.
 export {
+  FALLBACK_ROUTES,
+  NO_FORMAL_RUN,
   NO_REPAIR,
+  PROPERTY_SET_ADMISSION_OUTCOMES,
   repairAccepted,
   repairDeclined,
   repairDeclineReasonOf,
   VerificationLoop,
   type CandidateGenerator,
+  type FallbackRoute,
+  type FormalGate,
+  type FormalPropertySet,
+  type FormalProvenance,
   type GenerationContextOpener,
+  type PropertySetSource,
   type IndependentTestbenchGenerator,
   type InstrumentRefusalReason,
   type InstrumentRefusedModule,
+  type MalformedCounterexampleReference,
   type NormalizationProvenance,
+  type PropertySetAdmissionOutcome,
+  type RecordedCounterexampleCapture,
   type RepairDeclineReason,
   type RepairProvenance,
   type SetupFailureCause,
@@ -122,11 +133,19 @@ export { TESTBENCH_REPAIR_POLICY_VERSION } from './testbench-repair-policy-versi
 // identity the same way `TESTBENCH_REPAIR_POLICY_VERSION` is.
 export { NORMALIZER_VERSION } from './normalizer-version.js';
 
+// The build constant identifying the Formal_Oracle's gate behaviour (task 8.1):
+// the Lowering_Sequence, the five-condition rule, the Property_Dialect, the
+// Proof_Depth rule and its ladder, the solver the invocations name, and the
+// default Property_Time_Budget, folded into the experiment identity the same way
+// `NORMALIZER_VERSION` is.
+export { FORMAL_ORACLE_VERSION } from './formal-oracle-version.js';
+
 // The Dialect_Normalizer (task 4.5): the pure, model-free entry point that
 // composes the unnamed-begin, sized-literal, and prose-as-statement rules into
 // one desugaring pass over a generated Testbench source, applied once before
 // the Testbench_Precheck builds it. See `./dialect/normalizer.ts` for why this
 // is the sole caller of `scanSource` for this transform's whole call graph.
+export { MODEL_DUMP_TASKS } from './dialect/model-dump-task.js';
 export {
   MAX_NORMALIZED_CHARS,
   normalizeDialect,
@@ -156,6 +175,7 @@ export {
 // resolves `dist/index.js` alone.
 export {
   buildRepairHint,
+  describePrecheckDiagnostic,
   type BuildDiagnosticHint,
   type RepairHint,
   type RepairTrigger,
