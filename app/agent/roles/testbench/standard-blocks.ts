@@ -155,3 +155,8 @@ export function detectStandardBlocks(spec: Spec): readonly StandardBlockReferenc
       interfaceJustifies(reference, spec.moduleInterface),
   );
 }
+
+/** Every standard-block reference but the up-counter, whose wrap point no width fixes (Q-03). */
+export function detectGroundedStandardBlocks(spec: Spec): readonly StandardBlockReference[] {
+  return detectStandardBlocks(spec).filter((reference) => reference.block !== 'up-counter');
+}

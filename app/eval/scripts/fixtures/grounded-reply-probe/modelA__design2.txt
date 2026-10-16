@@ -1,0 +1,9 @@
+Here is the testbench:
+
+```verilog
+module tb;
+  initial $display("CHECK a_ok PASS");
+endmodule
+```
+
+It prints one check.

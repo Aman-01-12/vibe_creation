@@ -61,7 +61,9 @@
 //   sufficient to decide the verdict and structurally incapable of leaking a path
 //   into one.
 
-import type { CheckResult } from '@app/core';
+import { missingCheckNames, type CheckResult } from '@app/core';
+
+import { WATCHDOG_SENTINEL } from './simulation-harness.js';
 
 /**
  * Matches one per-check signalling line: `CHECK <name> PASS|FAIL[diagnostic]`.
@@ -152,4 +154,25 @@ export function readCheckSignals(stdout: string): CheckSignalReading {
     }
   }
   return { checks, unreadableSignals };
+}
+
+/** Whether the Watchdog ended the run, and which Required_Checks it left unprinted. */
+export type WatchdogReading =
+  | { readonly stopped: false }
+  | { readonly stopped: true; readonly timedOutChecks: readonly string[] };
+
+/**
+ * The Watchdog reading of one completed run's stdout (Req 5.3, 5.4); never reads source.
+ * Stopped when a trimmed stdout line is the sentinel; unprinted Required_Checks timed out.
+ */
+export function readWatchdogStop(
+  stdout: string,
+  reading: CheckSignalReading,
+  requiredCheckNames: readonly string[],
+): WatchdogReading {
+  const stopped = stdout.split('\n').some((line) => line.trim() === WATCHDOG_SENTINEL);
+  if (!stopped) {
+    return { stopped: false };
+  }
+  return { stopped: true, timedOutChecks: missingCheckNames(reading.checks, requiredCheckNames) };
 }

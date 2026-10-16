@@ -35,8 +35,17 @@ import type {
   SourceFile,
   ToolRunner,
 } from '../sandbox/index.js';
-import { readCheckSignals } from './check-signalling.js';
+import { readCheckSignals, readWatchdogStop, type WatchdogReading } from './check-signalling.js';
 import { classifyRunFailure, type RunFailureCause } from './failure-attribution.js';
+import { DEFAULT_TIMESCALE, SIMULATION_HARNESS } from './simulation-harness.js';
+
+export type { WatchdogReading } from './check-signalling.js';
+
+/** What a caller running a model-written testbench asks of one simulate job. */
+export interface TestbenchRun {
+  /** The Required_Check names the Check_Reader marks FAIL when the Watchdog ended the run. */
+  readonly requiredCheckNames: readonly string[];
+}
 
 /**
  * The artifact-map key under which the captured VCD waveform is returned.
@@ -95,6 +104,8 @@ export interface SimulationVerdict {
    * `build-failed` (Property 3).
    */
   readonly attributedFiles: readonly string[];
+  /** Required: `{ stopped: false }` on every run that did not request a TestbenchRun. */
+  readonly watchdog: WatchdogReading;
 }
 
 /**
@@ -108,6 +119,7 @@ export interface SimulatorAdapter {
     rtl: readonly SourceFile[],
     testbench: SourceFile,
     limits: ResourceLimits,
+    testbenchRun?: TestbenchRun,
   ): Promise<SimulationVerdict>;
 }
 
@@ -120,12 +132,22 @@ export function assembleSimulateJob(
   rtl: readonly SourceFile[],
   testbench: SourceFile,
   limits: ResourceLimits,
+  testbenchRun?: TestbenchRun,
 ): SandboxJob {
-  return {
+  const job: SandboxJob = {
     kind: 'simulate',
     workspaceFiles: [...rtl, testbench],
     limits,
     requiredOutputs: SIMULATE_REQUIRED_OUTPUTS,
+  };
+  if (testbenchRun === undefined) {
+    return job;
+  }
+  // The harness goes last so its own `timescale` cannot carry into a later file.
+  return {
+    ...job,
+    workspaceFiles: [...rtl, testbench, SIMULATION_HARNESS],
+    simulate: { defaultTimescale: DEFAULT_TIMESCALE },
   };
 }
 
@@ -166,6 +188,7 @@ function capturedVcd(result: SandboxResult): ArtifactBlobRef | null {
 export function interpretSandboxResult(
   result: SandboxResult,
   submittedPaths: readonly string[] = [],
+  testbenchRun?: TestbenchRun,
 ): SimulationVerdict {
   const vcd = capturedVcd(result);
   const attribution = classifyRunFailure(result, submittedPaths);
@@ -179,14 +202,22 @@ export function interpretSandboxResult(
     attributedFiles: attribution.attributedFiles,
   };
   if (result.verdict === 'error') {
-    return { verdict: 'error', checks: [], ...diagnostics };
+    return { verdict: 'error', checks: [], ...diagnostics, watchdog: { stopped: false } };
   }
   const reading = readCheckSignals(result.stdout);
+  const watchdog: WatchdogReading =
+    testbenchRun === undefined
+      ? { stopped: false }
+      : readWatchdogStop(result.stdout, reading, testbenchRun.requiredCheckNames);
+  // A Watchdog stop fails every Required_Check the run never printed (reason: watchdog-timeout).
+  const checks: readonly CheckResult[] = watchdog.stopped
+    ? [...reading.checks, ...watchdog.timedOutChecks.map((name) => ({ name, passed: false }))]
+    : reading.checks;
   const outcome: InvocationOutcome = {
     timedOut: false,
     toolFailure: false,
     completed: true,
-    checks: reading.checks,
+    checks,
     unreadableCheckSignals: reading.unreadableSignals,
     // A run killed for exceeding its workspace disk cap stopped part-way through the
     // stimulus, so the checks it managed to print describe a fraction of it. Stated
@@ -207,7 +238,7 @@ export function interpretSandboxResult(
     // that reads the stream must not silently lose its precondition with it.
     stdoutTruncated: result.stdoutTruncated,
   };
-  return { verdict: classifyVerdict(outcome), checks: reading.checks, ...diagnostics };
+  return { verdict: classifyVerdict(outcome), checks, ...diagnostics, watchdog };
 }
 
 /**
@@ -227,10 +258,11 @@ export class IcarusSimulatorAdapter implements SimulatorAdapter {
     rtl: readonly SourceFile[],
     testbench: SourceFile,
     limits: ResourceLimits,
+    testbenchRun?: TestbenchRun,
   ): Promise<SimulationVerdict> {
-    const job = assembleSimulateJob(rtl, testbench, limits);
+    const job = assembleSimulateJob(rtl, testbench, limits, testbenchRun);
     const result = await this.toolRunner.run(job);
     const submittedPaths = job.workspaceFiles.map((file) => file.path);
-    return interpretSandboxResult(result, submittedPaths);
+    return interpretSandboxResult(result, submittedPaths, testbenchRun);
   }
 }

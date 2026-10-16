@@ -61,7 +61,7 @@ import {
   type Spec,
 } from '@app/core';
 import type { KnowledgeQuery, KnowledgeRetriever, RetrievalResult } from '@app/knowledge';
-import { propertyParameters, propertyTag, routedModelIdFor } from '@app/test';
+import { propertyParameters, propertyTag, routedModelIdFor, timingContractFor } from '@app/test';
 
 // --- Fakes -------------------------------------------------------------------
 
@@ -254,12 +254,23 @@ function makeSpec(
   version: number,
 ): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: profile.moduleName,
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst', direction: 'input', width: 1 },
+        { name: 'q', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: 'spec_ulid',
     projectId: 'project_ulid',
     goal: profile.goal,
     constraints: ['single module'],
     architecture: profile.architecture,
     moduleInterface: {
+      validityOutputName: null,
       moduleName: profile.moduleName,
       ports: [
         { name: 'clk', direction: 'input', width: 1 },
@@ -442,6 +453,110 @@ describe('Property 6 tag', () => {
   it('uses the canonical feature tag', () => {
     expect(propertyTag(6, 'The testbench covers every acceptance criterion')).toBe(
       'Feature: hdl-creation-loop, Property 6: The testbench covers every acceptance criterion',
+    );
+  });
+});
+
+// --- Property 13 -------------------------------------------------------------
+
+const PROPERTY_13 =
+  'Feature: testbench-failure-reportability, Property 13: The coverage predicate recognises exactly the two emission forms';
+
+/** Emission kinds: the first three count for their name, every decoy counts for none. */
+type EmissionKind =
+  | 'check-text'
+  | 'task-call-path'
+  | 'task-call-bare'
+  | 'decoy-longer-identifier'
+  | 'decoy-other-scope'
+  | 'decoy-identifier-suffix';
+
+/** The requirement's oracle (Req 4.1), restated as data rather than derived from the regex. */
+const COUNTING_KINDS: ReadonlySet<EmissionKind> = new Set<EmissionKind>([
+  'check-text',
+  'task-call-path',
+  'task-call-bare',
+]);
+
+interface Emission {
+  readonly kind: EmissionKind;
+  readonly name: string;
+  /** What follows `CHECK <name>` in the text form: always a non-word character or a line end. */
+  readonly textTerminator: string;
+  /** Whitespace between a task identifier and its `(`, which is still a call. */
+  readonly callGap: string;
+}
+
+/** Render one emission as a testbench line, the way a model plausibly writes it. */
+function renderEmission(emission: Emission): string {
+  const args = `${emission.callGap}("${emission.name}", 1'b1, got, want);`;
+  switch (emission.kind) {
+    case 'check-text':
+      return `      $display("CHECK ${emission.name}${emission.textTerminator}`;
+    case 'task-call-path':
+      return `      ece_simulation_harness.ece_check${args}`;
+    case 'task-call-bare':
+      return `      ece_check${args}`;
+    case 'decoy-longer-identifier':
+      return `      my_ece_check${args}`;
+    case 'decoy-other-scope':
+      return `      tb.ece_check${args}`;
+    case 'decoy-identifier-suffix':
+      return `      ece_checkx${args}`;
+  }
+}
+
+const identifierArbitrary = fc.stringMatching(/^[a-z_][a-z0-9_]{0,7}$/);
+
+/** A base name plus a strict prefix and an extension of it, so prefix pairs are always present. */
+const namePoolArbitrary: fc.Arbitrary<readonly string[]> = fc
+  .tuple(identifierArbitrary, fc.nat(), fc.stringMatching(/^[a-z0-9_]{1,4}$/), identifierArbitrary)
+  .map(([base, cut, suffix, unrelated]) => {
+    const prefix = base.length > 1 ? base.slice(0, 1 + (cut % (base.length - 1))) : base;
+    return [base, prefix, `${base}${suffix}`, unrelated];
+  });
+
+const emissionKindArbitrary = fc.constantFrom<EmissionKind>(
+  'check-text',
+  'task-call-path',
+  'task-call-bare',
+  'decoy-longer-identifier',
+  'decoy-other-scope',
+  'decoy-identifier-suffix',
+);
+
+function emissionArbitrary(pool: readonly string[]): fc.Arbitrary<Emission> {
+  return fc.record({
+    kind: emissionKindArbitrary,
+    name: fc.constantFrom(...pool),
+    textTerminator: fc.constantFrom(' PASS");', ' FAIL");', '");', ''),
+    callGap: fc.constantFrom('', ' '),
+  });
+}
+
+/** A query name drawn from the pool, and a source of labelled emissions over the same pool. */
+const coverageCaseArbitrary = namePoolArbitrary.chain((pool) =>
+  fc.record({
+    query: fc.constantFrom(...pool),
+    emissions: fc.array(emissionArbitrary(pool), { maxLength: 5 }),
+  }),
+);
+
+describe('sourceEmitsCheck emission forms (Property 13)', () => {
+  // Feature: testbench-failure-reportability, Property 13: The coverage predicate recognises exactly the two emission forms
+  it(PROPERTY_13, () => {
+    fc.assert(
+      fc.property(coverageCaseArbitrary, ({ query, emissions }) => {
+        // No trailing newline, so a final `CHECK <name>` with an empty terminator ends the source.
+        const source = ['module tb;', '  initial begin', ...emissions.map(renderEmission)].join(
+          '\n',
+        );
+        const planted = emissions.some(
+          (emission) => COUNTING_KINDS.has(emission.kind) && emission.name === query,
+        );
+        expect(sourceEmitsCheck(source, query)).toBe(planted);
+      }),
+      { numRuns: 100 },
     );
   });
 });

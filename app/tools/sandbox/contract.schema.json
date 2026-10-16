@@ -46,7 +46,54 @@
     },
     "RequiredOutput": {
       "type": "string",
-      "enum": ["stdout", "stderr", "exitCode", "vcd", "netlistJson"]
+      "enum": [
+        "stdout",
+        "stderr",
+        "exitCode",
+        "vcd",
+        "netlistJson",
+        "formalReport",
+        "formalPrepassReport"
+      ]
+    },
+    "FormalJobRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["topModule", "depth"],
+      "properties": {
+        "topModule": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_$]*$",
+          "maxLength": 128
+        },
+        "depth": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "FormalPrepassJobRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["topModule"],
+      "properties": {
+        "topModule": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_$]*$",
+          "maxLength": 128
+        }
+      }
+    },
+    "SimulateJobRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultTimescale"],
+      "properties": {
+        "defaultTimescale": {
+          "type": "string",
+          "enum": ["1ns/1ps"]
+        }
+      }
     },
     "SandboxJob": {
       "type": "object",
@@ -55,7 +102,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["simulate", "synthesize"]
+          "enum": ["simulate", "synthesize", "formal", "formalPrepass"]
         },
         "workspaceFiles": {
           "type": "array",
@@ -72,8 +119,87 @@
           "items": {
             "$ref": "#/definitions/RequiredOutput"
           }
+        },
+        "formal": {
+          "$ref": "#/definitions/FormalJobRequest"
+        },
+        "formalPrepass": {
+          "$ref": "#/definitions/FormalPrepassJobRequest"
+        },
+        "simulate": {
+          "$ref": "#/definitions/SimulateJobRequest"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "formal"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": ["formal"],
+            "properties": {
+              "formal": true
+            }
+          },
+          "else": {
+            "type": "object",
+            "properties": {
+              "formal": false
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "formalPrepass"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": ["formalPrepass"],
+            "properties": {
+              "formalPrepass": true
+            }
+          },
+          "else": {
+            "type": "object",
+            "properties": {
+              "formalPrepass": false
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "simulate"
+              }
+            }
+          },
+          "then": {
+            "type": "object"
+          },
+          "else": {
+            "type": "object",
+            "properties": {
+              "simulate": false
+            }
+          }
+        }
+      ]
     },
     "ArtifactBlobRef": {
       "type": "object",

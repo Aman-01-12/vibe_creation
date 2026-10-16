@@ -43,6 +43,7 @@ const PROPERTY =
 
 /** A minimal Spec interface; the decision table under test never inspects its shape. */
 const MODULE_INTERFACE: ModuleInterface = {
+  validityOutputName: null,
   moduleName: 'dut',
   ports: [],
   clocking: { clockName: null, resetName: null, resetActiveLow: false },
@@ -107,6 +108,7 @@ function verdictOf(
     resourceUsage: { cpuMs: 1, maxMemMb: 1, wallMs: 1 },
     failureCause,
     attributedFiles,
+    watchdog: { stopped: false },
   };
 }
 

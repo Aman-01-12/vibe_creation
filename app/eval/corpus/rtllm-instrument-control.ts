@@ -56,6 +56,7 @@ import {
   type InstrumentControl,
   type InstrumentControlRequest,
   type InstrumentControlResult,
+  type PositiveControlRunFacts,
   type RecordedInstrumentVerdict,
 } from '../instrument-control.js';
 import type {
@@ -80,6 +81,18 @@ function refused(reason: 'testbench-unsubmittable'): InstrumentControlResult {
     stderr: '',
     exitCode: null,
     mutation: null,
+    positiveRun: null,
+  };
+}
+
+/** The facts of the Positive_Control simulation that the record and the summary count. */
+function positiveRunFacts(simulation: SimulationVerdict): PositiveControlRunFacts {
+  const failing = simulation.checks.filter((check) => !check.passed).map((check) => check.name);
+  return {
+    passed: simulation.verdict === 'pass',
+    watchdogStopped: simulation.watchdog.stopped,
+    waveformMissing: simulation.vcd === null,
+    failingCheckNames: [...new Set(failing)],
   };
 }
 
@@ -174,6 +187,7 @@ export class RtllmInstrumentControl implements InstrumentControl {
       stderr: simulation.stderr,
       exitCode: simulation.exitCode,
       mutation: measuredReport(negative),
+      positiveRun: positiveRunFacts(simulation),
     };
   }
 
@@ -196,6 +210,7 @@ export class RtllmInstrumentControl implements InstrumentControl {
       problemId: request.problemId,
       testbench: request.testbench,
       limits: request.limits,
+      requiredCheckNames: request.requiredCheckNames,
     });
   }
 
@@ -205,6 +220,7 @@ export class RtllmInstrumentControl implements InstrumentControl {
       [reference.rtl],
       { path: CONTROL_TESTBENCH_WORKSPACE_FILENAME, contents: request.testbench },
       request.limits,
+      { requiredCheckNames: request.requiredCheckNames },
     );
   }
 }

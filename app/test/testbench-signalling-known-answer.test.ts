@@ -59,7 +59,7 @@ import {
   type Spec,
 } from '@app/core';
 import type { KnowledgeQuery, KnowledgeRetriever, RetrievalResult } from '@app/knowledge';
-import { routedModelIdFor } from '@app/test';
+import { routedModelIdFor, timingContractFor } from '@app/test';
 import { readCheckSignals } from '@app/tools';
 
 // --- Fixtures ----------------------------------------------------------------
@@ -111,12 +111,19 @@ const CLOCK_PORTS: readonly Port[] = [
 function approvedSpec(profile: ModuleProfile): Spec {
   const clocking = profile.clocking ?? COMBINATIONAL;
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: profile.moduleName,
+      ports: clocking.clockName === null ? DATA_PORTS : [...CLOCK_PORTS, ...DATA_PORTS],
+      clocking,
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: profile.goal,
     constraints: ['single module'],
     architecture: profile.architecture,
     moduleInterface: {
+      validityOutputName: null,
       moduleName: profile.moduleName,
       ports: clocking.clockName === null ? DATA_PORTS : [...CLOCK_PORTS, ...DATA_PORTS],
       clocking,

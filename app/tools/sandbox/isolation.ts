@@ -17,6 +17,9 @@ import { TOOL_RUNNER_WORKSPACE_ENV } from './workspace-lifecycle.js';
 /**
  * The pinned worker image the sandbox runs. The image is built out of band and
  * pinned by digest in deployment; generated code never changes it.
+ *
+ * Promoting an image requires `default-timescale-image.integration.test.ts` green on a host
+ * with `runsc`: that suite is what checks the image's Icarus honours the Default_Timescale_Entry.
  */
 export const SANDBOX_WORKER_IMAGE = 'ece/tool-runner-worker:pinned';
 

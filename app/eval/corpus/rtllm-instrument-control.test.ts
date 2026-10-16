@@ -9,7 +9,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { ResourceLimits, SimulationVerdict, SimulatorAdapter, SourceFile } from '@app/tools';
+import type {
+  ResourceLimits,
+  SimulationVerdict,
+  SimulatorAdapter,
+  SourceFile,
+  TestbenchRun,
+} from '@app/tools';
 
 import type {
   MutationNegativeControl,
@@ -53,6 +59,7 @@ function simulation(overrides: Partial<SimulationVerdict> = {}): SimulationVerdi
     resourceUsage: { cpuMs: 1, maxMemMb: 1, wallMs: 1 },
     failureCause: 'none',
     attributedFiles: [],
+    watchdog: { stopped: false },
     ...overrides,
   };
 }
@@ -62,12 +69,16 @@ class SpySimulator implements SimulatorAdapter {
   readonly calls: {
     readonly rtl: readonly SourceFile[];
     readonly testbench: SourceFile;
+    readonly testbenchRun: TestbenchRun | undefined;
   }[] = [];
-
   constructor(private readonly answer: SimulationVerdict) {}
-
-  simulate(rtl: readonly SourceFile[], testbench: SourceFile): Promise<SimulationVerdict> {
-    this.calls.push({ rtl, testbench });
+  simulate(
+    rtl: readonly SourceFile[],
+    testbench: SourceFile,
+    _limits: ResourceLimits,
+    testbenchRun?: TestbenchRun,
+  ): Promise<SimulationVerdict> {
+    this.calls.push({ rtl, testbench, testbenchRun });
     return Promise.resolve(this.answer);
   }
 }
@@ -94,8 +105,14 @@ function request(testbench = 'module tb; endmodule\n'): {
   readonly problemId: string;
   readonly testbench: string;
   readonly limits: ResourceLimits;
+  readonly requiredCheckNames: readonly string[];
 } {
-  return { problemId: 'rtllm/memory/right_shifter', testbench, limits: LIMITS };
+  return {
+    problemId: 'rtllm/memory/right_shifter',
+    testbench,
+    limits: LIMITS,
+    requiredCheckNames: [],
+  };
 }
 
 describe('RtllmInstrumentControl - classifying the control run', () => {
@@ -222,6 +239,32 @@ describe('RtllmInstrumentControl - classifying the control run', () => {
     expect(result?.stdout).toBe('CHECK a FAIL\n');
     expect(result?.stderr).toBe('a warning\n');
     expect(result?.exitCode).toBe(3);
+  });
+});
+
+describe('RtllmInstrumentControl - the Watchdog (testbench-spec-grounding, C9)', () => {
+  it('runs the reference as a Testbench_Run and reads a Watchdog stop as a failed reference', async () => {
+    const { control: subject, simulator } = control(
+      simulation({
+        verdict: 'fail',
+        checks: [{ name: 'b_ok', passed: false }],
+        stdout: 'ECE_WATCHDOG_TIMEOUT\n',
+        watchdog: { stopped: true, timedOutChecks: ['b_ok'] },
+      }),
+    );
+
+    const result = await subject.check({ ...request(), requiredCheckNames: ['b_ok'] });
+
+    expect(simulator.calls.map((call) => call.testbenchRun)).toEqual([
+      { requiredCheckNames: ['b_ok'] },
+    ]);
+    expect(result?.verdict).toEqual({ validity: 'invalid', defect: 'TESTBENCH_FAILED_REFERENCE' });
+    expect(result?.positiveRun).toEqual({
+      passed: false,
+      watchdogStopped: true,
+      waveformMissing: true,
+      failingCheckNames: ['b_ok'],
+    });
   });
 });
 
@@ -424,6 +467,7 @@ describe('RtllmInstrumentControl - the NEGATIVE control, folded in', () => {
         problemId: 'rtllm/memory/right_shifter',
         testbench: 'module tb; endmodule\n',
         limits: LIMITS,
+        requiredCheckNames: [],
       },
     ]);
   });

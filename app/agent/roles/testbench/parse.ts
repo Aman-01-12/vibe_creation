@@ -12,7 +12,7 @@
 
 import { type Result, err, ok } from '@app/core';
 
-import { parseJsonEnvelope } from '../model-output-envelope.js';
+import { extractSingleFencedBlock, parseJsonEnvelope } from '../model-output-envelope.js';
 
 import type { TestbenchDraft } from './types.js';
 
@@ -24,14 +24,39 @@ import type { TestbenchDraft } from './types.js';
  */
 const MAX_SOURCE_CHARS = 200_000;
 
+/** Every way the parsers refuse a reply; the first four are the JSON parser's (Req 7.8). */
+export const TESTBENCH_PARSE_REFUSALS = [
+  'not-json',
+  'not-object',
+  'empty-source',
+  'oversize-source',
+  'no-fence',
+  'multiple-fences',
+  'unterminated-fence',
+] as const;
+export type TestbenchParseRefusal = (typeof TESTBENCH_PARSE_REFUSALS)[number];
+
+/** The fixed sentence for each refusal; never model text, so it is safe to log and record. */
+const PARSE_REFUSAL_REASONS: Readonly<Record<TestbenchParseRefusal, string>> = {
+  'not-json': 'model output was not valid JSON',
+  'not-object': 'model output was not a JSON object',
+  'empty-source': 'model output was missing a non-empty testbench source',
+  'oversize-source': 'testbench source exceeded the maximum accepted size',
+  'no-fence': 'model output contained no fenced code block',
+  'multiple-fences': 'model output contained more than one fenced code block',
+  'unterminated-fence': 'model output contained an unterminated fenced code block',
+};
+
 /** Why shaping untrusted model output into a draft failed (non-sensitive). */
 export interface TestbenchParseError {
+  readonly refusal: TestbenchParseRefusal;
+  /** The fixed sentence for `refusal`. */
   readonly reason: string;
 }
 
-/** Build a parse error with a short, non-sensitive reason. */
-function parseError(reason: string): TestbenchParseError {
-  return { reason };
+/** Build a parse error from its closed code. */
+function parseError(refusal: TestbenchParseRefusal): TestbenchParseError {
+  return { refusal, reason: PARSE_REFUSAL_REASONS[refusal] };
 }
 
 /** A record with unknown-typed values, the shape of parsed-but-unvalidated JSON. */
@@ -52,10 +77,10 @@ function isRecord(value: unknown): value is UnknownRecord {
 function parseJson(raw: string): Result<UnknownRecord, TestbenchParseError> {
   const envelope = parseJsonEnvelope(raw);
   if (!envelope.ok) {
-    return err(parseError('model output was not valid JSON'));
+    return err(parseError('not-json'));
   }
   if (!isRecord(envelope.value)) {
-    return err(parseError('model output was not a JSON object'));
+    return err(parseError('not-object'));
   }
   return ok(envelope.value);
 }
@@ -74,11 +99,33 @@ export function parseTestbenchDraft(raw: string): Result<TestbenchDraft, Testben
     return jsonResult;
   }
   const { source } = jsonResult.value;
-  if (typeof source !== 'string' || source.trim().length === 0) {
-    return err(parseError('model output was missing a non-empty testbench source'));
+  if (typeof source !== 'string') {
+    return err(parseError('empty-source'));
+  }
+  return boundedDraft(source);
+}
+
+/** The empty-after-trim rule, then the size bound, over an extracted source. */
+function boundedDraft(source: string): Result<TestbenchDraft, TestbenchParseError> {
+  if (source.trim().length === 0) {
+    return err(parseError('empty-source'));
   }
   if (source.length > MAX_SOURCE_CHARS) {
-    return err(parseError('testbench source exceeded the maximum accepted size'));
+    return err(parseError('oversize-source'));
   }
   return ok({ source });
+}
+
+/**
+ * The Grounded_Arm parser: exactly one complete fenced block, taken verbatim (Req 7.2-7.7).
+ * Prose around the block is accepted; zero, two, or an unclosed block is refused.
+ */
+export function parseFencedTestbenchDraft(
+  raw: string,
+): Result<TestbenchDraft, TestbenchParseError> {
+  const block = extractSingleFencedBlock(raw);
+  if (!block.ok) {
+    return err(parseError(block.error));
+  }
+  return boundedDraft(block.value);
 }
