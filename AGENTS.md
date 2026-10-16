@@ -1,9 +1,5 @@
-
-
-
-
 ## General Guidelines
-Never use the em dash "-". Use plain dash "-" instead
+Never use the em dash character U+2014. Use a plain ASCII hyphen "-" instead. (This rule previously quoted both characters as the same hyphen, which made it unreadable.)
 • When writing commit messages, NEVER auto-add your agent name as co-author
 • Never manually modify CHANGELOG.md files or any files that are marked as auto-generated
 • When writing or substantially editing long Markdown files, put each full sentence on its own line.
@@ -16,6 +12,70 @@ This makes sure you find the real problem so your fix will actually solve it.
 If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along
 • Apply that same high standard to engineering excellence: lint, test failures, and test flakiness.
 If you see one, even if it is not caused by what you are working on right now, still get it fixed.
+# Critical Research, Latest Knowledge & Continuous Discovery - Rectified
+
+## Default skepticism
+
+Don't default to trusting the user's proposal. Before implementing, internally check the user's stated approach and assumptions for correctness - including checking whether they still hold given current tools, versions, and research.
+
+## When to research the web
+
+Trigger web research on:
+- Explicit requests to research, investigate, explore alternatives, or improve an existing approach.
+- A "hard problem," defined concretely as one of:
+  - No confident solution after an initial attempt.
+  - Architectural or cross-cutting in scope.
+  - A prior conclusion that may be stale (tools, versions, or research have plausibly moved on).
+
+Don't limit the search to what the user already named. Also look for:
+- Newer techniques, algorithms, or recently released tools/libraries/solvers.
+- Alternative architectures or representations.
+- Workarounds for known limitations.
+- Combinations of existing techniques that may solve the problem.
+- Counterevidence or counterexamples that could invalidate the current hypothesis.
+- Benchmark evidence and real-world engineering experience.
+
+## Source handling
+
+- Prefer current official documentation, source code, changelogs, recent papers, issue trackers, and credible engineering discussion over blog summaries, aggregators, or memorized training knowledge.
+- Weight recency explicitly in fast-moving areas - a multi-year-old benchmark and a recent primary source are not interchangeable; say which you're relying on and why.
+- When investigating a tool or library's claimed behavior, check its source or changelog directly rather than relying on secondary summaries, where feasible.
+- **When sources disagree:** surface the disagreement and state which source you're weighting more heavily and why. Don't silently pick one.
+
+## On failure
+
+When an approach fails, underperforms, behaves unexpectedly, or produces inaccurate results:
+- Don't simply retry the same approach.
+- Don't assume the implementation is the only possible problem.
+- Investigate the failure mode itself: search for the specific failure mode, known tool limitations, newer versions, alternative configurations, and related research or alternative approaches.
+
+## Epistemic hygiene
+
+Continuously distinguish between:
+- What is **known**
+- What is **experimentally observed**
+- What is **hypothesized**
+- What is **uncertain**
+- What has been **disproven**
+
+Generate and test hypotheses internally. Prefer experiments, benchmarks, source inspection, and reproducible evidence over speculation. Don't assume an older conclusion still holds if tools, algorithms, versions, or research have changed since - re-check important conclusions against current information when relevant.
+
+## Scope and stopping rule
+
+- Scale research depth to how consequential and hard-to-reverse the decision is. A minor, easily-reversed choice doesn't warrant the same depth as an architectural one.
+- Search broadly first, then narrow toward the most promising approaches. Don't stop at the first plausible solution.
+- **Stop once every load-bearing claim is either verified or explicitly flagged as unverified** - this is the boundary that prevents unbounded searching.
+- Weigh a "better" approach's implementation cost, complexity, and reversibility against its actual gain. Novelty alone isn't sufficient justification.
+
+## Output discipline
+
+Perform all of the above reasoning and research internally. Do not produce:
+- A long explanation of this directive
+- An internal-skepticism narrative
+- A research diary
+...unless the user explicitly asks for the process. The output should normally contain only the useful result, implementation, evidence, or concise conclusion requested by the user.
+---
+
 
 
 
@@ -24,9 +84,6 @@ If you see one, even if it is not caused by what you are working on right now, s
 
 Superpowers skills are at:
 ~/.copilot/installed-plugins/superpowers-marketplace/superpowers/skills/
-
-<!-- Paranoid implementation skill is at:
-~/.copilot/installed-plugins/superpowers-marketplace/superpowers/skills/paranoid-implementation/SKILL.md -->
 
 ## Behaviour
 
@@ -70,15 +127,16 @@ Workspace skills live at `.kiro/skills/`:
 - `frontend-design` - intentional UI/visual design
 - `brand-guidelines` - consistent brand look-and-feel
 - `algorithmic-art` - generative visuals (p5.js)
-- `improve-codebase-architecture` - visual HTML report of deepening opportunities, then a grill (manual-only)
+- `improve-codebase-architecture` - visual HTML report of deepening opportunities, then a grill (heavy tier: announce and confirm first)
 - `webapp-testing` - Playwright toolkit for driving/testing the local web app
 
 All of these are model-invocable; select them dynamically based on the ongoing task's needs (see Behaviour above).
 Standard skills run autonomously. `improve-codebase-architecture` is the one heavy skill: run it only on a strong task match and only after announcing it and getting confirmation (see the two-tier policy in Behaviour).
 
 MCP servers are configured in `.kiro/settings/mcp.json`:
+- `shadcn` - shadcn/ui component search/install (enabled)
 - `aceternity-ui` - Aceternity UI component search/install (enabled)
-- `firecrawl` - web scraping/extraction (disabled until `FIRECRAWL_API_KEY` is set)
+- `firecrawl` - web scraping/extraction (enabled; `FIRECRAWL_API_KEY` is set)
 
 CLI quality/automation tools:
 - `gnhf` - autonomous overnight agent loop (installed globally)
@@ -94,7 +152,7 @@ Non-negotiables for every change (ours and agent-generated code):
 - Tools decide correctness, not the model; verify with the deterministic oracle before calling anything correct.
 - Validate all external input (client, files, API, model output, web content) at every trust boundary.
 - Server-side authN + per-object authZ (IDOR/BOLA) on every endpoint; never trust client/UI/model output as a security control.
-- Secrets never in source, bundles, prompts, logs, errors, or traces (env/secret manager only; gitignored).
+- Secrets never in source, bundles, prompts, logs, errors, or traces. One credential has one gitignored source, either the environment or a dedicated single-value credential file, and never a fallback chain.
 - Agent-generated code runs only in a sandbox (isolated, no secrets, no default network, resource-capped).
 - Side-effectful actions use idempotency keys + approval gate; never blind-retry on timeout.
 - Sanitized errors to clients; every failure path handled and fails safe.

@@ -5,6 +5,12 @@
 .env
 .env.*
 !.env.example
+dump.vcd
+.kiro
+chipAgent
+
+# The Credential_File and anything a refresh writes beside it, never commit
+.secrets/
 *.pem
 *.key
 .kiro/settings/mcp.json
@@ -67,6 +73,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Gate caches, so prettier and eslint re-check only what changed
+.eslintcache
+
 # Python build/cache artifacts (Tool_Runner worker)
 __pycache__/
 *.egg-info/
@@ -80,3 +89,10 @@ build/
 # Playwright test artifacts
 /tmp/inspect.png
 .eval-corpus/
+# Measurement_Records produced by the formal measurement scripts (`npm run formal:anchors`,
+# `formal:reset-derivation`). Run outputs rather than source, and nothing in app/ or scripts/
+# reads this directory, so ignoring it has no dangling-pointer effect. Same rule as /.eval-runs/:
+# copy a record out of the tree deliberately when you want to cite it.
+/measurements/
+# One-off analysis write-up, not referenced by any steering file, hook, or build step.
+/PCB-VERIFICATION-ANALYSIS.md
