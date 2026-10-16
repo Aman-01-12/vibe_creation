@@ -11,7 +11,7 @@ This is the always-on core. It is intentionally short. The full standards live i
 - Tools decide correctness, not the model. Every generated artifact is verified by its deterministic oracle (simulator/tests/ERC/DRC) before it is called correct; unverifiable output is labeled, not trusted.
 - Validate all external input at every trust boundary: client payloads, files, API responses, model output, and retrieved web content are untrusted until validated.
 - Server-side authN + authZ on every endpoint, including per-object checks (IDOR/BOLA). Never use client state, UI visibility, or model output as a security control.
-- Secrets never appear in source, client bundles, prompts, logs, errors, or traces. Use env/secret manager; they are gitignored.
+- Secrets never appear in source, client bundles, prompts, logs, errors, or traces. They come from one of two gitignored sources: the environment, or a dedicated single-value credential file whose whole trimmed contents is the credential (`.secrets/bedrock-token` is the first of these). One credential has one source; never add a fallback chain, because two loaders disagreeing about one file is a silent auth failure.
 - All agent-generated code executes only in a sandbox (isolated container, no secrets, no default network, resource-capped).
 - Side-effectful actions (fab submit, order, payment, deletes) use idempotency keys + an approval gate; never blind-retry on timeout.
 - Errors are sanitized to the client (no internal hosts/IPs/stack traces); every failure path is handled and fails safe.
