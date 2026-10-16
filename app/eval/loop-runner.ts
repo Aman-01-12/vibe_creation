@@ -18,7 +18,14 @@
 // seeded `VerificationLoop` and calls `verify`.
 
 import type { ResourceLimits } from '@app/tools';
-import type { InstrumentAdmission, SessionBudgetHandle, VerificationOutcome } from '@app/agent';
+import type {
+  InstrumentAdmission,
+  PropertySetAdmissionOutcome,
+  SessionBudgetHandle,
+  StrategyArm,
+  VerificationOutcome,
+  PropertySetSource,
+} from '@app/agent';
 
 import type { EvalProblem } from './problem.js';
 
@@ -51,11 +58,44 @@ export interface EvalSampleRequest {
   readonly budget: SessionBudgetHandle;
   /** The sandbox resource limits, identical to a student session (Req 15.6). */
   readonly limits: ResourceLimits;
+  /** The Strategy_Arm the sample's Testbench_Agent runs under (Req 6.1). */
+  readonly strategyArm: StrategyArm;
   /**
    * The per-sample Instrument_Admission adapter, or absent when the runner should
    * validate the instrument only after the loop returns (Req 4.10, 4.14).
    */
   readonly instrumentAdmission?: InstrumentAdmission;
+  /**
+   * The sample's ALREADY-AUTHORED Property_Set source, or absent to let the loop author its own.
+   *
+   * Present only on a gated eval run, where the harness authored up front so the gate could
+   * score the same artifact the loop reasons with. Absent is the SHIPPING path: the runner
+   * constructs its own `PropertyAgent` and the loop authors when it needs to, exactly as a
+   * student session does. So the two differ by the gate alone, which is what makes a gated and
+   * an ungated run comparable; see design.md, Component 11a.
+   */
+  readonly propertySetSource?: PropertySetSource;
+  /**
+   * The Property_Set admission outcome, ALREADY DECIDED by the harness (Req 10.3, 13.6).
+   *
+   * THE SIGNAL, AND THE REASON IT TRAVELS ON THIS PORT. The admission gate reads a
+   * reference design, so it lives in `app/eval` and nothing on the product path can reach
+   * it; and `app/agent` holds no import of `app/eval` (Req 11.11, 13.6), so the loop cannot
+   * compute this for itself. The harness therefore decides and the runner carries the
+   * decision in: the loop receives a Property_Set already stamped with this outcome, or -
+   * where `propertySetAdmissionFallsBack` holds, which today is `'refused'` alone - no
+   * usable Property_Set at all, so the simulation path decides the sample.
+   *
+   * ABSENT means no gate was wired, which the loop already records as `'not-gated'`, so
+   * there is nothing for the runner to stamp and the formal gate (where one is wired)
+   * behaves exactly as it did before this seam existed.
+   *
+   * An adapter that wires NO formal gate - which is every adapter today - satisfies the
+   * obligation trivially: with no Property_Set there is nothing a refused one could decide.
+   * The obligation is on the adapter that wires one, and it is one condition: a sample whose
+   * outcome falls back must not be given a Property_Set to decide from.
+   */
+  readonly propertySetAdmitted?: PropertySetAdmissionOutcome;
 }
 
 /**

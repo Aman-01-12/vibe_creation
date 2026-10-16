@@ -16,6 +16,29 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
+import { SIMULATION_HARNESS_VERSION } from '@app/tools';
+
+import {
+  CHECKING_APPROACHES,
+  DESIGN_GROUPS,
+  FALLBACK_ROUTES,
+  NO_FORMAL_RUN,
+  TESTBENCH_PARSE_REFUSALS,
+  STRATEGY_ARMS,
+  PROPERTY_SET_ADMISSION_OUTCOMES,
+  type FormalProvenance,
+  type StrategyArm,
+} from '@app/agent';
+import {
+  admitProved,
+  FORMAL_VERDICTS,
+  type ArtifactBlobRef,
+  type CoverCondition,
+  type FormalVerdict,
+  type ProofConditions,
+  type PropertyResult,
+} from '@app/tools';
+
 import { RECORDED_GOLDEN_KINDS } from '../golden-judge.js';
 import type { InstrumentUncheckedReason } from '../instrument-control.js';
 import type { MutationSampleCounts } from '../mutation-control.js';
@@ -26,17 +49,28 @@ import {
   instrumentVerdictOf,
   MAX_RECORDED_SURVIVORS,
   parseResultsLog,
+  recordedFormalRun,
   RESULTS_SCHEMA_VERSION,
   sampleKey,
   STALE_SCHEMA_ADVICE,
+  type RecordedFormalRun,
   type SweepSampleRecord,
 } from './results-log.js';
-import { summarizeRecords } from './summary.js';
+import { renderSummary, summarizeRecords } from './summary.js';
 
 /** A complete, valid record; each test overrides only the field it is about. */
 function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
   return {
     schemaVersion: RESULTS_SCHEMA_VERSION,
+    strategyArm: 'control',
+    checkingApproach: 'cycle-timed',
+    designGroup: 'cycle-exact',
+    testbenchPromptVersion: 4,
+    simulationHarnessVersion: SIMULATION_HARNESS_VERSION,
+    testbenchParseRefusal: null,
+    positiveControlRun: null,
+    // The default testbench was measured and gave every failure report a value.
+    valuelessFailureReports: 0,
     configHash: 'abc123',
     armName: 'glm-5',
     modelSignature: 'zai.glm-5',
@@ -88,6 +122,48 @@ function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
     // The default sample's testbench was unchanged by normalization, so there is no
     // visibility gap to report. A test about the signal sets it explicitly.
     checkNameVisibilitySignal: false,
+    // The default carries a formal run the oracle PROVED, so a test which says nothing about
+    // the formal fields still exercises the healthy path - the same reasoning the `mutation`
+    // default above follows. A `proved` result carries no cause, and its five conditions are
+    // at their admitting values.
+    formal: {
+      verdict: 'proved',
+      cause: null,
+      conditions: {
+        assertionCount: 2,
+        presat: 'satisfiable',
+        cover: { reached: true, step: 1 },
+        base: 'passed',
+        induction: 'successful',
+      },
+      depth: 20,
+      elapsedMs: 3_350,
+    },
+    // Nothing could-not-verify, so no cause sent this sample to the Simulation_Fallback.
+    formalFallbackReason: null,
+    // And the formal verdict decided this sample, so it did not fall back by any route.
+    formalFallbackRoute: 'not-applicable',
+    // The pre-pass RAN and derived a contract: an async active-low reset over a design whose
+    // initial state is not free, which is one of the combinations the `if (!$initstate)` gate
+    // is NOT emitted for. A test about the gate or about the refused arm sets both explicitly.
+    formalResetContract: {
+      derived: true,
+      resetName: 'rst_n',
+      resetActiveLow: true,
+      resetKind: 'async',
+      initialStateFree: false,
+    },
+    formalAssertionGateEmitted: false,
+    formalClockPolarity: 'posedge',
+    // The default sample ran on the product-shaped path, where no reference design exists for
+    // the Property_Set_Admission gate to mutate. A test about admission sets this explicitly.
+    propertySetAdmitted: 'not-gated',
+    propertySetAuthoredUpFront: false,
+    propertySetSurvivorCount: 0,
+    // No gate ran for the default sample, so there is no calibrated population to tally -
+    // "not measured", which is a different claim from every count at zero. A test about the
+    // counts sets a real tally explicitly.
+    formalMutationCounts: null,
     durationMs: 42_000,
     completedAtMs: 1_700_000_000_000,
     failureNote: null,
@@ -107,6 +183,83 @@ function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
  */
 function recordWithout(omitted: keyof SweepSampleRecord): Record<string, unknown> {
   return Object.fromEntries(Object.entries(record()).filter(([field]) => field !== omitted));
+}
+
+/** Encode then decode, which is the only thing a persisted record is ever asked to survive. */
+function roundTrip(sample: SweepSampleRecord): SweepSampleRecord | null {
+  return decodeSampleRecord(JSON.parse(encodeSampleRecord(sample)));
+}
+
+/** The five conditions at their admitting values: the shape a `proved` verdict rests on. */
+const PROVED_CONDITIONS: ProofConditions = {
+  assertionCount: 2,
+  presat: 'satisfiable',
+  cover: { reached: true, step: 1 },
+  base: 'passed',
+  induction: 'successful',
+};
+
+/** A complete, valid formal block; each test overrides only the field it is about. */
+function formalRun(overrides: Partial<RecordedFormalRun> = {}): RecordedFormalRun {
+  return {
+    verdict: 'proved',
+    cause: null,
+    conditions: PROVED_CONDITIONS,
+    depth: 20,
+    elapsedMs: 3_350,
+    ...overrides,
+  };
+}
+
+/** The counterexample a `refuted` fixture hands back; the evidence Req 1.10 demands. */
+const COUNTEREXAMPLE: ArtifactBlobRef = {
+  name: 'counterexample.vcd',
+  sizeBytes: 24,
+  sha256: 'c'.repeat(64),
+};
+
+/**
+ * One `PropertyResult` of the given verdict, built through `admitProved` for the `proved`
+ * member rather than with a literal.
+ *
+ * `ProvedEvidence`'s assertion count is BRANDED and `admitProved` is its sole constructor, so a
+ * fixture cannot spell a proof the five-condition gate did not admit - which is the point of the
+ * brand and the reason this helper asks the gate instead of asserting past it.
+ */
+function propertyResult(
+  verdict: FormalVerdict,
+  timing: { readonly depth?: number; readonly elapsedMs?: number } = {},
+): PropertyResult {
+  const depth = timing.depth ?? 20;
+  const elapsedMs = timing.elapsedMs ?? 3_350;
+  const criterionRef = `c-${verdict}`;
+  if (verdict === 'refuted') {
+    const conditions: ProofConditions = { ...PROVED_CONDITIONS, base: 'failed' };
+    return { verdict, counterexample: COUNTEREXAMPLE, conditions, depth, elapsedMs, criterionRef };
+  }
+  if (verdict === 'could-not-verify') {
+    const conditions: ProofConditions = { ...PROVED_CONDITIONS, induction: 'inconclusive' };
+    return {
+      verdict,
+      cause: 'induction-inconclusive',
+      conditions,
+      depth,
+      elapsedMs,
+      criterionRef,
+      diagnostic: null,
+      crossCheckDisagreed: false,
+    };
+  }
+  const evidence = admitProved(PROVED_CONDITIONS);
+  if (typeof evidence === 'string') {
+    throw new Error(`fixture conditions were refused by the gate: ${evidence}`);
+  }
+  return { verdict: 'proved', evidence, depth, elapsedMs, criterionRef };
+}
+
+/** A `FormalProvenance` carrying exactly these results; every other field is the no-run value. */
+function provenance(results: readonly PropertyResult[]): FormalProvenance {
+  return { ...NO_FORMAL_RUN, results };
 }
 
 describe('sample record round-trip', () => {
@@ -439,6 +592,51 @@ describe('an older record schema is counted separately from corruption', () => {
     expect(advice).toContain('repairAccepted');
   });
 
+  it('names the formal verdict, its conditions, and the fallback reason as now recorded', () => {
+    // Req 12.13. The reason for the CURRENT bump, and the only thing an operator is told when
+    // their file is refused. Without it the obvious next move is to hand-edit a schema version,
+    // which silently reads a sample measured under no formal oracle as one measured under this
+    // one - the misattribution the version number exists to make impossible.
+    const advice = STALE_SCHEMA_ADVICE.join(' ');
+
+    expect(advice).toContain('FORMAL VERDICT');
+    expect(advice).toContain('Proof_Conditions');
+    expect(advice).toContain('Fallback_Reason');
+    expect(advice).toContain('Reset_Contract');
+    // And the remedy, which has to be a FRESH directory rather than an in-place edit.
+    expect(advice).toContain('FRESH outputDir');
+  });
+
+  it('pins the schema version, because the refusal rule is keyed on this number alone', () => {
+    // Req 12.9. The refusal is `record.schemaVersion !== RESULTS_SCHEMA_VERSION`, so this
+    // constant IS the gate: a bump reverted by a bad merge would silently re-admit v12
+    // records, which carry no formal fields at all.
+    expect(RESULTS_SCHEMA_VERSION).toBe(17);
+  });
+
+  it('admits the provider-refused-credential cause, which no v13 reader could name', () => {
+    // The reason for the v13 -> v14 bump: an unknown cause decodes to `null`, which reads as
+    // NOT deferrable, so a v13 build would make a retakeable slot final.
+    // The default record is a verified sample, so the whole no-verdict shape moves with the
+    // cause: a passing sample that reached no verdict is refused by a cross-field rule.
+    const refused = record({
+      passed: false,
+      outcomeStatus: 'setup-failed',
+      noVerdictCause: 'provider-refused-credential',
+      formal: null,
+      formalFallbackReason: null,
+      formalFallbackRoute: 'not-applicable',
+      formalMutationCounts: null,
+      propertySetAdmitted: 'not-gated',
+      propertySetAuthoredUpFront: false,
+    });
+
+    expect(parseResultsLog(`${encodeSampleRecord(refused)}\n`).records).toEqual([refused]);
+
+    const stale = JSON.stringify({ ...refused, schemaVersion: RESULTS_SCHEMA_VERSION - 1 });
+    expect(parseResultsLog(`${stale}\n`).records).toEqual([]);
+  });
+
   it('given a previous-version line, when the log is parsed, then it aggregates nothing', () => {
     // The whole-file consequence, from the log's own side: a stale line contributes NO
     // record, so there is nothing for a summary to aggregate, and `staleSchemaLines` is what
@@ -471,13 +669,35 @@ describe('an older record schema is counted separately from corruption', () => {
     expect(parsed.records).toHaveLength(1);
   });
 
-  it('treats a FUTURE version as corruption, so noise cannot trigger the refusal', () => {
+  it('refuses the file on a FUTURE version, because a newer build wrote fields this reader cannot interpret', () => {
+    // Req 12.28, the mirror of the previous-version refusal above. A well-formed record at a
+    // higher version is what a NEWER BUILD writes - an operator resuming into a directory a
+    // later build already wrote, or two runs' files concatenated - and it carries fields this
+    // reader cannot interpret, or worse REDEFINES one it thinks it understands, which is what
+    // every bump on `RESULTS_SCHEMA_VERSION` did to the version below it. So it is counted as
+    // another schema version and refuses the whole file, rather than being reported as damage
+    // to one line while the file is aggregated anyway.
     const future = JSON.stringify({ ...record(), schemaVersion: RESULTS_SCHEMA_VERSION + 1 });
 
     const parsed = parseResultsLog(`${future}\n`);
 
-    expect(parsed.staleSchemaLines).toBe(0);
-    expect(parsed.malformedLines).toBe(1);
+    expect(parsed.staleSchemaLines).toBe(1);
+    expect(parsed.malformedLines).toBe(0);
+    expect(parsed.records).toEqual([]);
+  });
+
+  it('still treats a GARBAGE version as corruption, so noise cannot trigger the refusal', () => {
+    // The narrowness Req 12.28 does NOT relax: the refusal is triggered by an INTEGER version
+    // that is not the current one, so a string, a float, or a container in that field stays
+    // malformed and costs its own line rather than the file.
+    for (const version of ['fourteen', 13.5, null, [14]]) {
+      const parsed = parseResultsLog(
+        `${JSON.stringify({ ...record(), schemaVersion: version })}\n`,
+      );
+
+      expect(parsed.staleSchemaLines).toBe(0);
+      expect(parsed.malformedLines).toBe(1);
+    }
   });
 
   it('rejects a current-version record with no instrument validity, rather than defaulting it', () => {
@@ -502,6 +722,10 @@ describe('an older record schema is counted separately from corruption', () => {
       instrumentValidity: 'unchecked',
       instrumentUncheckedReason: 'no-testbench',
       iterations: 0,
+      // Req 12.29: a `setup-failed` sample failed before a candidate existed, so no
+      // Formal_Property was ever submitted and the default `proved` run is not a record this
+      // status can carry.
+      formal: null,
     });
 
     expect(decodeSampleRecord(JSON.parse(encodeSampleRecord(unchecked)))).toEqual(unchecked);
@@ -564,6 +788,8 @@ describe('an older record schema is counted separately from corruption', () => {
               instrumentValidity: 'unchecked',
               instrumentUncheckedReason: reason,
               iterations: 0,
+              // Req 12.29, as in the round-trip test above: no candidate, so no formal run.
+              formal: null,
             }),
           ),
         ),
@@ -710,30 +936,45 @@ describe('unchecked reason round trip - Property 10', () => {
   );
 
   /**
-   * An outcome status paired with the `passed`/`goldenVerdict` shape it actually carries,
-   * so the generated record is never internally contradictory. `instrument-refused` is
+   * An outcome status paired with the `passed`/`goldenVerdict`/`formal` shape it actually
+   * carries, so the generated record is never internally contradictory. `instrument-refused` is
    * included because it is the new terminal outcome an `unchecked` instrument can now be
    * recorded under (task 4.1, task 9.1), and it carries no oracle verdict.
+   *
+   * `formal` joined the pairing for Req 12.29: a `setup-failed` sample is returned straight out
+   * of `VerificationLoop#verify`'s `#setup`, before a candidate or an independent testbench
+   * exists, so no Formal_Property can have been submitted and the run is `null`. The field is
+   * spelled on every member rather than only that one, so a status added here has to answer the
+   * question instead of inheriting the default.
    */
   const outcomeShapeArbitrary: fc.Arbitrary<{
     outcomeStatus: SweepSampleRecord['outcomeStatus'];
     passed: boolean;
     goldenVerdict: SweepSampleRecord['goldenVerdict'];
     iterations: number;
+    formal: SweepSampleRecord['formal'];
   }> = fc.constantFrom(
     {
       outcomeStatus: 'unverified' as const,
       passed: false,
       goldenVerdict: 'failed' as const,
       iterations: 3,
+      formal: formalRun(),
     },
     {
       outcomeStatus: 'instrument-refused' as const,
       passed: false,
       goldenVerdict: 'passed' as const,
       iterations: 0,
+      formal: formalRun(),
     },
-    { outcomeStatus: 'setup-failed' as const, passed: false, goldenVerdict: null, iterations: 0 },
+    {
+      outcomeStatus: 'setup-failed' as const,
+      passed: false,
+      goldenVerdict: null,
+      iterations: 0,
+      formal: null,
+    },
   );
 
   /** An arbitrary, internally-consistent unchecked record: any reason, any carrying outcome. */
@@ -817,6 +1058,406 @@ describe('the resume / skip decision', () => {
   it('keys a sample on all three coordinates', () => {
     expect(sampleKey('arm', 'problem', 3)).not.toBe(sampleKey('arm', 'problem', 4));
     expect(sampleKey('arm', 'problem', 3)).not.toBe(sampleKey('other', 'problem', 3));
+  });
+});
+
+describe('the formal fields a v13 record carries', () => {
+  it('round-trips all FOUR Property_Set admission outcomes as DISTINCT values', () => {
+    // Req 10.8, and the whole reason this field is not a boolean. Four facts: the gate
+    // admitted the set, the gate ran with NOTHING to hold it to, the gate refused it, and no
+    // gate ran at all. Collapsing `'no-gate-set'` onto `'admitted'` records a vacuous pass as
+    // a demonstrated one; onto `'refused'` records a refusal that never happened; onto `null`
+    // conflates "no gate ran" with "unknown".
+    const decoded = PROPERTY_SET_ADMISSION_OUTCOMES.map(
+      (outcome) => roundTrip(record({ propertySetAdmitted: outcome }))?.propertySetAdmitted,
+    );
+
+    expect(decoded).toEqual([...PROPERTY_SET_ADMISSION_OUTCOMES]);
+    // The structural half: four inputs produce four distinct outputs, so no pair collapsed.
+    expect(new Set(decoded).size).toBe(PROPERTY_SET_ADMISSION_OUTCOMES.length);
+  });
+
+  it('refuses a record with no admission outcome rather than reading it as admitted', () => {
+    // Non-nullable, matching `instrumentValidity`: `'not-gated'` already states the fact an
+    // absent field would have to carry, and an absent field reads as gated-and-passed.
+    expect(decodeSampleRecord(recordWithout('propertySetAdmitted'))).toBeNull();
+    expect(decodeSampleRecord({ ...record(), propertySetAdmitted: 'yes' })).toBeNull();
+  });
+
+  it('round-trips the formal mutant counts, EXCLUDED count included', () => {
+    // Req 9.4, 9.6, 9.9: the count that previously had no data path at all. A mutant Yosys
+    // would not read is neither killed nor survived, so it sits OUTSIDE the denominator and
+    // must still be reported - which is only possible if the record carries it.
+    const counts = {
+      totalCount: 7,
+      denominator: 5,
+      killedCount: 4,
+      survivedCount: 1,
+      couldNotVerifyCount: 2,
+    };
+
+    const decoded = roundTrip(record({ formalMutationCounts: counts }))?.formalMutationCounts;
+
+    expect(decoded).toEqual(counts);
+    // The denominator is the FORMAL gate's own and is NOT the negative control's valid count
+    // over the same mutants (Req 9.6), so it survives independently of `totalCount`.
+    expect(decoded?.denominator).toBe(5);
+  });
+
+  it('keeps "no gate ran" DISTINCT from a gate that calibrated nothing', () => {
+    // `null` reads as NOT MEASURED, which is what every record carries until a production
+    // `PropertySetGate` is wired. An all-zero tally is a gate that RAN over an empty
+    // population, and reading either one as the other would print a kill rate of a gate that
+    // never ran, or hide one that ran and scored nothing.
+    const notMeasured = roundTrip(record({ formalMutationCounts: null }));
+    const ranEmpty = roundTrip(
+      record({
+        formalMutationCounts: {
+          totalCount: 0,
+          denominator: 0,
+          killedCount: 0,
+          survivedCount: 0,
+          couldNotVerifyCount: 0,
+        },
+      }),
+    );
+
+    expect(notMeasured?.formalMutationCounts).toBeNull();
+    expect(ranEmpty?.formalMutationCounts).not.toBeNull();
+    expect(ranEmpty?.formalMutationCounts?.totalCount).toBe(0);
+  });
+
+  it('refuses a record whose counts are absent, partial, or do not partition', () => {
+    // Req 12.34: the key is REQUIRED PRESENT, with an explicit `null` where no gate ran, so
+    // DELETING it from a line cannot assert "no gate ran" - a fact nobody measured.
+    expect(decodeSampleRecord(recordWithout('formalMutationCounts'))).toBeNull();
+    // Partial is refused whole, like `decodeMutationCounts`: an excluded count beside a
+    // defaulted denominator is a rate that is not a fraction of anything real.
+    expect(decodeSampleRecord({ ...record(), formalMutationCounts: { totalCount: 3 } })).toBeNull();
+    // And the partition the type documents: 3 !== 1 + 1 + 0, so this block never came from
+    // `formalMutationCounts`.
+    expect(
+      decodeSampleRecord({
+        ...record(),
+        formalMutationCounts: {
+          totalCount: 3,
+          denominator: 2,
+          killedCount: 1,
+          survivedCount: 1,
+          couldNotVerifyCount: 0,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it('keeps a Reset_Contract of null DISTINCT from one that ran and refused', () => {
+    // Req 12.21, and the second conflation this record exists to prevent. `null` means no
+    // contract was derived at all - the pre-pass did not run, or its report could not be read.
+    // `{ derived: false }` means the pre-pass RAN and positively refused, which is a recorded
+    // outcome (Req 14.20). The assertion-gate emission is a FUNCTION of this value, so a
+    // record that read either one as the other could not explain its own gate.
+    const neverRead = roundTrip(record({ formalResetContract: null }));
+    const refused = roundTrip(record({ formalResetContract: { derived: false } }));
+
+    expect(neverRead?.formalResetContract).toBeNull();
+    expect(refused?.formalResetContract).toEqual({ derived: false });
+    expect(refused?.formalResetContract).not.toBeNull();
+  });
+
+  it('round-trips a derived Reset_Contract with all four of its facts', () => {
+    const derived = record({
+      formalResetContract: {
+        derived: true,
+        resetName: 'rst',
+        resetActiveLow: false,
+        resetKind: 'sync',
+        initialStateFree: true,
+      },
+      // The one combination `emitsAssertionGate` emits the `if (!$initstate)` gate for: a
+      // SYNCHRONOUS reset over a FREE initial state.
+      formalAssertionGateEmitted: true,
+    });
+
+    expect(roundTrip(derived)).toEqual(derived);
+  });
+
+  it('refuses a derived Reset_Contract missing a fact, rather than reading it as refused', () => {
+    // Degrading to `{ derived: false }` would record a refusal the pre-pass never made.
+    const halfDerived = {
+      ...record(),
+      formalResetContract: { derived: true, resetName: 'rst', resetActiveLow: true },
+    };
+
+    expect(decodeSampleRecord(halfDerived)).toBeNull();
+  });
+
+  it('round-trips every Formal_Verdict and refuses a value outside the vocabulary', () => {
+    // Req 12.12. A non-member is a MALFORMED record, not a null verdict: `null` asserts that
+    // no property was submitted, which is a claim nobody measured.
+    for (const verdict of FORMAL_VERDICTS) {
+      const cause = verdict === 'could-not-verify' ? 'proof-timeout' : null;
+      expect(roundTrip(record({ formal: formalRun({ verdict, cause }) }))?.formal?.verdict).toBe(
+        verdict,
+      );
+    }
+
+    expect(
+      decodeSampleRecord({ ...record(), formal: { ...formalRun(), verdict: 'passed' } }),
+    ).toBeNull();
+  });
+
+  it('holds the Could_Not_Verify_Cause to the verdict it belongs to', () => {
+    // Req 1.5: a `could-not-verify` verdict carries exactly one cause, and the other two
+    // verdicts have none to carry. A record claiming both is as untrustworthy as one missing
+    // the cause it needs, so both are refused rather than one being quietly defaulted.
+    const cnv = formalRun({ verdict: 'could-not-verify', cause: 'proof-timeout' });
+
+    expect(roundTrip(record({ formal: cnv }))?.formal?.cause).toBe('proof-timeout');
+    // Declined-but-unnamed: a `could-not-verify` with no cause to read.
+    expect(decodeSampleRecord({ ...record(), formal: { ...cnv, cause: null } })).toBeNull();
+    // Accepted-but-named: a `proved` verdict carrying a cause it cannot have.
+    expect(
+      decodeSampleRecord({ ...record(), formal: { ...formalRun(), cause: 'proof-timeout' } }),
+    ).toBeNull();
+    // And a cause outside the vocabulary is malformed, never defaulted (Req 12.12).
+    expect(decodeSampleRecord({ ...record(), formal: { ...cnv, cause: 'slow' } })).toBeNull();
+  });
+
+  it('round-trips the five Proof_Conditions, the depth, and the elapsed time', () => {
+    const measured = record({
+      formal: formalRun({
+        verdict: 'could-not-verify',
+        cause: 'antecedent-unreached',
+        conditions: {
+          assertionCount: 3,
+          presat: 'satisfiable',
+          cover: { reached: false },
+          base: 'not-run',
+          induction: 'not-run',
+        },
+        depth: 64,
+        elapsedMs: 65_600,
+      }),
+    });
+
+    expect(roundTrip(measured)).toEqual(measured);
+  });
+
+  it('refuses a formal block whose conditions are only partly readable', () => {
+    // Four conditions beside a defaulted fifth is a record claiming a condition was measured
+    // when it was not, and `admitProved` weighs all five.
+    const partial = {
+      ...record(),
+      formal: {
+        ...formalRun(),
+        conditions: { assertionCount: 1, presat: 'satisfiable', base: 'passed' },
+      },
+    };
+
+    expect(decodeSampleRecord(partial)).toBeNull();
+  });
+
+  it('keeps all three Cover_Check readings distinct through the round trip', () => {
+    // A reached cover carries the STEP it was reached at; `reached: false` is a cover that ran
+    // and was not reached; `'not-applicable'` is the unclocked case where none ran at all.
+    const covers: readonly CoverCondition[] = [
+      { reached: true, step: 13 },
+      { reached: false },
+      { reached: 'not-applicable' },
+    ];
+
+    const decoded = covers.map(
+      (cover) =>
+        roundTrip(record({ formal: formalRun({ conditions: { ...PROVED_CONDITIONS, cover } }) }))
+          ?.formal?.conditions.cover,
+    );
+
+    expect(decoded).toEqual(covers);
+  });
+
+  it('records no formal run as null, and a fallback reason BESIDE it', () => {
+    // The oracle port threw: nothing was submitted, yet the sample DID take the
+    // Simulation_Fallback. `formalFallbackReason` is flat for exactly this case - nesting it
+    // would delete the fallback from the samples whose fallback is least expected (Req 7.9).
+    // The route is `'cause'` beside it, because Req 7.19 makes the reason and the route an IFF
+    // and Req 12.31 refuses a record that breaks it: a reason IS the statement that a
+    // Could_Not_Verify_Cause drove the fall back, so the route cannot read `'not-applicable'`.
+    const portFailed = record({
+      formal: null,
+      formalFallbackReason: 'toolchain-unavailable',
+      formalFallbackRoute: 'cause',
+    });
+
+    expect(roundTrip(portFailed)).toEqual(portFailed);
+  });
+
+  it('refuses a fallback reason or clock polarity outside its vocabulary', () => {
+    // Req 12.12 for the cause vocabulary, and task 12.6's rule for the polarity: malformed
+    // rather than defaulted. `null` is a claim here - "this sample did not fall back", "the
+    // pre-pass was never reached" - so reading a non-member as `null` asserts both falsely.
+    expect(decodeSampleRecord({ ...record(), formalFallbackReason: 'gave-up' })).toBeNull();
+    expect(decodeSampleRecord({ ...record(), formalClockPolarity: 'rising' })).toBeNull();
+    // And `'none'` is a real reading, never the same fact as an absent one.
+    expect(roundTrip(record({ formalClockPolarity: 'none' }))?.formalClockPolarity).toBe('none');
+    expect(roundTrip(record({ formalClockPolarity: null }))?.formalClockPolarity).toBeNull();
+  });
+
+  it('rolls a sample up so a refutation beats a could-not-verify beats a proof', () => {
+    // Req 7.17, fail-closed: a REFUTATION IS THE FINDING. Falling back instead would let a
+    // passing Simulation_Fallback carry `Verified` on a design a formal counterexample
+    // refuted, which is the severity-1 direction this spec exists to close.
+    const proved = propertyResult('proved');
+    const couldNotVerify = propertyResult('could-not-verify');
+    const refuted = propertyResult('refuted');
+
+    expect(recordedFormalRun(provenance([proved, couldNotVerify, refuted]))?.verdict).toBe(
+      'refuted',
+    );
+    expect(recordedFormalRun(provenance([refuted, proved]))?.verdict).toBe('refuted');
+    expect(recordedFormalRun(provenance([proved, couldNotVerify]))?.verdict).toBe(
+      'could-not-verify',
+    );
+    expect(recordedFormalRun(provenance([proved, proved]))?.verdict).toBe('proved');
+    // No property submitted is no record, rather than a verdict nobody reached.
+    expect(recordedFormalRun(provenance([]))).toBeNull();
+  });
+
+  it('reads the depth and the cause off the SAME deciding result', () => {
+    // A depth from one property beside a cause from another describes a run that never
+    // happened, so every field of the block comes from the one result that decided the sample.
+    const rolled = recordedFormalRun(
+      provenance([
+        propertyResult('proved', { depth: 20, elapsedMs: 1 }),
+        propertyResult('could-not-verify', { depth: 70, elapsedMs: 150_000 }),
+      ]),
+    );
+
+    expect(rolled?.verdict).toBe('could-not-verify');
+    expect(rolled?.depth).toBe(70);
+    expect(rolled?.elapsedMs).toBe(150_000);
+  });
+});
+
+describe('the cross-field rules a v13 record is held to', () => {
+  // Each rule here makes unreadable only a record NO WRITER OF THIS SCHEMA CAN PRODUCE. The
+  // no-cost direction - that every record the writers DO produce still decodes - is quantified
+  // by `app/test/formal-record-round-trip.property.test.ts` and
+  // `app/test/formal-summary-aggregation.property.test.ts`, both of which build their records
+  // through the same pairings the Verification_Loop and the harness build theirs through. These
+  // tests pin the refusal direction, so a rule that silently stopped firing is a failure here
+  // rather than a gate nobody notices is gone. Task 19.6 quantifies each one over classes of
+  // violating value; this block states that each rule exists.
+
+  /**
+   * Every formal key a v13 record defines (Req 12.34).
+   *
+   * `satisfies` over `keyof SweepSampleRecord`, so a renamed field breaks here. Kept beside the
+   * rule rather than shared with Property 29's `FORMAL_FIELDS`, which is the same membership for
+   * a different purpose - stripping the fields a v12 writer never emitted.
+   */
+  const FORMAL_KEYS = [
+    'formal',
+    'formalFallbackReason',
+    'formalFallbackRoute',
+    'formalResetContract',
+    'formalAssertionGateEmitted',
+    'formalClockPolarity',
+    'propertySetAdmitted',
+    'propertySetSurvivorCount',
+    'formalMutationCounts',
+  ] satisfies readonly (keyof SweepSampleRecord)[];
+
+  it('refuses a record missing ANY formal key, so a deleted key cannot assert a fact', () => {
+    // Req 12.34. Four of these keys read an ABSENT value as a meaningful `null` on their own -
+    // `formal` as "no Formal_Property was submitted", `formalResetContract` as "the pre-pass was
+    // never reached" - and each of those is a FACT about what was measured. So an explicit
+    // `null` has to be the only spelling of a formal fact that does not apply, and a
+    // hand-editor deleting the key has to lose the record rather than gain a claim.
+    for (const key of FORMAL_KEYS) {
+      expect(decodeSampleRecord(recordWithout(key))).toBeNull();
+    }
+  });
+
+  it('refuses a setup-failed record carrying a formal run', () => {
+    // Req 12.29. A `setup-failed` outcome is returned straight out of `VerificationLoop#verify`'s
+    // `#setup`, before a candidate or an independent testbench exists, so no Formal_Property can
+    // have been submitted. Reading one would credit a Formal_Verdict to a sample whose candidate
+    // was never generated.
+    expect(
+      decodeSampleRecord({ ...record({ outcomeStatus: 'setup-failed' }), formal: formalRun() }),
+    ).toBeNull();
+    // The same status WITHOUT a run is the producible record, and it still decodes.
+    expect(roundTrip(record({ outcomeStatus: 'setup-failed', formal: null }))).not.toBeNull();
+  });
+
+  it('refuses both halves of the Fallback_Reason / Fallback_Route iff', () => {
+    // Req 12.31, 7.19. `formalProvenanceOf` makes the iff true by construction off a
+    // discriminated `TakenRoute`, so neither half is producible: a reason under another route
+    // names a cause for a fall back no cause drove, and the `cause` route with no reason claims
+    // a cause decided the sample while refusing to say which. Req 7.22's per-route counts read
+    // the route and its per-cause counts read the reason, so a record breaking the iff would be
+    // counted under a route and a cause describing two different samples.
+    for (const route of FALLBACK_ROUTES.filter((member) => member !== 'cause')) {
+      expect(
+        decodeSampleRecord({
+          ...record(),
+          formalFallbackReason: 'toolchain-unavailable',
+          formalFallbackRoute: route,
+        }),
+      ).toBeNull();
+    }
+    expect(
+      decodeSampleRecord({
+        ...record(),
+        formalFallbackReason: null,
+        formalFallbackRoute: 'cause',
+      }),
+    ).toBeNull();
+  });
+
+  it('refuses a surviving mutant counted beside anything but a refusal', () => {
+    // Req 12.32, 10.8. An ADMITTED set refuted every mutant in a non-empty gate set, and
+    // `'no-gate-set'` and `'not-gated'` had no gate set for a mutant to survive, so a count
+    // under any of the three reports a demonstrated weakness in a Property_Set nothing refused.
+    for (const outcome of PROPERTY_SET_ADMISSION_OUTCOMES.filter(
+      (member) => member !== 'refused',
+    )) {
+      expect(
+        decodeSampleRecord({
+          ...record(),
+          propertySetAdmitted: outcome,
+          propertySetAuthoredUpFront: false,
+          propertySetSurvivorCount: 1,
+        }),
+      ).toBeNull();
+    }
+    // A refusal names at least one survivor, which is the producible pairing.
+    expect(
+      roundTrip(record({ propertySetAdmitted: 'refused', propertySetSurvivorCount: 1 })),
+    ).not.toBeNull();
+  });
+
+  it('refuses counts whose killed and survived do not sum to the denominator', () => {
+    // Req 12.33. `formalMutationCounts` admits a mutant to the denominator on exactly the
+    // condition `formalMutantIsScorable` names, and the only unscorable calibration is the one
+    // `couldNotVerifyCount` tallies - so the denominator IS the sum of the two scored counts
+    // rather than a free number beside them. A larger one understates `formalKillRateOf`'s
+    // quotient over mutants nobody scored; a smaller one overstates it. Both read as measured.
+    for (const denominator of [4, 6]) {
+      expect(
+        decodeSampleRecord({
+          ...record(),
+          formalMutationCounts: {
+            // The partition still holds, so this is refused by the DENOMINATOR rule alone.
+            totalCount: 7,
+            denominator,
+            killedCount: 4,
+            survivedCount: 1,
+            couldNotVerifyCount: 2,
+          },
+        }),
+      ).toBeNull();
+    }
   });
 });
 
@@ -924,5 +1565,450 @@ describe('a stale record is refused, never repaired - Property 14', () => {
       ),
       { numRuns: 200 },
     );
+  });
+});
+
+// formal-property-oracle task 12.8, Property 29: A record from an older schema is refused.
+//
+// WHAT IS CLAIMED, OVER WHAT
+//   For any results file holding at least one record written under a schema version below the
+//   current one - whatever else it holds and in any order: current records of this experiment,
+//   records of another experiment, corrupt lines, a FUTURE version, and blank lines - the whole
+//   file is refused by the one rule the current version already applies to its predecessor
+//   (Req 12.10). `parseResultsLog` counts every older line as stale rather than corrupt,
+//   `summarizeRecords` aggregates nothing, scoped to the experiment or not, and `renderSummary`
+//   prints the refusal and the advice text and no arm at all (Req 12.13).
+//
+// WHAT IT ADDS TO WHAT IS ALREADY PINNED
+//   Task 12.3 pinned one previous-version line, alone and beside one current record, and
+//   instrument-precheck-and-attribution's Property 14 above pins older lines placed FIRST beside
+//   current records only, each in the CURRENT shape stamped with an older number. This property
+//   adds the shape a v12 writer really emitted, with none of the seven formal fields; older lines
+//   anywhere in the file; corrupt, future-version, blank, and other-experiment lines beside them;
+//   both summary scopes; and the rendered refusal. The two shapes matter apart: a decoder that
+//   admitted version 12 would still drop the formal-less line as unreadable, and only the
+//   current-shaped one would expose it.
+//
+// THE CLOSED PART IS EXHAUSTED
+//   Every older version, 1 to 12, in both shapes, is refused beside a current record on every run,
+//   as a fact rather than a draw. The property samples the files around an older line.
+//
+// FALSIFIED, out of tree, with no shared file edited
+//   This block was run unedited with `./results-log.js` and `./summary.js` redirected to scratch
+//   copies. The unmutated copies passed, and each of 7 one-line mutants failed: only the previous
+//   version read as stale, a future version read as stale, a stale line required to carry the
+//   formal fields, the decoder admitting the previous version, the refusal kept to a file of
+//   nothing but stale lines, the refusal kept to a summary scoped to an experiment, and the
+//   refusal printed without its advice. The future-version and scoped-only mutants fail the
+//   property alone, because the exhaustive case holds neither a future line nor a null scope.
+//
+// RUN COUNT: see `PROPERTY_29_NUM_RUNS`.
+//
+// **Validates: Requirements 12.10**
+
+// **Feature: formal-property-oracle, Property 29: A record from an older schema is refused**
+const PROPERTY_29 = 'formal-property-oracle, Property 29: A record from an older schema is refused';
+
+/**
+ * Sized to the rarest required row. Measured over 20,000 draws of `olderFileArbitrary` at seeds 1
+ * and 42, the share of files holding each row was: every non-blank line older 19.7% / 19.2%, the
+ * older line not first 46.9% / 47.3%, each other kind of line beside it 50.5% to 51.4%, several
+ * older lines 51.4% / 51.6%, and each older shape 65.6% to 65.9%. So the rarest is missed in 200
+ * runs with probability about 0.808^200 ~ 3e-19. Each row is asserted as `> 0`, so the arithmetic
+ * is `(1 - p)^n`.
+ */
+const PROPERTY_29_NUM_RUNS = 200;
+
+/** The version the current one replaced: the case Req 12.10 names. */
+const PREVIOUS_SCHEMA_VERSION = RESULTS_SCHEMA_VERSION - 1;
+
+/** The experiment the default record belongs to, and another one beside it. */
+const THIS_EXPERIMENT = 'abc123';
+const OTHER_EXPERIMENT = 'another-experiment';
+
+/** The fields the v12 -> v13 bump added. A v12 writer emitted none of them. */
+const FORMAL_FIELDS: ReadonlySet<string> = new Set([
+  'formal',
+  'formalFallbackReason',
+  'formalFallbackRoute',
+  'formalResetContract',
+  'formalAssertionGateEmitted',
+  'formalClockPolarity',
+  'propertySetAdmitted',
+  'propertySetSurvivorCount',
+  'formalMutationCounts',
+] satisfies readonly (keyof SweepSampleRecord)[]);
+
+/** How an older line is shaped: as a v12 writer emitted it, or the current shape stamped older. */
+const OLDER_SHAPES = ['without-formal-fields', 'current-fields'] as const;
+type OlderShape = (typeof OLDER_SHAPES)[number];
+
+/** What one line of a generated file is, so the property can tally what it generated. */
+type FileLineKind = 'older' | 'current' | 'other-experiment' | 'corrupt' | 'blank';
+
+interface FileLine {
+  readonly kind: FileLineKind;
+  /** The older line's shape; `null` on every other kind. */
+  readonly olderShape: OlderShape | null;
+  readonly text: string;
+}
+
+/**
+ * Lines that are corruption, not history: a TRUNCATED v12 line, which never parsed, plain text,
+ * and a garbage version. None may trigger the refusal, and none may stop it.
+ *
+ * A FUTURE version is deliberately NOT here. It used to be, on the reading that nothing writes
+ * one; Req 12.28 reversed that - a well-formed record at a higher version is what a NEWER BUILD
+ * writes - so it now refuses the file by the same rule an older one does, and listing it as a
+ * line that may not trigger the refusal would assert the opposite. The claim quantified here
+ * stays Req 12.10's, over an OLDER record; extending this property over the future-version case
+ * is task 19.6's, and `results-log.test.ts`'s own future-version test above pins it meanwhile.
+ */
+const CORRUPT_LINES: readonly string[] = [
+  `{"schemaVersion":${PREVIOUS_SCHEMA_VERSION},"configHash":"abc`,
+  'not json at all',
+  JSON.stringify({ ...record(), schemaVersion: 'twelve' }),
+];
+
+/** One record written under `version`, in `shape`, as the JSONL line a results file holds. */
+function olderLine(version: number, shape: OlderShape, configHash: string): FileLine {
+  const stamped = { ...record({ configHash }), schemaVersion: version };
+  const fields =
+    shape === 'current-fields'
+      ? stamped
+      : Object.fromEntries(Object.entries(stamped).filter(([field]) => !FORMAL_FIELDS.has(field)));
+  return { kind: 'older', olderShape: shape, text: JSON.stringify(fields) };
+}
+
+/** A line that is not older, so it only ever sits beside the older line. */
+function plainLine(kind: Exclude<FileLineKind, 'older'>, text: string): FileLine {
+  return { kind, olderShape: null, text };
+}
+
+const olderLineArbitrary: fc.Arbitrary<FileLine> = fc
+  .tuple(
+    fc.integer({ min: 1, max: PREVIOUS_SCHEMA_VERSION }),
+    fc.constantFrom(...OLDER_SHAPES),
+    fc.constantFrom(THIS_EXPERIMENT, OTHER_EXPERIMENT),
+  )
+  .map(([version, shape, configHash]) => olderLine(version, shape, configHash));
+
+/** Any line a results file can hold, older ones included, so a file may hold several. */
+const fileLineArbitrary: fc.Arbitrary<FileLine> = fc.oneof(
+  olderLineArbitrary,
+  fc
+    .nat({ max: 1_000 })
+    .map((sampleIndex) => plainLine('current', encodeSampleRecord(record({ sampleIndex })))),
+  fc
+    .nat({ max: 1_000 })
+    .map((sampleIndex) =>
+      plainLine(
+        'other-experiment',
+        encodeSampleRecord(record({ configHash: OTHER_EXPERIMENT, sampleIndex })),
+      ),
+    ),
+  fc.constantFrom(...CORRUPT_LINES).map((text) => plainLine('corrupt', text)),
+  fc.constantFrom('', '   ').map((text) => plainLine('blank', text)),
+);
+
+/** A file holding at least one older line, at any position among up to eight other lines. */
+const olderFileArbitrary: fc.Arbitrary<readonly FileLine[]> = fc
+  .tuple(fc.array(fileLineArbitrary, { maxLength: 8 }), olderLineArbitrary, fc.nat())
+  .map(([others, older, at]) => {
+    const position = at % (others.length + 1);
+    return [...others.slice(0, position), older, ...others.slice(position)];
+  });
+
+/** The whole file is refused: nothing aggregated, and the refusal rendered with its advice. */
+function assertFileRefused(lines: readonly FileLine[], configHash: string | null): void {
+  const olderCount = lines.filter((line) => line.kind === 'older').length;
+  const parsed = parseResultsLog(lines.map((line) => line.text).join('\n'));
+  const summary = summarizeRecords(parsed.records, [1], configHash, parsed);
+  const rendered = renderSummary(summary);
+  // Every older line is history rather than corruption, whatever its shape.
+  expect(parsed.staleSchemaLines).toBe(olderCount);
+  expect(summary.refusedStaleSchema).toBe(true);
+  expect(summary.arms).toEqual([]);
+  expect(summary.totalSamples).toBe(0);
+  expect(summary.deferredSamples).toBe(0);
+  // The refusal and its advice, and nothing a reader could take for a number.
+  expect(rendered.slice(1)).toEqual([
+    `REFUSED: ${olderCount} results line(s) use an older record schema`,
+    ...STALE_SCHEMA_ADVICE.map((line) => `  ${line}`),
+  ]);
+  expect(rendered.join(' ')).toContain('FORMAL VERDICT');
+  expect(rendered.join(' ')).toContain('FRESH outputDir');
+}
+
+/** What the run drew, so each part of the claim is shown to have met the file it is about. */
+interface DrawnFiles {
+  runs: number;
+  readonly besideKinds: Map<FileLineKind, number>;
+  readonly shapes: Map<OlderShape, number>;
+  readonly scopes: Map<string | null, number>;
+  olderNotFirst: number;
+  severalOlder: number;
+  onlyOlder: number;
+}
+
+function noFilesDrawn(): DrawnFiles {
+  return {
+    runs: 0,
+    besideKinds: new Map(),
+    shapes: new Map(),
+    scopes: new Map(),
+    olderNotFirst: 0,
+    severalOlder: 0,
+    onlyOlder: 0,
+  };
+}
+
+/** Bump a counter keyed by a closed member. */
+function bump<Key>(counts: Map<Key, number>, key: Key): void {
+  counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+/** Record one file's shape. A NON-VACUITY COUNTER, never part of an expectation. */
+function recordFile(
+  drawn: DrawnFiles,
+  lines: readonly FileLine[],
+  configHash: string | null,
+): void {
+  const nonBlank = lines.filter((line) => line.kind !== 'blank');
+  drawn.runs += 1;
+  bump(drawn.scopes, configHash);
+  for (const kind of new Set(lines.map((line) => line.kind))) {
+    if (kind !== 'older') {
+      bump(drawn.besideKinds, kind);
+    }
+  }
+  for (const shape of new Set(lines.flatMap((line) => line.olderShape ?? []))) {
+    bump(drawn.shapes, shape);
+  }
+  drawn.olderNotFirst += nonBlank[0]?.kind === 'older' ? 0 : 1;
+  drawn.severalOlder += nonBlank.filter((line) => line.kind === 'older').length > 1 ? 1 : 0;
+  drawn.onlyOlder += nonBlank.every((line) => line.kind === 'older') ? 1 : 0;
+}
+
+describe(PROPERTY_29, () => {
+  it('refuses every older version in both shapes, placed after a current record', () => {
+    const current = plainLine('current', encodeSampleRecord(record()));
+    for (let version = 1; version <= PREVIOUS_SCHEMA_VERSION; version += 1) {
+      for (const shape of OLDER_SHAPES) {
+        assertFileRefused([current, olderLine(version, shape, THIS_EXPERIMENT)], THIS_EXPERIMENT);
+      }
+    }
+  });
+
+  it('refuses the whole file, whatever else it holds and wherever the older line sits', () => {
+    const drawn = noFilesDrawn();
+    fc.assert(
+      fc.property(
+        olderFileArbitrary,
+        fc.constantFrom<string | null>(THIS_EXPERIMENT, null),
+        (lines, configHash) => {
+          recordFile(drawn, lines, configHash);
+          assertFileRefused(lines, configHash);
+        },
+      ),
+      { numRuns: PROPERTY_29_NUM_RUNS },
+    );
+    expect(drawn.runs).toBe(PROPERTY_29_NUM_RUNS);
+    // Mixed files: every other kind of line sat beside an older one somewhere in the run.
+    expect([...drawn.besideKinds.keys()].sort()).toEqual([
+      'blank',
+      'corrupt',
+      'current',
+      'other-experiment',
+    ]);
+    expect([...drawn.shapes.keys()].sort()).toEqual([...OLDER_SHAPES].sort());
+    expect([...drawn.scopes.keys()]).toHaveLength(2);
+    expect(drawn.olderNotFirst).toBeGreaterThan(0);
+    expect(drawn.severalOlder).toBeGreaterThan(0);
+    // The plainest file of all: nothing but older records.
+    expect(drawn.onlyOlder).toBeGreaterThan(0);
+  });
+});
+
+describe('propertySetAuthoredUpFront is required present (Req 6.9)', () => {
+  it('decodes a version-14 record that carries the field', () => {
+    const gated = roundTrip(record({ propertySetAuthoredUpFront: true }));
+    const ungated = roundTrip(record({ propertySetAuthoredUpFront: false }));
+
+    expect(gated?.propertySetAuthoredUpFront).toBe(true);
+    // `false` decodes as `false` rather than being read as absent.
+    expect(ungated?.propertySetAuthoredUpFront).toBe(false);
+  });
+
+  it('refuses the same record with the key DELETED, rather than reading it as false', () => {
+    // The distinction this field exists for: a gate that found no reference design, or that
+    // threw, records `not-gated` AFTER the set was authored and charged. So an absent key read
+    // as `false` would assert this sample paid for no authoring, which is a fact nobody
+    // measured, and the two samples have different `costCents`.
+    expect(decodeSampleRecord(recordWithout('propertySetAuthoredUpFront'))).toBeNull();
+  });
+});
+
+describe('Property 13: record round trip at schema 16', () => {
+  // Feature: testbench-in-order-scoreboard, Property 13: Record round trip at schema 15.
+  // Validates: Requirements 1.8, 7.4.
+  //
+  // Feature: testbench-spec-grounding, Property 17: Record round trip at schema 16.
+  // Validates: Requirements 5.11, 7.10, 9.5, 9.10. The three v16 fields ride the same
+  // property, because "it decodes to an equal record" is the same statement over more fields.
+
+  /** The four Positive_Control booleans, or no run at all. */
+  const positiveControlRun = fc.oneof(
+    fc.constant(null),
+    fc.record({
+      passed: fc.boolean(),
+      watchdogStopped: fc.boolean(),
+      waveformMissing: fc.boolean(),
+      knownAnswerOnlyFailure: fc.boolean(),
+    }),
+  );
+
+  /** Any real (arm, approach, group, versions); only Treatment routes the scoreboard. */
+  const strategyFields = fc
+    .record({
+      strategyArm: fc.constantFrom(...STRATEGY_ARMS),
+      checkingApproach: fc.constantFrom(...CHECKING_APPROACHES),
+      designGroup: fc.constantFrom(...DESIGN_GROUPS),
+      testbenchPromptVersion: fc.integer({ min: 1, max: 1_000 }),
+      simulationHarnessVersion: fc.integer({ min: 1, max: 1_000 }),
+      testbenchParseRefusal: fc.oneof(
+        fc.constant(null),
+        fc.constantFrom(...TESTBENCH_PARSE_REFUSALS),
+      ),
+      positiveControlRun,
+    })
+    .filter(
+      (f) => !(f.checkingApproach === 'in-order-scoreboard' && f.strategyArm !== 'treatment'),
+    );
+
+  const decodeLine = (line: string): SweepSampleRecord | null =>
+    decodeSampleRecord(JSON.parse(line) as unknown);
+
+  it('decodes its own encoding to an equal record', () => {
+    fc.assert(
+      fc.property(strategyFields, (fields) => {
+        const written = record(fields);
+        expect(decodeLine(encodeSampleRecord(written))).toEqual(written);
+      }),
+    );
+  });
+
+  it('refuses an unknown vocabulary value, a non-positive version, or an impossible pair', () => {
+    const bad = fc.oneof(
+      fc.record({
+        strategyArm: fc.string().filter((v) => !(STRATEGY_ARMS as readonly string[]).includes(v)),
+      }),
+      fc.record({
+        checkingApproach: fc
+          .string()
+          .filter((v) => !(CHECKING_APPROACHES as readonly string[]).includes(v)),
+      }),
+      fc.record({
+        designGroup: fc.string().filter((v) => !(DESIGN_GROUPS as readonly string[]).includes(v)),
+      }),
+      fc.record({ testbenchPromptVersion: fc.integer({ min: -5, max: 0 }) }),
+      fc.record({ simulationHarnessVersion: fc.integer({ min: -5, max: 0 }) }),
+      fc.constant({ strategyArm: 'control', checkingApproach: 'in-order-scoreboard' }),
+      // Req 9.10: `grounded` is refused with the scoreboard exactly as `control` is.
+      fc.constant({ strategyArm: 'grounded', checkingApproach: 'in-order-scoreboard' }),
+      // An unknown refusal code must make the record undecodable, never read as "parsed".
+      fc.record({
+        testbenchParseRefusal: fc
+          .string()
+          .filter((v) => !(TESTBENCH_PARSE_REFUSALS as readonly string[]).includes(v)),
+      }),
+      fc.constant({ positiveControlRun: { passed: true } }),
+      fc.constant({ positiveControlRun: { passed: 'yes' } }),
+      fc.record({ schemaVersion: fc.integer({ min: 1, max: RESULTS_SCHEMA_VERSION - 1 }) }),
+    );
+    fc.assert(
+      fc.property(strategyFields, bad, (fields, override) => {
+        const line = JSON.stringify({ ...record(fields), ...override });
+        expect(decodeLine(line)).toBeNull();
+      }),
+    );
+  });
+});
+
+describe('Property 14: resume never counts a mismatched record', () => {
+  // Feature: testbench-in-order-scoreboard, Property 14: Resume never counts a mismatched
+  // record. Validates: Requirements 7.5.
+  //
+  // Feature: testbench-spec-grounding, Property 18: Resume never counts a mismatched record.
+  // Validates: Requirements 9.6. The same property, with `simulationHarnessVersion` in the
+  // running filter: a record made under another harness measured another instrument.
+  const arms = ['arm-control', 'arm-grounded'] as const;
+  const running = {
+    testbenchPromptVersion: 4,
+    simulationHarnessVersion: 2,
+    strategyOf: (armName: string): StrategyArm =>
+      armName === 'arm-grounded' ? 'grounded' : 'control',
+  };
+  it('counts a slot only when hash, arm strategy, and both versions match the run', () => {
+    const slot = fc.record({
+      armName: fc.constantFrom(...arms),
+      configHash: fc.constantFrom('run-hash', 'other-hash'),
+      strategyArm: fc.constantFrom(...STRATEGY_ARMS),
+      testbenchPromptVersion: fc.constantFrom(3, 4),
+      simulationHarnessVersion: fc.constantFrom(1, 2),
+      sampleIndex: fc.nat({ max: 3 }),
+    });
+    fc.assert(
+      fc.property(fc.array(slot, { maxLength: 12 }), (slots) => {
+        const records = slots.map((s) => record({ ...s, checkingApproach: 'cycle-timed' }));
+        const index = CompletedSampleIndex.fromRecords(records, 'run-hash', running);
+        for (const s of slots) {
+          // The oracle: some record for this slot carries every running value.
+          const expected = slots.some(
+            (o) =>
+              o.armName === s.armName &&
+              o.sampleIndex === s.sampleIndex &&
+              o.configHash === 'run-hash' &&
+              o.testbenchPromptVersion === running.testbenchPromptVersion &&
+              o.simulationHarnessVersion === running.simulationHarnessVersion &&
+              o.strategyArm === running.strategyOf(o.armName),
+          );
+          expect(index.isComplete(s.armName, record().problemId, s.sampleIndex)).toBe(expected);
+        }
+      }),
+    );
+  });
+});
+
+describe('valuelessFailureReports at schema 17 (Req 2.8, 5.4)', () => {
+  const decodeLine = (line: string): SweepSampleRecord | null =>
+    decodeSampleRecord(JSON.parse(line) as unknown);
+
+  it.each([2, null])('round-trips a count of %s unchanged', (count) => {
+    const written = record({ valuelessFailureReports: count });
+    expect(decodeLine(encodeSampleRecord(written))).toEqual(written);
+  });
+
+  it.each([-1, 1.5, '2'])(
+    'refuses the record whose count is %j rather than reading it as 0',
+    (bad) => {
+      const line = JSON.stringify({ ...record(), valuelessFailureReports: bad });
+      expect(decodeLine(line)).toBeNull();
+    },
+  );
+
+  it('refuses the record whose count is MISSING, because 0 would claim a measurement', () => {
+    expect(decodeSampleRecord(recordWithout('valuelessFailureReports'))).toBeNull();
+  });
+
+  it('refuses a v16 file wholesale, with the advice naming the missing detector', () => {
+    const v16 = JSON.stringify({ ...record(), schemaVersion: 16 });
+    const parsed = parseResultsLog(v16);
+    expect(parsed.staleSchemaLines).toBe(1);
+    expect(parsed.malformedLines).toBe(0);
+    expect(parsed.records).toEqual([]);
+    const advice = STALE_SCHEMA_ADVICE.join(' ');
+    expect(advice).toContain('ten independent reasons');
+    expect(advice).toContain('the detector did not exist when it was');
   });
 });

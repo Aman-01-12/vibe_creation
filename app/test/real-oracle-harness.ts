@@ -37,16 +37,20 @@
 //   `describe.skipIf(!PROBE.available)` and surface `PROBE.reason` on skip.
 
 import { spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  BoundedArtifactRetention,
   IcarusSimulatorAdapter,
   LocalWorkerRuntime,
   SandboxToolRunner,
   WORKER_SOURCE_ROOT,
   YosysNetlistSvgAdapter,
+  YosysSmtBmcFormalOracle,
+  type FormalResourceCaps,
 } from '@app/tools';
+import { probeFormalToolchainAvailability } from '@app/eval';
 
 // -- Locations --------------------------------------------------------------
 
@@ -54,12 +58,21 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
+ * The repository root, resolved from this module's own location in either layout.
+ *
+ * Authored at `app/test/` and compiled to `app/test/dist/`, so the distance differs by one
+ * level between the tree vitest loads and the build output a measurement script runs from.
+ */
+const REPOSITORY_ROOT = resolve(HERE, basename(HERE) === 'dist' ? '../../..' : '../..');
+
+/**
  * Python interpreters to try, most-preferred first: the repo venv (per
- * `dev-tooling.md`), then the standard system interpreters. The worker itself
- * uses only the standard library, so any of these can run it given `PYTHONPATH`.
+ * `dev-tooling.md`), then the standard system interpreters. Measured on this host: the venv is
+ * the only worker-capable one, because `contract.py` imports `jsonschema` and the system
+ * interpreter has none - so a venv path that misses is a probe reporting a toolchain-less host.
  */
 const PYTHON_CANDIDATES: readonly string[] = [
-  resolve(HERE, '../../.venv/bin/python'),
+  resolve(REPOSITORY_ROOT, '.venv/bin/python'),
   'python3',
   'python',
 ];
@@ -162,11 +175,52 @@ function probeRealSynth(): OracleProbe {
   };
 }
 
+// -- The formal probe: the SHARED composed-invocation check, plus the worker Python ---
+//
+// The composed-invocation check is NOT defined here, and that is deliberate. Whether this
+// host can run a proof cannot be answered by presence alone - `bitwuzla` 0.9.1 is installed
+// and spawnable while `yosys-smtbmc -s bitwuzla` fails on EVERY input, because
+// `smtio.py:229` builds `bitwuzla --smt2 -i` and 0.9.x rejects both flags - and it is the
+// SAME question the Eval_Harness refuses a formal campaign on (Req 11.18). One question with
+// one answer, so `probeFormalToolchainAvailability` in `@app/eval` owns it and this file
+// calls it. Two copies could drift, and then a suite would skip while a campaign ran, or the
+// reverse - and neither divergence is visible from a green suite.
+//
+// What stays HERE is what is genuinely test-side: the worker-interpreter discovery, which
+// encodes developer-environment policy (which repo venv to prefer, per `dev-tooling.md`), and
+// the skip mechanism itself. A present-but-not-invocable toolchain and a missing one are
+// still reported alike, in the same terms, and neither is ever reported as a result.
+
+/**
+ * Probe for the real formal toolchain once at module load: the composed chain, THEN the
+ * worker Python.
+ *
+ * The chain first, because it is the question that distinguishes this probe from the other
+ * two; a missing interpreter is checked second so its reason never masks a broken solver.
+ */
+function probeRealFormal(): OracleProbe {
+  const chain = probeFormalToolchainAvailability();
+  if (!chain.available) {
+    return { available: false, reason: chain.reason, pythonBin: '' };
+  }
+  if (WORKER_PYTHON_BIN === null) {
+    return { available: false, reason: NO_WORKER_PYTHON_REASON, pythonBin: '' };
+  }
+  return {
+    available: true,
+    reason: `${chain.reason}, and tool_runner_worker is importable`,
+    pythonBin: WORKER_PYTHON_BIN,
+  };
+}
+
 /** The single, module-load-time probe consumers gate their real-oracle suites on. */
 export const PROBE: OracleProbe = probeRealOracle();
 
 /** The module-load-time probe consumers gate their real-synth suites on (task 15.8). */
 export const SYNTH_PROBE: OracleProbe = probeRealSynth();
+
+/** The module-load-time probe consumers gate their real-FORMAL suites on (task 6.2). */
+export const FORMAL_PROBE: OracleProbe = probeRealFormal();
 
 /**
  * The worker-capable Python interpreter, or null when none is available.
@@ -206,6 +260,73 @@ export function realSynthAdapter(pythonBin: string): YosysNetlistSvgAdapter {
   const runtime = new LocalWorkerRuntime(pythonBin);
   const runner = new SandboxToolRunner(runtime);
   return new YosysNetlistSvgAdapter(runner);
+}
+
+/**
+ * The four resource caps a real formal run gets. `wallMs` is absent by construction:
+ * the adapter derives it from the remaining Property_Time_Budget on every job.
+ *
+ * Wider than `netlistsvg`'s because bit-blasting is the expensive part of this chain,
+ * and `diskMb` is the widest of the four because every check dumps a VCD trace.
+ */
+export const FORMAL_CAPS: FormalResourceCaps = { cpu: 1, memMb: 1024, procs: 128, diskMb: 256 };
+
+/**
+ * The real Formal_Oracle, together with the store its own artifact refs resolve through.
+ *
+ * BOTH HALVES ARE HANDED BACK BECAUSE A REFUTATION'S EVIDENCE IS A REF AND NOT BYTES.
+ * `PropertyResult`'s `refuted` member carries an `ArtifactBlobRef` - a name, a size, and a
+ * SHA-256 - so a caller that wants to check a counterexample is REAL rather than merely
+ * PRESENT has to resolve that ref, and the only thing that can is the store the runtime
+ * filled. Handing the store back rather than letting the caller build a second one is what
+ * keeps ONE object on both sides of the composition: a ref cannot resolve to different bytes
+ * depending on who asked for them.
+ */
+export interface RealFormalOracle {
+  /** The oracle under test. Decides one Formal_Property per `prove` call. */
+  readonly oracle: YosysSmtBmcFormalOracle;
+  /** The SAME store the oracle reads its reports through. Resolves any ref it handed back. */
+  readonly artifacts: BoundedArtifactRetention;
+  /**
+   * The SAME Tool_Runner the oracle submits every job through.
+   *
+   * Handed back for ONE reason: the Reset_Contract_Prepass derives facts - the reset net, its
+   * polarity, its kind, and the Clock_Contract - that `PropertyResult` does not carry, so a test
+   * asserting the DERIVED polarity has to submit an `assembleFormalPrepassJob` itself and read the
+   * `formalPrepassReport` back. It is the same object rather than a second composition for the
+   * reason `artifacts` is: a ref must not resolve to different bytes depending on who asked.
+   */
+  readonly toolRunner: SandboxToolRunner;
+}
+
+/**
+ * Build the real Formal_Oracle over the local worker runtime (task 6.2).
+ *
+ * THE COMPOSITION ROOT FOR ARTIFACT RETENTION, and the reason it has to exist at all.
+ * `SandboxResult.artifacts` carries refs and no bytes, and the runtime removes the
+ * workspace in a `finally`, so the formal gate - whose whole verdict is a JSON report the
+ * worker wrote into that workspace - could not read its own evidence. The resolution is
+ * one `BoundedArtifactRetention` handed to BOTH sides: the runtime fills it after the
+ * worker finishes and before the workspace goes, and the adapter reads it through the
+ * `FormalArtifactReader` port. One object, so there is no second place where a ref could
+ * resolve to different bytes, and the seam itself is untouched.
+ *
+ * The store's lifetime is the returned pair's: it is created here and referenced only by
+ * the two collaborators plus the caller, so it is collected with them rather than
+ * outliving every caller the way a module-level cache would.
+ *
+ * Callers MUST gate use on `FORMAL_PROBE.available`; when the toolchain is absent or not
+ * invocable `FORMAL_PROBE.pythonBin` is empty and the adapter cannot run.
+ */
+export function realFormalAdapter(pythonBin: string): RealFormalOracle {
+  const retention = new BoundedArtifactRetention();
+  const runtime = new LocalWorkerRuntime(pythonBin, undefined, retention);
+  const toolRunner = new SandboxToolRunner(runtime);
+  return {
+    oracle: new YosysSmtBmcFormalOracle({ toolRunner, artifacts: retention, caps: FORMAL_CAPS }),
+    artifacts: retention,
+    toolRunner,
+  };
 }
 
 // -- Representative real-oracle fixtures -------------------------------------

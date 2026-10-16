@@ -221,6 +221,17 @@ export interface InstrumentControlRequest {
   readonly testbench: string;
   /** The same sandbox caps the loop's own oracle and the golden judge ran under. */
   readonly limits: ResourceLimits;
+  /** The Required_Check names a Watchdog stop fails when the run left them unprinted (C9). */
+  readonly requiredCheckNames: readonly string[];
+}
+
+/** What the Positive_Control simulation itself showed, for the record and the per-cause counts. */
+export interface PositiveControlRunFacts {
+  readonly passed: boolean;
+  readonly watchdogStopped: boolean;
+  readonly waveformMissing: boolean;
+  /** Distinct names with a FAIL; untrusted tool output, used only for membership tests. */
+  readonly failingCheckNames: readonly string[];
 }
 
 /**
@@ -245,6 +256,8 @@ export interface InstrumentControlResult {
    * never has to encode it a second time.
    */
   readonly mutation: MutationProbeReport | null;
+  /** `null` when no Positive_Control simulation ran (refused, absent, or no reference). */
+  readonly positiveRun: PositiveControlRunFacts | null;
 }
 
 /**

@@ -56,6 +56,20 @@ export function providerCredentialRef(provider: ProviderName): string {
 }
 
 /**
+ * The credential a raw source holds, or `null` where it holds none.
+ *
+ * One owner for the rule every manager applies: a non-string or whitespace-only source counts as
+ * unset, rather than resolving to a blank credential that would fail inside a provider call.
+ */
+export function usableCredentialValue(raw: unknown): string | null {
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const value = raw.trim();
+  return value.length === 0 ? null : value;
+}
+
+/**
  * Confine a broad `SecretManagerPort` to a single provider's credential.
  *
  * The returned resolver can resolve ONLY that provider's ref; it never exposes the

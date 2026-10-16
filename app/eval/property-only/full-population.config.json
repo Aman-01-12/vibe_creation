@@ -1,0 +1,55 @@
+{
+  "_README": [
+    "The full-population Property_Only_Mode run of task 11.19, dispatched after explicit founder",
+    "approval. Run:",
+    "  npm run eval:property-only -- --config app/eval/property-only/full-population.config.json",
+    "",
+    "No credential belongs in this file. It is read from the Credential_File alone, with no",
+    "environment fallback, and no config field can hold it.",
+    "",
+    "There is no flag that selects the population. The scope is decided from whether an earlier",
+    "measurement records a Per_Design_Extrapolation, so setting extrapolationFrom below is what",
+    "widens this run from the Cost_Pilot to all 46 scored designs (Req 5.6, 5.15)."
+  ],
+  "runName": "property-only-full-population",
+  "outputDir": ".eval-runs/property-only-full-population",
+  "region": "us-east-1",
+  "authoringModels": ["zai.glm-5", "moonshotai.kimi-k2.5"],
+  "_costPilotDesignIds": [
+    "Unread at this scope: with an extrapolation recorded the plan is the whole scored corpus.",
+    "Carried as the first pilot's own trio so the file names the population the extrapolation",
+    "below was taken over rather than a set this run has no relationship to."
+  ],
+  "costPilotDesignIds": [
+    "rtllm/arithmetic/adder_8bit",
+    "rtllm/control/counter_12",
+    "rtllm/arithmetic/adder_16bit"
+  ],
+  "limits": {
+    "cpu": 1,
+    "memMb": 2048,
+    "procs": 128,
+    "diskMb": 512,
+    "wallMs": 300000
+  },
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+  "_extrapolationFrom": [
+    "The FIRST Cost_Pilot, whose Per_Design_Extrapolation is 1250 tokens and 8227 ms. Only the",
+    "token figure is a stop condition now: since FL-26 option (a) the wall-clock arm is the",
+    "declared shipped-property-time-budget of 150000 ms, so the pilot's elapsed figure is",
+    "provenance and a reported comparison (Req 5.7, 5.22) rather than an arm.",
+    "",
+    "Pilot 1 rather than pilot 2 for two reasons. Its token maximum of 1250 is the larger of the",
+    "two near-identical figures, so the token arm sits at 12500 rather than 12450, and the looser",
+    "of two equivalent arms is the one less likely to stop a legitimate design. And all three of",
+    "its designs authored at least one property, so its maximum is taken over designs that",
+    "exercised the whole authoring path, where pilot 2's set includes multi_booth_8bit, which",
+    "both Authoring_Models expressed nothing for."
+  ],
+  "extrapolationFrom": ".eval-runs/property-only-cost-pilot"
+}
