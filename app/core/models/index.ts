@@ -14,6 +14,8 @@ export * from './enums.js';
 // Domain aggregates and their construction-time invariants.
 export * from './project.js';
 export * from './spec.js';
+export * from './module-interface.js';
+export * from './timing-contract.js';
 export * from './testbench.js';
 export * from './trace.js';
 export * from './verification.js';

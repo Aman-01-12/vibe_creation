@@ -45,6 +45,11 @@ export { InMemorySecretManager, providerCredentialRef, scopeToProvider } from '.
 export type { EnvironmentMap } from './env-secret-manager.js';
 export { BEDROCK_CREDENTIAL_ENV_KEY, EnvSecretManager } from './env-secret-manager.js';
 
+// The Credential_File-backed secret manager: re-read per request, so a refreshed key needs no
+// restart. It reads that file alone, with no environment fallback.
+export type { ReadTextFile, RefreshingSecretManagerDeps } from './refreshing-secret-manager.js';
+export { DEFAULT_CREDENTIAL_FILE, RefreshingSecretManager } from './refreshing-secret-manager.js';
+
 // The routing table, plus the single-provider builder a per-role model bake-off
 // permutes (an eval-side policy builder composes it; see @app/eval).
 export type { RoutingPolicy, SingleProviderRoutingInput } from './routing.js';

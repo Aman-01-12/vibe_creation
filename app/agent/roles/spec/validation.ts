@@ -159,7 +159,14 @@ export function validateInterface(
   if (issues.length > 0) {
     return err(issues);
   }
-  return ok({ moduleName: draft.moduleName, ports, clocking: draft.clocking });
+  // The draft has no Validity_Output concept yet; a later task wires the Spec
+  // role's own proposal through. `null` here changes no behaviour.
+  return ok({
+    moduleName: draft.moduleName,
+    ports,
+    clocking: draft.clocking,
+    validityOutputName: null,
+  });
 }
 
 /** Explain why a criterion is not verifiable by a rigorous method (Req 5.4). */

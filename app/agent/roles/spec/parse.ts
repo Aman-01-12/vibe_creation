@@ -240,6 +240,9 @@ export function parseSpecDraft(outputText: string): Result<SpecDraft, string> {
     goal: goal.value,
     constraints: constraints.value,
     moduleInterface: moduleInterface.value,
+    // No Spec_Agent prompt proposes a Timing_Contract entry yet; a later task
+    // wires that through. Empty here changes no behaviour (task 1.3).
+    timingContractEntries: [],
     acceptanceCriteria: acceptanceCriteria.value,
     architecture: architecture.value,
   });

@@ -29,12 +29,14 @@
 
 import {
   makePort,
+  makeTimingContract,
   newUlid,
   type AcceptanceCriterion,
   type ClockingContract,
   type ModuleInterface,
   type Port,
   type Spec,
+  type TimingContract,
 } from '@app/core';
 import type { SourceFile } from '@app/tools';
 
@@ -393,6 +395,31 @@ export function readOverriddenParameters(
   return names;
 }
 
+/**
+ * Build the Timing_Contract for an imported design.
+ *
+ * ponytail: RTLLM carries no per-port Port_Timing source - `verilog-module.ts`
+ * discards the `reg`/`wire` qualifier while parsing, and inferring from it would
+ * only move the guess rather than remove it. Every output port is placed at
+ * `registered` here, which is wrong on 13 of 31 clocked references (Req 6.2's own
+ * 42% figure). This corpus's `timingContract` is not read by anything yet - only
+ * `golden-judge.ts`'s Icarus run against the untouched RTLLM testbench scores a
+ * design - so the placeholder changes no behaviour today. The upgrade path, per
+ * `clarification-answers.md` Q-07, is the Spec role stating per-port timing at
+ * authoring time; this placeholder must be replaced once a consumer reads it.
+ */
+function buildTimingContract(moduleInterface: ModuleInterface): TimingContract {
+  const entries = moduleInterface.ports
+    .filter((port) => port.direction === 'output')
+    .map((port) => ({ portName: port.name, timing: 'registered' as const }));
+  const built = makeTimingContract(moduleInterface, entries);
+  if (!built.ok) {
+    // Unreachable: `entries` is derived from `moduleInterface`'s own output ports.
+    throw new Error(`corpus import built an invalid timing contract: ${built.error.message}`);
+  }
+  return built.value;
+}
+
 /** Assemble the approved Spec for one imported design. */
 function buildSpec(
   moduleName: string,
@@ -407,6 +434,7 @@ function buildSpec(
     // benchmark's mouth and could contradict the description a candidate is judged on.
     constraints: [],
     moduleInterface,
+    timingContract: buildTimingContract(moduleInterface),
     acceptanceCriteria: [wholeDesignCriterion(moduleName, description)],
     architecture:
       description.implementation.length > 0
@@ -472,6 +500,8 @@ function assembleDesign(
     moduleName,
     ports: ports.ports,
     clocking: split.clocking,
+    // RTLLM states no Validity_Output; this task changes no behaviour (task 1.3).
+    validityOutputName: null,
   };
   const problem: EvalProblem = {
     id: location.problemId,

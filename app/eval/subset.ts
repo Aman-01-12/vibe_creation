@@ -22,12 +22,15 @@
 
 import {
   makePort,
+  makeTimingContract,
   newUlid,
   type AcceptanceCriterion,
   type ModuleInterface,
   type Port,
   type PortDirection,
   type Spec,
+  type TimingContract,
+  type TimingContractEntry,
 } from '@app/core';
 
 import type { EvalProblem } from './problem.js';
@@ -52,11 +55,31 @@ function criterion(text: string): AcceptanceCriterion {
   return { id: newUlid(), text, measurable: true, method: 'simulation' };
 }
 
+/**
+ * Build the Timing_Contract for a fixture, throwing if a declared entry does not
+ * exactly cover the interface's output ports.
+ *
+ * Built through `makeTimingContract` rather than hand-assembled, so a fixture that
+ * later gains an output port fails construction instead of silently shipping a
+ * contract with a missing entry.
+ */
+function timingContract(
+  moduleInterface: ModuleInterface,
+  entries: readonly TimingContractEntry[],
+): TimingContract {
+  const built = makeTimingContract(moduleInterface, entries);
+  if (!built.ok) {
+    throw new Error(`Invalid eval fixture timing contract: ${built.error.message}`);
+  }
+  return built.value;
+}
+
 /** Assemble an approved single-module Spec fixture. */
 function approvedSpec(input: {
   readonly goal: string;
   readonly constraints: readonly string[];
   readonly moduleInterface: ModuleInterface;
+  readonly portTimings: readonly TimingContractEntry[];
   readonly criteria: readonly string[];
   readonly architecture: string;
 }): Spec {
@@ -66,6 +89,7 @@ function approvedSpec(input: {
     goal: input.goal,
     constraints: input.constraints,
     moduleInterface: input.moduleInterface,
+    timingContract: timingContract(input.moduleInterface, input.portTimings),
     acceptanceCriteria: input.criteria.map(criterion),
     architecture: input.architecture,
     approved: true,
@@ -92,7 +116,12 @@ const ADDER8: EvalProblem = {
         port('cout', 'output', 1),
       ],
       clocking: { clockName: null, resetName: null, resetActiveLow: false },
+      validityOutputName: null,
     },
+    portTimings: [
+      { portName: 'sum', timing: 'combinational' },
+      { portName: 'cout', timing: 'combinational' },
+    ],
     criteria: [
       'sum equals the low 8 bits of a + b + cin across representative operand pairs',
       'cout equals the carry out of a + b + cin, including the all-ones overflow case',
@@ -115,7 +144,9 @@ const COUNTER4: EvalProblem = {
       moduleName: 'counter4',
       ports: [port('en', 'input', 1), port('count', 'output', 4)],
       clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
+      validityOutputName: null,
     },
+    portTimings: [{ portName: 'count', timing: 'registered' }],
     criteria: [
       'count holds its value on any cycle where en is low',
       'count increments by one modulo 16 on each rising edge while en is high',
@@ -143,7 +174,9 @@ const MUX2: EvalProblem = {
         port('y', 'output', 8),
       ],
       clocking: { clockName: null, resetName: null, resetActiveLow: false },
+      validityOutputName: null,
     },
+    portTimings: [{ portName: 'y', timing: 'combinational' }],
     criteria: [
       'y equals a for every value of a when sel is 0',
       'y equals b for every value of b when sel is 1',

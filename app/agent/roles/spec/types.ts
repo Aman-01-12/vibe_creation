@@ -35,6 +35,16 @@ export interface ModuleInterfaceDraft {
   readonly clocking: ClockingDraft;
 }
 
+/**
+ * An untrusted single output port's timing declaration, before `PortTiming`
+ * validation.
+ */
+export interface TimingContractEntryDraft {
+  readonly portName: string;
+  /** Untrusted; validated against the core `PortTiming` set by membership. */
+  readonly timing: string;
+}
+
 /** An untrusted acceptance-criterion declaration, before the measurability check. */
 export interface AcceptanceCriterionDraft {
   readonly text: string;
@@ -55,6 +65,15 @@ export interface SpecDraft {
   readonly goal: string;
   readonly constraints: readonly string[];
   readonly moduleInterface: ModuleInterfaceDraft;
+  /**
+   * The possibly-partial Timing_Contract entries proposed so far (Req 6.4, 6.7).
+   *
+   * Deliberately a plain list here, not the core `TimingContract`: an approved
+   * `Spec` always carries a total contract (`makeTimingContract` enforces that),
+   * so the gap between "entries proposed" and "every output port covered" is a
+   * draft-stage fact, representable only before that constructor runs.
+   */
+  readonly timingContractEntries: readonly TimingContractEntryDraft[];
   readonly acceptanceCriteria: readonly AcceptanceCriterionDraft[];
   readonly architecture: string;
 }
@@ -69,6 +88,7 @@ export interface SpecEdit {
   readonly goal?: string;
   readonly constraints?: readonly string[];
   readonly moduleInterface?: ModuleInterfaceDraft;
+  readonly timingContractEntries?: readonly TimingContractEntryDraft[];
   readonly acceptanceCriteria?: readonly AcceptanceCriterionDraft[];
   readonly architecture?: string;
 }
