@@ -30,15 +30,90 @@
 //     change cannot pool samples with the version it changed from.
 
 export * from './types.js';
-export { requiredChecks, simulationCriteria, coveredCriterionIds } from './coverage.js';
+export {
+  requiredChecks,
+  requiredChecksFor,
+  simulationCriteria,
+  coveredCriterionIds,
+} from './coverage.js';
 export {
   CHECK_KEYWORD,
   formatCheckLine,
   isValidCheckName,
   sourceEmitsCheck,
 } from './signalling.js';
-export { detectStandardBlocks, type StandardBlockReference } from './standard-blocks.js';
-export { parseTestbenchDraft, type TestbenchParseError } from './parse.js';
-export { buildTestbenchModelInput, buildRepairModelInput, describeRepairHint } from './prompt.js';
+export {
+  detectGroundedStandardBlocks,
+  detectStandardBlocks,
+  type StandardBlockReference,
+} from './standard-blocks.js';
+export {
+  TESTBENCH_PARSE_REFUSALS,
+  parseFencedTestbenchDraft,
+  parseTestbenchDraft,
+  type TestbenchParseError,
+  type TestbenchParseRefusal,
+} from './parse.js';
+export {
+  ARCHITECTURE_FRAMING,
+  ARCHITECTURE_SECTION_LABEL,
+  FENCED_OUTPUT_CONTRACT_INSTRUCTION,
+  buildGroundedRepairModelInput,
+  buildGroundedTestbenchModelInput,
+  buildRepairModelInput,
+  buildTestbenchModelInput,
+  describeArchitectureSection,
+  describeRepairHint,
+} from './prompt.js';
 export { TESTBENCH_PROMPT_VERSION } from './prompt-version.js';
-export { TestbenchAgent, type TestbenchAgentDeps } from './testbench-agent.js';
+export {
+  CHECKING_APPROACHES,
+  DESIGN_GROUPS,
+  STRATEGY_ARMS,
+  designGroupOf,
+  routeCheckingApproach,
+  type CheckingApproach,
+  type DesignGroup,
+  type StrategyArm,
+} from './approach-router.js';
+export {
+  MAX_EXPECTATION_CHARS,
+  MAX_REPLY_CHARS,
+  MAX_RUN_LENGTH,
+  MAX_STIMULUS_CALLS,
+  MAX_STIMULUS_CHARS,
+  parseFragmentReply,
+  type FragmentCriterion,
+  type FragmentRefusal,
+  type FragmentTargets,
+  type ValidatedFragments,
+} from './scoreboard/fragments.js';
+export {
+  DRAIN_BOUND,
+  QUEUE_DEPTH,
+  RESET_CYCLES,
+  SCOREBOARD_CHECK_NAMES,
+  assembleScoreboardTestbench,
+  renderScoreboardScaffold,
+  slotMarker,
+  type ScaffoldRefusal,
+  type ScoreboardScaffold,
+} from './scoreboard/scaffold.js';
+export {
+  SCOREBOARD_CARVE_OUT,
+  buildScoreboardModelInput,
+  buildScoreboardRepairModelInput,
+} from './scoreboard/prompt.js';
+export {
+  CONCURRENCY_RULE,
+  CHECK_REPORT_RULE,
+  DIALECT_RULE,
+  EXPECTED_VALUE_RULE,
+  describeInputWindow,
+  describeStateAnchoring,
+} from './prompt.js';
+export {
+  STUDENT_PATH_STRATEGY_ARM,
+  TestbenchAgent,
+  type TestbenchAgentDeps,
+} from './testbench-agent.js';

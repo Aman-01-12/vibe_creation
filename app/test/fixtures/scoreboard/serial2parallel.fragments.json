@@ -1,0 +1,10 @@
+{
+  "runLength": 9,
+  "expectations": {
+    "dout_parallel": "{txn_din_serial[0], txn_din_serial[1], txn_din_serial[2], txn_din_serial[3], txn_din_serial[4], txn_din_serial[5], txn_din_serial[6], txn_din_serial[7]}"
+  },
+  "stimulus": {
+    "ac1_under_simulation_serial2parallel_produce": "repeat (18) begin stage_din_serial = $random; send_transaction; end",
+    "known_answer_counter_increments": "repeat (18) begin stage_din_serial = $random; send_transaction; end"
+  }
+}

@@ -20,20 +20,58 @@
 // (`parseTestbenchDraft`) and then validated for full per-check coverage before any
 // Testbench is produced.
 
-import { makeTestbench, newUlid, type Json, type Testbench, type Ulid } from '@app/core';
+import {
+  makeTestbench,
+  newUlid,
+  type Json,
+  type Result,
+  type Testbench,
+  type Ulid,
+} from '@app/core';
 import type { KnowledgeRetriever } from '@app/knowledge';
 
 import type { ActionRecorder, SpanDraft } from '../../action-recorder/index.js';
-import type { ModelRouter, ModelTask, SessionBudgetHandle } from '../../model-router/index.js';
+import type {
+  ModelRequest,
+  ModelRouter,
+  ModelTask,
+  SessionBudgetHandle,
+} from '../../model-router/index.js';
 
-import { coveredCriterionIds, requiredChecks, simulationCriteria } from './coverage.js';
-import { parseTestbenchDraft } from './parse.js';
-import { buildRepairModelInput, buildTestbenchModelInput } from './prompt.js';
+import {
+  routeCheckingApproach,
+  type CheckingApproach,
+  type StrategyArm,
+} from './approach-router.js';
+import { coveredCriterionIds, requiredChecksFor, simulationCriteria } from './coverage.js';
+import {
+  parseFencedTestbenchDraft,
+  parseTestbenchDraft,
+  type TestbenchParseError,
+} from './parse.js';
+import {
+  buildGroundedRepairModelInput,
+  buildGroundedTestbenchModelInput,
+  buildRepairModelInput,
+  buildTestbenchModelInput,
+} from './prompt.js';
+import {
+  MAX_REPLY_CHARS,
+  parseFragmentReply,
+  type FragmentRefusal,
+} from './scoreboard/fragments.js';
+import { buildScoreboardModelInput, buildScoreboardRepairModelInput } from './scoreboard/prompt.js';
+import {
+  assembleScoreboardTestbench,
+  renderScoreboardScaffold,
+  type ScoreboardScaffold,
+} from './scoreboard/scaffold.js';
 import { sourceEmitsCheck } from './signalling.js';
 import type {
   GenerateTestbenchRequest,
   RepairTestbenchRequest,
   RequiredCheck,
+  TestbenchDraft,
   TestbenchGenerationFailure,
   TestbenchGenerationInput,
   TestbenchGenerationOutcome,
@@ -49,6 +87,13 @@ import type {
  * typed over this common shape rather than duplicated per request type.
  */
 type TestbenchRequestSummary = Pick<GenerateTestbenchRequest, 'sessionId' | 'spec' | 'testbenchId'>;
+
+/** When a model call started, what it cost, and how often the router retried it. */
+interface SpanTiming {
+  readonly startedAtMs: number;
+  readonly costCents: number;
+  readonly retryCount: number;
+}
 
 /** The Trace `stageOrTool` name recorded for every Testbench_Agent action. */
 const TESTBENCH_STAGE = 'Testbench_Agent' as const;
@@ -76,6 +121,24 @@ export interface TestbenchAgentDeps {
   readonly newId?: () => Ulid;
   /** Wall-clock source for recorded span timing; defaults to `Date.now`. */
   readonly now?: () => number;
+  /**
+   * The Strategy_Arm this agent serves (testbench-in-order-scoreboard, C6). A per-arm
+   * constant, so a constructor dependency and never a request field. Absent on the
+   * Student_Path, which means `control`, so the shipped path always routes Cycle_Timed.
+   */
+  readonly strategyArm?: StrategyArm;
+}
+
+/** The arm the shipped Student_Path runs; it moves only on a `succeeded` Campaign (Req 13.3). */
+export const STUDENT_PATH_STRATEGY_ARM: StrategyArm = 'control';
+
+/** Shapes one untrusted reply into a draft, in the format its prompt asked for. */
+type DraftParser = (raw: string) => Result<TestbenchDraft, TestbenchParseError>;
+
+/** One Cycle_Timed model call: the request and the parser for the format it requests. */
+interface CycleTimedCall {
+  readonly prompt: ModelRequest;
+  readonly parse: DraftParser;
 }
 
 /**
@@ -93,6 +156,7 @@ export class TestbenchAgent {
   readonly #retriever: KnowledgeRetriever;
   readonly #newId: () => Ulid;
   readonly #now: () => number;
+  readonly #strategyArm: StrategyArm;
 
   constructor(deps: TestbenchAgentDeps) {
     this.#router = deps.router;
@@ -100,6 +164,7 @@ export class TestbenchAgent {
     this.#retriever = deps.retriever;
     this.#newId = deps.newId ?? newUlid;
     this.#now = deps.now ?? Date.now;
+    this.#strategyArm = deps.strategyArm ?? STUDENT_PATH_STRATEGY_ARM;
   }
 
   /**
@@ -123,7 +188,7 @@ export class TestbenchAgent {
         detail: 'A Testbench is generated only from an approved Spec.',
       });
     }
-    const checks = requiredChecks(spec);
+    const checks = requiredChecksFor(spec, this.#strategyArm);
     if (simulationCriteria(spec).length === 0) {
       return this.#fail(request, startedAtMs, 0, {
         reason: 'no-simulation-criteria',
@@ -132,37 +197,25 @@ export class TestbenchAgent {
     }
 
     const generationInput = await this.#assembleInput(request);
-    const invocation = await this.#router.invoke(
-      TESTBENCH_MODEL_TASK,
-      buildTestbenchModelInput(generationInput, checks),
-      budget,
-    );
-    if (!invocation.ok) {
-      return this.#fail(request, startedAtMs, 0, {
-        reason: 'model-call-failed',
-        detail: invocation.error.code,
-        routerFailure: invocation.error,
-      });
+    if (routeCheckingApproach(spec.moduleInterface, this.#strategyArm) === 'cycle-timed') {
+      const call: CycleTimedCall =
+        this.#strategyArm === 'grounded'
+          ? {
+              prompt: buildGroundedTestbenchModelInput(generationInput, checks),
+              parse: parseFencedTestbenchDraft,
+            }
+          : {
+              prompt: buildTestbenchModelInput(generationInput, checks),
+              parse: parseTestbenchDraft,
+            };
+      return this.#runCycleTimed(request, call, checks, budget, startedAtMs);
     }
-
-    const cost = invocation.value.costCents;
-    const retryCount = invocation.value.attempts - 1;
-    const parsed = parseTestbenchDraft(invocation.value.outputText);
-    if (!parsed.ok) {
-      return this.#fail(request, startedAtMs, cost, {
-        reason: 'unparseable-output',
-        detail: parsed.error.reason,
-      });
+    const scaffold = this.#scaffoldFor(request, checks);
+    if (!scaffold.ok) {
+      return this.#fail(request, startedAtMs, 0, scaffold.failure);
     }
-
-    return this.#validateCoverage(
-      request,
-      parsed.value.source,
-      checks,
-      startedAtMs,
-      cost,
-      retryCount,
-    );
+    const prompt = buildScoreboardModelInput(generationInput, checks, scaffold.value);
+    return this.#runScoreboard(request, prompt, checks, scaffold.value, budget, startedAtMs);
   }
 
   /**
@@ -187,13 +240,32 @@ export class TestbenchAgent {
   ): Promise<TestbenchGenerationOutcome> {
     const startedAtMs = this.#now();
     const { spec } = request;
-    const checks = requiredChecks(spec);
+    const checks = requiredChecksFor(spec, this.#strategyArm);
+    // Re-derived from the same two inputs, so a repair always uses the generation's approach.
+    if (routeCheckingApproach(spec.moduleInterface, this.#strategyArm) === 'cycle-timed') {
+      const call: CycleTimedCall =
+        this.#strategyArm === 'grounded'
+          ? { prompt: buildGroundedRepairModelInput(request), parse: parseFencedTestbenchDraft }
+          : { prompt: buildRepairModelInput(request), parse: parseTestbenchDraft };
+      return this.#runCycleTimed(request, call, checks, budget, startedAtMs);
+    }
+    const scaffold = this.#scaffoldFor(request, checks);
+    if (!scaffold.ok) {
+      return this.#fail(request, startedAtMs, 0, scaffold.failure);
+    }
+    const prompt = buildScoreboardRepairModelInput(request, scaffold.value);
+    return this.#runScoreboard(request, prompt, checks, scaffold.value, budget, startedAtMs);
+  }
 
-    const invocation = await this.#router.invoke(
-      TESTBENCH_MODEL_TASK,
-      buildRepairModelInput(request),
-      budget,
-    );
+  /** One Cycle_Timed model call: the model writes the whole testbench, as today. */
+  async #runCycleTimed(
+    request: TestbenchRequestSummary,
+    call: CycleTimedCall,
+    checks: readonly RequiredCheck[],
+    budget: SessionBudgetHandle,
+    startedAtMs: number,
+  ): Promise<TestbenchGenerationOutcome> {
+    const invocation = await this.#router.invoke(TESTBENCH_MODEL_TASK, call.prompt, budget);
     if (!invocation.ok) {
       return this.#fail(request, startedAtMs, 0, {
         reason: 'model-call-failed',
@@ -201,25 +273,74 @@ export class TestbenchAgent {
         routerFailure: invocation.error,
       });
     }
-
     const cost = invocation.value.costCents;
     const retryCount = invocation.value.attempts - 1;
-    const parsed = parseTestbenchDraft(invocation.value.outputText);
+    const parsed = call.parse(invocation.value.outputText);
     if (!parsed.ok) {
       return this.#fail(request, startedAtMs, cost, {
         reason: 'unparseable-output',
         detail: parsed.error.reason,
+        parseRefusal: parsed.error.refusal,
       });
     }
+    const timing = { startedAtMs, costCents: cost, retryCount };
+    return this.#validateCoverage(request, parsed.value.source, checks, timing, 'cycle-timed');
+  }
 
-    return this.#validateCoverage(
-      request,
-      parsed.value.source,
-      checks,
+  /** One In_Order_Scoreboard model call: the model returns fragments the scaffold is filled with. */
+  async #runScoreboard(
+    request: TestbenchRequestSummary,
+    prompt: ModelRequest,
+    checks: readonly RequiredCheck[],
+    scaffold: ScoreboardScaffold,
+    budget: SessionBudgetHandle,
+    startedAtMs: number,
+  ): Promise<TestbenchGenerationOutcome> {
+    const invocation = await this.#router.invoke(TESTBENCH_MODEL_TASK, prompt, budget);
+    if (!invocation.ok) {
+      return this.#fail(request, startedAtMs, 0, {
+        reason: 'model-call-failed',
+        detail: invocation.error.code,
+        routerFailure: invocation.error,
+      });
+    }
+    const timing = {
       startedAtMs,
-      cost,
-      retryCount,
+      costCents: invocation.value.costCents,
+      retryCount: invocation.value.attempts - 1,
+    };
+    const reply = invocation.value.outputText;
+    const fragments = parseFragmentReply(reply, scaffold);
+    if (!fragments.ok) {
+      await this.#recordFragmentsRefused(request, timing, fragments.error);
+      return {
+        status: 'fragments-refused',
+        refusal: fragments.error,
+        source: reply.slice(0, MAX_REPLY_CHARS),
+      };
+    }
+    const source = assembleScoreboardTestbench(scaffold, fragments.value);
+    return this.#validateCoverage(request, source, checks, timing, 'in-order-scoreboard');
+  }
+
+  /** Render the scaffold, or the generation failure an unrenderable interface becomes. */
+  #scaffoldFor(
+    request: TestbenchRequestSummary,
+    checks: readonly RequiredCheck[],
+  ):
+    | { readonly ok: true; readonly value: ScoreboardScaffold }
+    | { readonly ok: false; readonly failure: TestbenchGenerationFailure } {
+    const rendered = renderScoreboardScaffold(
+      request.spec.moduleInterface,
+      checks.map((check) => check.name),
     );
+    if (rendered.ok) {
+      return rendered;
+    }
+    return {
+      ok: false,
+      failure: { reason: 'scaffold-unrenderable', detail: rendered.error.reason },
+    };
   }
 
   /** Retrieve OKF hints and assemble the RTL-free generation input (Req 7.1). */
@@ -240,10 +361,10 @@ export class TestbenchAgent {
     request: TestbenchRequestSummary,
     source: string,
     checks: readonly RequiredCheck[],
-    startedAtMs: number,
-    costCents: number,
-    retryCount: number,
+    timing: SpanTiming,
+    checkingApproach: CheckingApproach,
   ): Promise<TestbenchGenerationOutcome> {
+    const { startedAtMs, costCents, retryCount } = timing;
     const missingChecks = checks.filter((check) => !sourceEmitsCheck(source, check.name));
     if (missingChecks.length > 0) {
       await this.#recordCoverageGap(request, startedAtMs, costCents, retryCount, missingChecks);
@@ -257,8 +378,8 @@ export class TestbenchAgent {
       source,
       coversCriteria: coveredCriterionIds(checks),
     });
-    await this.#recordGenerated(request, testbench, checks, startedAtMs, costCents, retryCount);
-    return { status: 'generated', testbench, checks };
+    await this.#recordGenerated(request, testbench, checks, timing, checkingApproach);
+    return { status: 'generated', testbench, checks, checkingApproach };
   }
 
   /** Record a successful generation span, attributed to the Spec version (Req 7.7). */
@@ -266,13 +387,14 @@ export class TestbenchAgent {
     request: TestbenchRequestSummary,
     testbench: Testbench,
     checks: readonly RequiredCheck[],
-    startedAtMs: number,
-    costCents: number,
-    retryCount: number,
+    timing: SpanTiming,
+    checkingApproach: CheckingApproach,
   ): Promise<void> {
+    const { startedAtMs, costCents, retryCount } = timing;
     return this.#record(request.sessionId, request.spec, startedAtMs, costCents, retryCount, {
       stage: 'testbench-generation',
       status: 'generated',
+      checkingApproach,
       sourceAttribution: testbench.sourceAttribution,
       specId: request.spec.id,
       specVersion: request.spec.version,
@@ -299,6 +421,32 @@ export class TestbenchAgent {
       specVersion: request.spec.version,
       missingCheckNames: missingChecks.map((check) => check.name),
     });
+  }
+
+  /** Record a refused-fragments span; the refusal's three bounded fields, never the reply. */
+  #recordFragmentsRefused(
+    request: TestbenchRequestSummary,
+    timing: SpanTiming,
+    refusal: FragmentRefusal,
+  ): Promise<void> {
+    return this.#record(
+      request.sessionId,
+      request.spec,
+      timing.startedAtMs,
+      timing.costCents,
+      timing.retryCount,
+      {
+        stage: 'testbench-generation',
+        status: 'fragments-refused',
+        checkingApproach: 'in-order-scoreboard',
+        sourceAttribution: 'spec',
+        specId: request.spec.id,
+        specVersion: request.spec.version,
+        fragment: refusal.fragment,
+        criterion: refusal.criterion,
+        construct: refusal.construct,
+      },
+    );
   }
 
   /** Record a generation failure span and return the fail-safe outcome. */

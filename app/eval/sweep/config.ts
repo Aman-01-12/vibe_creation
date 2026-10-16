@@ -20,7 +20,7 @@
 //   three hours and a hundred paid samples into the matrix.
 
 import type { ResourceLimits } from '@app/tools';
-import type { ModelPriceTable, ModelTask } from '@app/agent';
+import type { DesignGroup, ModelPriceTable, ModelTask, StrategyArm } from '@app/agent';
 
 import type { StudentSessionCaps } from '../loop-runner.js';
 import {
@@ -32,6 +32,8 @@ import {
 import type { ReproducibilityConfig } from '../reproducibility.js';
 import type { RtllmCategory } from '../corpus/pinned-source.js';
 import type { KillSwitchBounds } from './kill-switch.js';
+import type { SuccessCriterion } from './success-criterion.js';
+import type { GroundingSuccessCriterion } from './grounding-criterion.js';
 import type { TransportRetryPolicy } from './transport-retry.js';
 
 /** The only config schema version this build understands. */
@@ -85,6 +87,21 @@ export const DEFAULT_CAPTURE_ARTIFACTS = true;
  * a weaker standard is never cited as the full one.
  */
 export const DEFAULT_NEGATIVE_CONTROL_ENABLED = true;
+
+/**
+ * Whether the FORMAL_GATE runs beside the simulation oracle, when the config does not say.
+ *
+ * DISABLED, so no existing campaign's behaviour, cost, or recorded identity changes until a
+ * config turns it on, and a runner that wires nothing sees exactly the behaviour the
+ * Verification_Loop had before the gate existed (Req 11.16).
+ *
+ * It is a real wall-clock cost - a Property_Author model call plus a Yosys pre-pass and up to
+ * four `yosys-smtbmc` invocations per property per sample - and it needs a toolchain the
+ * simulation oracle does not: a run with it enabled is REFUSED where the composed
+ * `yosys-smtbmc -s bitwuzla` invocation cannot run (Req 11.18). Off is therefore the only
+ * default that leaves every committed campaign runnable on the host it was measured on.
+ */
+export const DEFAULT_FORMAL_GATE_ENABLED = false;
 
 /**
  * The mutation-based negative control's knobs.
@@ -171,6 +188,107 @@ export interface SweepArmConfig {
   readonly name: string;
   /** The model id serving each role; every `ModelTask` is present and non-blank. */
   readonly roleModels: Readonly<Record<ModelTask, string>>;
+  /**
+   * The Strategy_Arm this arm's Testbench_Agent runs under; absent means `control`.
+   * Left off the parsed arm when the config omits it, so existing config hashes do not move.
+   */
+  readonly strategy?: StrategyArm;
+}
+
+/** The only resume limit a Campaign may declare (Req 8.11, 8.13). */
+export const SCOREBOARD_CAMPAIGN_MAX_RESUMES = 2;
+
+/**
+ * Why Sample_Count 7, recorded verbatim so the manifest states what the size was chosen against.
+ *
+ * Every `exploratory*` field is a de-duplicated recount of
+ * `.eval-runs/grounding-ab-v1/results.jsonl`, taking the last record per slot, which is how
+ * `CompletedSampleIndex` reads it. The requirements cite 85/1470 and 99/2209 for the two
+ * coverage-gap fractions; this constant carries the recount instead, because a pre-registration
+ * must not hold a number the build cannot reproduce (design answer Q-07).
+ *
+ * Every `expected*` field is its observed counterpart times 7/5, rounded, which is exactly the
+ * Sample_Count ratio and therefore exactly the Slot_Pair ratio 532/380. `minGroundedOnlyToHold`
+ * is the one exception: it is the smallest Grounded_Arm-only count that clears the one-sided
+ * exact McNemar level at 110 discordant pairs, pinned from an independent summation in the test.
+ */
+export interface GroundingPowerArithmetic {
+  readonly exploratoryConfigHash: '773b798cf6bbe129';
+  readonly exploratorySlotPairs: 380;
+  readonly exploratoryGroundedOnlyValid: 56;
+  readonly exploratoryControlOnlyValid: 23;
+  readonly exploratoryJudgedControl: 58;
+  readonly exploratoryJudgedGrounded: 97;
+  readonly exploratoryCoverageGapSurvivorsControl: 87;
+  readonly exploratoryCoverageGapSurvivorsGrounded: 100;
+  readonly exploratoryScoredMutantsControl: 1493;
+  readonly exploratoryScoredMutantsGrounded: 2230;
+  readonly slotPairs: 532;
+  readonly expectedGroundedOnlyValid: 78;
+  readonly expectedControlOnlyValid: 32;
+  readonly expectedDiscordantPairs: 110;
+  readonly minGroundedOnlyToHold: 65;
+  readonly expectedJudgedControl: 81;
+  readonly expectedJudgedGrounded: 136;
+  readonly expectedCoverageGapSurvivorsControl: 122;
+  readonly expectedCoverageGapSurvivorsGrounded: 140;
+  readonly expectedScoredMutantsControl: 2090;
+  readonly expectedScoredMutantsGrounded: 3122;
+}
+
+/** The pre-registered power arithmetic; the parser accepts only these values. */
+export const PRE_REGISTERED_GROUNDING_POWER: GroundingPowerArithmetic = {
+  exploratoryConfigHash: '773b798cf6bbe129',
+  exploratorySlotPairs: 380,
+  exploratoryGroundedOnlyValid: 56,
+  exploratoryControlOnlyValid: 23,
+  exploratoryJudgedControl: 58,
+  exploratoryJudgedGrounded: 97,
+  exploratoryCoverageGapSurvivorsControl: 87,
+  exploratoryCoverageGapSurvivorsGrounded: 100,
+  exploratoryScoredMutantsControl: 1493,
+  exploratoryScoredMutantsGrounded: 2230,
+  slotPairs: 532,
+  expectedGroundedOnlyValid: 78,
+  expectedControlOnlyValid: 32,
+  expectedDiscordantPairs: 110,
+  minGroundedOnlyToHold: 65,
+  expectedJudgedControl: 81,
+  expectedJudgedGrounded: 136,
+  expectedCoverageGapSurvivorsControl: 122,
+  expectedCoverageGapSurvivorsGrounded: 140,
+  expectedScoredMutantsControl: 2090,
+  expectedScoredMutantsGrounded: 3122,
+};
+
+/** The Grounding Campaign block (testbench-spec-grounding, C15). */
+export interface GroundingCampaignConfig {
+  /** The pre-registered rule; the parser accepts only the constant's values (Req 12.1-12.3). */
+  readonly successCriterion: GroundingSuccessCriterion;
+  readonly powerArithmetic: GroundingPowerArithmetic;
+  /** The Reference_Campaign records the cross-run reading is taken from (Req 11.6). */
+  readonly referenceCampaign: {
+    readonly resultsPath: string;
+    readonly configHash: string;
+    readonly schemaVersion: 15;
+  };
+  /** Where the Replay_Gate wrote its `--verify` report (Req 6.8, 6.9). */
+  readonly replayGateReportPath: string;
+  readonly maxResumes: 2;
+}
+
+/** The A/B Campaign block: recorded Design_Groups, the supplement, and the verdict rule. */
+export interface ScoreboardCampaignConfig {
+  /** Every Campaign design's Design_Group, written when the config was authored (Req 8.4). */
+  readonly designGroups: Readonly<Record<string, DesignGroup>>;
+  /** The Streaming_Supplement problem ids, a subset of `problems.ids` (Req 8.8). */
+  readonly streamingSupplement: readonly string[];
+  /** The pre-registered Success_Criterion (Req 10.1-10.3, 10.13). */
+  readonly successCriterion: SuccessCriterion;
+  /** The baseline the reproducibility reading is taken from (Req 9.3). */
+  readonly baseline: { readonly resultsPath: string; readonly configHash: string };
+  /** Resumes allowed after the first pass (Req 8.11, 8.13). */
+  readonly maxResumes: typeof SCOREBOARD_CAMPAIGN_MAX_RESUMES;
 }
 
 /**
@@ -247,10 +365,37 @@ export interface SweepConfig {
    * and these fields decide instrument validity.
    */
   readonly negativeControl: SweepNegativeControlConfig;
+  /**
+   * Whether the FORMAL_GATE is constructed and injected into every sample's
+   * Verification_Loop (Req 11.16, 11.17).
+   *
+   * Defaults to `false` (see `DEFAULT_FORMAL_GATE_ENABLED`). The ONE owner of that choice:
+   * the composition root reads it to decide whether to build the Formal_Oracle and the
+   * Property_Set source at all, and preflight reads it to decide whether the composed
+   * `yosys-smtbmc -s bitwuzla` invocation has to work before the run may start.
+   *
+   * IN the config identity, and under its own reserved key - see `./config-identity.ts`.
+   * This is the exact MIRROR IMAGE of `captureArtifacts` below it: capturing evidence does
+   * not change the experiment, so that flag hashes identically on and off, while enabling a
+   * SECOND ORACLE does change it. A sample whose verdict a proof could have decided and a
+   * sample only the simulation could decide are answers to different questions, so their
+   * samples must not pool under one fingerprint.
+   */
+  readonly formalGateEnabled: boolean;
   /** Samples in flight at once; conservative by default because the host rate-limits. */
   readonly concurrency: number;
   readonly transportRetry: TransportRetryPolicy;
   readonly killSwitch: KillSwitchBounds;
+  /**
+   * The committed Replay_Gate report a run refuses to start without, or absent. Top-level
+   * because the gate is a claim about the build's harness, which a non-Campaign run needs too;
+   * the grounding block keeps its own field so the Confirmatory identity does not move.
+   */
+  readonly replayGateReportPath?: string;
+  /** The A/B Campaign block; absent from every config that is not the Campaign. */
+  readonly scoreboardCampaign?: ScoreboardCampaignConfig;
+  /** The Grounding Campaign block; a config declares at most one Campaign block. */
+  readonly groundingCampaign?: GroundingCampaignConfig;
 }
 
 /** Whether an arm named one model for every role (derived, never stored). */

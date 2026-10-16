@@ -1,0 +1,9 @@
+{
+  "runLength": 1,
+  "expectations": {
+    "yout": "txn_ain[0] * txn_bin[0]"
+  },
+  "stimulus": {
+    "ac1_under_simulation_multi_16bit_produces_th": "stage_start = 1; stage_ain = $random; stage_bin = $random; send_transaction;"
+  }
+}

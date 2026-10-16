@@ -38,6 +38,7 @@ import {
   makeSessionBudget,
   newUlid,
   type AcceptanceCriterion,
+  type ModuleInterface,
   type Port,
   type PortDirection,
   type Result,
@@ -45,8 +46,8 @@ import {
 } from '@app/core';
 import { MUTATION_OPERATORS } from '@app/eval';
 import type { KnowledgeQuery, KnowledgeRetriever, RetrievalResult } from '@app/knowledge';
-import { propertyParameters, routedModelIdFor } from '@app/test';
-import { readCheckSignals } from '@app/tools';
+import { propertyParameters, routedModelIdFor, timingContractFor } from '@app/test';
+import { CHECK_REPORT_TASK_NAME, CHECK_REPORT_TASK_PATH, readCheckSignals } from '@app/tools';
 
 /** Build one measurable, simulation-verifiable acceptance criterion. */
 function criterion(text: string): AcceptanceCriterion {
@@ -56,12 +57,23 @@ function criterion(text: string): AcceptanceCriterion {
 /** An approved 4-bit up-counter Spec with two simulation criteria (a standard block). */
 function approvedCounterSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'up_counter',
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst', direction: 'input', width: 1 },
+        { name: 'q', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A 4-bit synchronous up counter with reset',
     constraints: ['synchronous active-high reset'],
     architecture: 'A single clocked always block increments q on each rising clk edge.',
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'up_counter',
       ports: [
         { name: 'clk', direction: 'input', width: 1 },
@@ -89,12 +101,25 @@ function approvedCounterSpec(): Spec {
  */
 function combinationalAdderSpec(width: number): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: `adder_${width}bit`,
+      ports: [
+        { name: 'a', direction: 'input', width },
+        { name: 'b', direction: 'input', width },
+        { name: 'cin', direction: 'input', width: 1 },
+        { name: 'sum', direction: 'output', width },
+        { name: 'cout', direction: 'output', width: 1 },
+      ],
+      clocking: { clockName: null, resetName: null, resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: `A ${width}-bit full adder in combinational logic`,
     constraints: ['purely combinational'],
     architecture: 'A ripple-carry chain of full adders.',
     moduleInterface: {
+      validityOutputName: null,
       moduleName: `adder_${width}bit`,
       ports: [
         { name: 'a', direction: 'input', width },
@@ -114,12 +139,26 @@ function combinationalAdderSpec(width: number): Spec {
 /** An approved accumulator Spec that declares a single-bit `valid_out` qualifier. */
 function handshakeAccumulatorSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'accu',
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst_n', direction: 'input', width: 1 },
+        { name: 'data_in', direction: 'input', width: 8 },
+        { name: 'valid_in', direction: 'input', width: 1 },
+        { name: 'valid_out', direction: 'output', width: 1 },
+        { name: 'data_out', direction: 'output', width: 10 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: 'Accumulate four serial 8-bit inputs and output their sum',
     constraints: ['active-low reset'],
     architecture: 'A clocked accumulator that pulses valid_out for one cycle per result.',
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'accu',
       ports: [
         { name: 'clk', direction: 'input', width: 1 },
@@ -414,6 +453,64 @@ describe('TestbenchAgent generation from the Spec (Req 7.1, 7.3, 7.7)', () => {
   });
 });
 
+/** A testbench that reports every required check through the harness's Check_Report_Task. */
+function sourceCallingCheckReportTask(checks: readonly RequiredCheck[]): string {
+  const calls = checks.map((check) => `    ${CHECK_REPORT_TASK_PATH}("${check.name}", 4'd1, q);`);
+  return ['module tb;', '  initial begin', ...calls, '    $finish;', '  end', 'endmodule'].join(
+    '\n',
+  );
+}
+
+describe('a Check_Report_Task call is a per-check emission (Req 2.7, 4.1)', () => {
+  it('accepts a testbench whose only emissions are hierarchical task calls', async () => {
+    // GIVEN a reply that obeys the Check_Report_Task rule and prints no `CHECK` text itself.
+    const spec = approvedCounterSpec();
+    const checks = requiredChecks(spec);
+    const source = sourceCallingCheckReportTask(checks);
+    expect(source).not.toContain('CHECK ');
+    const { agent } = agentReturning(routed(JSON.stringify({ source })));
+
+    // WHEN the agent checks coverage.
+    const outcome = await agent.generateTestbench(request(spec), generousBudget());
+
+    // THEN it is generated, not refused as coverage-incomplete.
+    expect(outcome.status).toBe('generated');
+    if (outcome.status !== 'generated') {
+      throw new Error('expected generated');
+    }
+    // And the loop's `preNormalizationCheckNames` filter (both construction sites in
+    // verification-loop.ts) keeps every name, so the visibility signal still has its input.
+    const names = outcome.checks.map((check) => check.name);
+    const preNormalizationCheckNames = names.filter((name) =>
+      sourceEmitsCheck(outcome.testbench.source, name),
+    );
+    expect(preNormalizationCheckNames).toEqual(names);
+  });
+
+  it('accepts a bare, unqualified task call', () => {
+    const source = `${CHECK_REPORT_TASK_NAME} ( "ac1_counts_up" , 4'd1, q);`;
+    expect(sourceEmitsCheck(source, 'ac1_counts_up')).toBe(true);
+  });
+
+  it('does not let a prefix name match a longer emission, in either form', () => {
+    expect(sourceEmitsCheck('$display("CHECK reset_clears PASS");', 'reset')).toBe(false);
+    expect(sourceEmitsCheck(`${CHECK_REPORT_TASK_PATH}("reset_clears", 1, 1);`, 'reset')).toBe(
+      false,
+    );
+  });
+
+  it('does not match the task name as the tail of another identifier or scope', () => {
+    expect(sourceEmitsCheck(`my_${CHECK_REPORT_TASK_NAME}("reset", 1, 1);`, 'reset')).toBe(false);
+    expect(sourceEmitsCheck(`tb.${CHECK_REPORT_TASK_NAME}("reset", 1, 1);`, 'reset')).toBe(false);
+  });
+
+  it('treats a comment-only mention the same in both forms: as an emission', () => {
+    // The text form never masked comments, so the call form matches it rather than diverging.
+    expect(sourceEmitsCheck('// CHECK reset PASS', 'reset')).toBe(true);
+    expect(sourceEmitsCheck(`// ${CHECK_REPORT_TASK_PATH}("reset", 1, 1);`, 'reset')).toBe(true);
+  });
+});
+
 describe('TestbenchAgent fails closed (Req 7.1, untrusted output)', () => {
   it('refuses to generate from an unapproved Spec', async () => {
     const spec: Spec = { ...approvedCounterSpec(), approved: false };
@@ -502,7 +599,10 @@ describe('a conforming envelope wrapped in a markdown code fence (Req 7.6 bounda
   it('given a genuinely malformed reply when parsed then it fails with the unchanged reason', () => {
     const draft = parseTestbenchDraft('not json at all');
 
-    expect(draft).toEqual({ ok: false, error: { reason: 'model output was not valid JSON' } });
+    expect(draft).toEqual({
+      ok: false,
+      error: { refusal: 'not-json', reason: 'model output was not valid JSON' },
+    });
   });
 
   it('given a fenced envelope missing the source field when parsed then field validation still rejects it', () => {
@@ -510,14 +610,20 @@ describe('a conforming envelope wrapped in a markdown code fence (Req 7.6 bounda
 
     expect(draft).toEqual({
       ok: false,
-      error: { reason: 'model output was missing a non-empty testbench source' },
+      error: {
+        refusal: 'empty-source',
+        reason: 'model output was missing a non-empty testbench source',
+      },
     });
   });
 
   it('given bare RTL in a fence with no envelope when parsed then it fails, so a non-conforming model is not masked', () => {
     const draft = parseTestbenchDraft('```verilog\nmodule tb; initial $finish; endmodule\n```');
 
-    expect(draft).toEqual({ ok: false, error: { reason: 'model output was not valid JSON' } });
+    expect(draft).toEqual({
+      ok: false,
+      error: { refusal: 'not-json', reason: 'model output was not valid JSON' },
+    });
   });
 
   it('given a fenced envelope when the agent runs then it generates a Testbench', async () => {
@@ -549,6 +655,7 @@ describe('state anchoring is conditioned on the declared interface (Req 7.1, 7.4
       architecture: 'A single clocked always block shifts q right and inserts d at the MSB.',
       constraints: [],
       moduleInterface: {
+        validityOutputName: null,
         moduleName: 'right_shifter',
         ports: [
           { name: 'clk', direction: 'input', width: 1 },
@@ -927,17 +1034,20 @@ function generatedInterfaceSpecArbitrary(): fc.Arbitrary<Spec> {
         declared.unshift({ name: resetName, direction: 'input', width: 1 });
       }
       const base = approvedCounterSpec();
+      const moduleInterface: ModuleInterface = {
+        moduleName: 'generated_dut',
+        ports: declared,
+        clocking: {
+          clockName: clocked ? 'clk' : null,
+          resetName,
+          resetActiveLow: resetName === 'rst_n',
+        },
+        validityOutputName: null,
+      };
       return {
         ...base,
-        moduleInterface: {
-          moduleName: 'generated_dut',
-          ports: declared,
-          clocking: {
-            clockName: clocked ? 'clk' : null,
-            resetName,
-            resetActiveLow: resetName === 'rst_n',
-          },
-        },
+        moduleInterface,
+        timingContract: timingContractFor(moduleInterface),
       };
     });
 }

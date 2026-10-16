@@ -25,6 +25,7 @@ import { describe, expect, it } from 'vitest';
 import {
   makePort,
   makeSessionBudget,
+  makeTimingContract,
   newUlid,
   type AcceptanceCriterion,
   type ModuleInterface,
@@ -37,6 +38,7 @@ import type { KnowledgeQuery, KnowledgeRetriever, RetrievalResult } from '@app/k
 import {
   FakeSandboxRuntime,
   type ContainerSpec,
+  type FormalArtifactReader,
   type RawRunCapture,
   type ResourceLimits,
   type SandboxJob,
@@ -111,6 +113,7 @@ function port(name: string, direction: PortDirection, width: number): Port {
 
 /** The module interface the candidate RTL must match exactly (combinational). */
 const MODULE_INTERFACE: ModuleInterface = {
+  validityOutputName: null,
   moduleName: 'passthrough',
   ports: [port('a', 'input', 1), port('y', 'output', 1)],
   clocking: { clockName: null, resetName: null, resetActiveLow: false },
@@ -124,6 +127,15 @@ const CRITERION: AcceptanceCriterion = {
   method: 'simulation',
 };
 
+/** Placeholder Timing_Contract for `MODULE_INTERFACE`, placing `y` at `combinational`. */
+const TIMING_CONTRACT = (() => {
+  const built = makeTimingContract(MODULE_INTERFACE, [{ portName: 'y', timing: 'combinational' }]);
+  if (!built.ok) {
+    throw new Error(`invalid fixture timing contract: ${built.error.message}`);
+  }
+  return built.value;
+})();
+
 /** The pre-approved Spec the loop generates against and the oracle verifies. */
 const SPEC: Spec = {
   id: newUlid(),
@@ -131,6 +143,7 @@ const SPEC: Spec = {
   goal: 'Drive the output directly from the input.',
   constraints: ['Purely combinational'],
   moduleInterface: MODULE_INTERFACE,
+  timingContract: TIMING_CONTRACT,
   acceptanceCriteria: [CRITERION],
   architecture: 'A single continuous assignment from the input to the output.',
   approved: true,
@@ -381,6 +394,8 @@ function scenario(
     readonly faultySandbox?: boolean;
     /** Drive the model calls through the real fetch-backed port over a fake `fetch`. */
     readonly viaFetchPort?: boolean;
+    /** Inject the formal gate's artifact store, which is what wires the gate at all. */
+    readonly formalArtifacts?: FormalArtifactReader;
   } = {},
 ): Scenario {
   const http = new FakeProviderHttp(options.rtl ?? CORRECT_RTL, options.reachable ?? true);
@@ -399,6 +414,7 @@ function scenario(
         : http.port,
     sandboxRuntime: fakeRuntime(sandbox, options.faultySandbox ?? false),
     retriever,
+    ...(options.formalArtifacts === undefined ? {} : { formalArtifacts: options.formalArtifacts }),
     secretManager: new EnvSecretManager(environment(options.withCredential ?? true)),
     now: () => 0,
   });
@@ -413,6 +429,7 @@ function runSample(
   return scene.runner.runSample({
     problem: PROBLEM,
     sampleIndex: 0,
+    strategyArm: 'control',
     seed: overrides.seed ?? SEED,
     temperature: overrides.temperature ?? TEMPERATURE,
     budget: scene.budget,
@@ -640,5 +657,52 @@ describe('EvalVerificationLoopRunner - production HTTP port wiring', () => {
       expect(request.headers.Authorization).toBe(`Bearer ${SYNTHETIC_CREDENTIAL}`);
     }
     expect(JSON.stringify(outcome)).not.toContain(SYNTHETIC_CREDENTIAL);
+  });
+});
+
+// -- The FORMAL_GATE at the production composition root (Req 11.16) ---------
+
+/**
+ * An artifact reader that resolves nothing.
+ *
+ * Never consulted by either example below, and that is the point rather than an omission:
+ * the fake provider answers the Property_Author with RTL, so no property is ever submitted
+ * and no report is ever written for the reader to resolve. It is here because it is the
+ * SWITCH - the runner wires the gate exactly when a store is injected - so these two
+ * examples differ in nothing else.
+ */
+const NO_FORMAL_ARTIFACTS: FormalArtifactReader = { readText: () => Promise.resolve(null) };
+
+describe('EvalVerificationLoopRunner - the formal gate at the composition root', () => {
+  it('wires NO gate when no store is injected, so the sample behaves as it did before', async () => {
+    const outcome = await runSample(scenario());
+
+    expect(outcome.status).toBe('verified');
+    if (outcome.status !== 'verified') return;
+    // The three states `FormalGate` keeps separable, read on the one that means NOTHING WAS
+    // EVER ASKED: no result, no unexpressed criterion, and no fallback reason. A sample from
+    // a campaign that has not turned the gate on must be indistinguishable from a sample
+    // recorded before the gate existed.
+    expect(outcome.formal.results).toEqual([]);
+    expect(outcome.formal.unexpressedCriteria).toEqual([]);
+    expect(outcome.formal.fallbackReason).toBeNull();
+    expect(outcome.formal.propertySetAdmitted).toBe('not-gated');
+  });
+
+  it('wires the gate when a store IS injected, so the Property_Author is reached', async () => {
+    const scene = scenario({ formalArtifacts: NO_FORMAL_ARTIFACTS });
+    const outcome = await runSample(scene);
+
+    expect(outcome.status).toBe('verified');
+    if (outcome.status !== 'verified') return;
+    // THE GATE RAN. The fake provider answers every prompt with RTL, so the Property_Author
+    // reads no property out of its reply and reports every criterion of the Spec unexpressed
+    // - which is exactly how "a gate ran over an empty set" is told apart from "no gate was
+    // injected", the two being identical on every other field.
+    expect(outcome.formal.unexpressedCriteria).toEqual([CRITERION.id]);
+    // No property reached the oracle, so nothing was proved and the SIMULATION still decided
+    // this sample: wiring the gate adds no verdict of its own on this path.
+    expect(scene.sandbox.jobs.every((job) => job.kind === 'simulate')).toBe(true);
+    expect(outcome.formal.results).toEqual([]);
   });
 });

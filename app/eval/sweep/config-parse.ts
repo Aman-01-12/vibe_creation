@@ -19,6 +19,8 @@ import type { ModelPrice, ModelPriceTable } from '@app/agent';
 
 import type { StudentSessionCaps } from '../loop-runner.js';
 import { makeReproducibilityConfig, type ReproducibilityConfig } from '../reproducibility.js';
+import { MODEL_TASKS } from '@app/agent';
+
 import {
   MAX_MUTANT_WALL_MS,
   MAX_MUTANTS_PER_PROBLEM_LIMIT,
@@ -26,6 +28,7 @@ import {
 } from '../mutation-control.js';
 import {
   DEFAULT_CAPTURE_ARTIFACTS,
+  DEFAULT_FORMAL_GATE_ENABLED,
   DEFAULT_NEGATIVE_CONTROL_CONFIG,
   SWEEP_CONFIG_BOUNDS,
   SWEEP_CONFIG_SCHEMA_VERSION,
@@ -33,8 +36,12 @@ import {
   type SweepConfig,
   type SweepModelHostConfig,
   type SweepNegativeControlConfig,
+  modelSignatureOf,
+  type SweepArmConfig,
 } from './config.js';
 import { parseArms, parseProblemSelection } from './config-arms.js';
+import { parseGroundingCampaign, parseScoreboardCampaign } from './config-campaign.js';
+import type { GroundingSuccessCriterion } from './grounding-criterion.js';
 import {
   asArray,
   asIntegerInRange,
@@ -70,9 +77,13 @@ const TOP_LEVEL_FIELDS: readonly string[] = [
   'outputDir',
   'captureArtifacts',
   'negativeControl',
+  'formalGateEnabled',
   'concurrency',
   'transportRetry',
   'killSwitch',
+  'replayGateReportPath',
+  'scoreboardCampaign',
+  'groundingCampaign',
 ];
 
 /**
@@ -663,6 +674,7 @@ interface ParsedOptionals {
   readonly outputDir: string;
   readonly captureArtifacts: boolean;
   readonly negativeControl: SweepNegativeControlConfig;
+  readonly formalGateEnabled: boolean;
 }
 
 /** Parse the optional/defaulted knobs, short-circuiting on the first failure. */
@@ -706,6 +718,14 @@ function parseOptionals(record: Record<string, unknown>): SweepConfigResult<Pars
   if (!negativeControl.ok) {
     return negativeControl;
   }
+  const formalGateEnabled = optionalBoolean(
+    record,
+    'formalGateEnabled',
+    DEFAULT_FORMAL_GATE_ENABLED,
+  );
+  if (!formalGateEnabled.ok) {
+    return formalGateEnabled;
+  }
   return configValue({
     prices: prices.value,
     transportRetry: transportRetry.value,
@@ -715,6 +735,7 @@ function parseOptionals(record: Record<string, unknown>): SweepConfigResult<Pars
     outputDir: outputDir.value,
     captureArtifacts: captureArtifacts.value,
     negativeControl: negativeControl.value,
+    formalGateEnabled: formalGateEnabled.value,
   });
 }
 
@@ -758,6 +779,38 @@ export function parseSweepConfig(raw: unknown): SweepConfigResult<SweepConfig> {
   if (!optionals.ok) {
     return optionals;
   }
+  const campaign = parseScoreboardCampaign(record.scoreboardCampaign, problems.value);
+  if (!campaign.ok) {
+    return campaign;
+  }
+  const grounding = parseGroundingCampaign(
+    record.groundingCampaign,
+    problems.value,
+    sections.value.reproducibility.sampleCount,
+  );
+  if (!grounding.ok) {
+    return grounding;
+  }
+  if (campaign.value !== undefined && grounding.value !== undefined) {
+    return configFailure(
+      'CAMPAIGN_INVALID',
+      'groundingCampaign',
+      'a config declares at most one Campaign block',
+    );
+  }
+  if (grounding.value !== undefined) {
+    const shape = checkGroundingArms(arms.value, grounding.value.successCriterion);
+    if (shape !== null) {
+      return shape;
+    }
+  }
+  const replayGateReportPath = parseReplayGateReportPath(
+    record.replayGateReportPath,
+    grounding.value?.replayGateReportPath,
+  );
+  if (!replayGateReportPath.ok) {
+    return replayGateReportPath;
+  }
   return configValue({
     ...identity.value,
     arms: arms.value,
@@ -765,5 +818,84 @@ export function parseSweepConfig(raw: unknown): SweepConfigResult<SweepConfig> {
     ks: ks.value,
     ...sections.value,
     ...optionals.value,
+    // Left off when absent, so a config without the field or block hashes exactly as before.
+    ...(replayGateReportPath.value === undefined
+      ? {}
+      : { replayGateReportPath: replayGateReportPath.value }),
+    ...(campaign.value === undefined ? {} : { scoreboardCampaign: campaign.value }),
+    ...(grounding.value === undefined ? {} : { groundingCampaign: grounding.value }),
   });
+}
+
+/**
+ * The optional top-level Replay_Gate report path, `undefined` when absent.
+ *
+ * A config naming two different reports is refused: the start check reads one, and a silent
+ * precedence would let the other look enforced when it is not.
+ */
+function parseReplayGateReportPath(
+  raw: unknown,
+  groundingPath: string | undefined,
+): SweepConfigResult<string | undefined> {
+  if (raw === undefined) {
+    return configValue(undefined);
+  }
+  const path = asTrimmedString(raw);
+  if (path === null) {
+    return configFailure(
+      'FIELD_NOT_A_STRING',
+      'replayGateReportPath',
+      'replayGateReportPath must be a non-empty string',
+    );
+  }
+  if (groundingPath !== undefined && groundingPath !== path) {
+    return configFailure(
+      'CAMPAIGN_INVALID',
+      'replayGateReportPath',
+      `replayGateReportPath names ${path} and groundingCampaign.replayGateReportPath names ${groundingPath}; declare one report`,
+    );
+  }
+  return configValue(path);
+}
+
+/**
+ * The Grounding Campaign's arms: exactly one `control` and one `grounded` arm per Model_Arm.
+ *
+ * Checked here rather than in the block's own parser because it is a fact about the `arms`
+ * list, and a Campaign missing one side of a pair cannot produce a Slot_Pair at all (Req 10.2).
+ */
+function checkGroundingArms(
+  arms: readonly SweepArmConfig[],
+  criterion: GroundingSuccessCriterion,
+): SweepConfigResult<SweepConfig> | null {
+  const expected = criterion.modelArmCount * 2;
+  if (arms.length !== expected) {
+    return configFailure(
+      'CAMPAIGN_INVALID',
+      'arms',
+      `a Grounding Campaign declares ${String(expected)} arms: one control and one grounded arm for each of ${String(criterion.modelArmCount)} models`,
+    );
+  }
+  const byModel = new Map<string, string[]>();
+  for (const arm of arms) {
+    const signature = modelSignatureOf(arm, MODEL_TASKS);
+    byModel.set(signature, [...(byModel.get(signature) ?? []), arm.strategy ?? 'control']);
+  }
+  if (byModel.size !== criterion.modelArmCount) {
+    return configFailure(
+      'CAMPAIGN_INVALID',
+      'arms',
+      `a Grounding Campaign measures ${String(criterion.modelArmCount)} distinct Model_Arms`,
+    );
+  }
+  for (const [signature, strategies] of byModel) {
+    if ([...strategies].sort().join(',') !== 'control,grounded') {
+      return configFailure(
+        'CAMPAIGN_INVALID',
+        'arms',
+        `the arms of model ${signature} must be exactly one control and one grounded arm`,
+      );
+    }
+  }
+  return null;
 }

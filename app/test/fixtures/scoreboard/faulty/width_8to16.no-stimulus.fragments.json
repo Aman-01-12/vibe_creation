@@ -1,0 +1,9 @@
+{
+  "runLength": 2,
+  "expectations": {
+    "data_out": "{txn_data_in[0], txn_data_in[1]}"
+  },
+  "stimulus": {
+    "ac1_under_simulation_width_8to16_produces_th": "idle_cycle;"
+  }
+}
