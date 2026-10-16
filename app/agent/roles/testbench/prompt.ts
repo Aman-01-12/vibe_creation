@@ -68,6 +68,8 @@ import type { RepairHint } from '../../orchestrator/repair-hint.js';
 import type { KnowledgePassage } from '@app/knowledge';
 import type { ClockingContract, ModuleInterface, PortDirection, Spec } from '@app/core';
 
+import { CHECK_REPORT_TASK_PATH } from '@app/tools';
+
 import { CHECK_KEYWORD } from './signalling.js';
 import type {
   RepairTestbenchModelInput,
@@ -106,7 +108,7 @@ const HANDSHAKE_QUALIFIER_KEYWORDS: readonly string[] = [
  * idiomatic. Stated over any arithmetic or bit-manipulation result rather than over
  * one operator, so it does not read as a special case.
  */
-const EXPECTED_VALUE_RULE = [
+export const EXPECTED_VALUE_RULE = [
   'Expected values: COMPUTE each one in the testbench, as a Verilog expression over',
   'the same stimulus you drive (for example `expected_sum = a + b + cin;`), and',
   'compare the output against that. Do NOT write in a constant you worked out by',
@@ -130,7 +132,7 @@ const EXPECTED_VALUE_RULE = [
  * signed literal) rather than as a general "write portable Verilog", which a model
  * can agree with and still violate line by line.
  */
-const DIALECT_RULE = [
+export const DIALECT_RULE = [
   'Dialect: the testbench is compiled as Verilog-2001 by Icarus Verilog, which REJECTS',
   'SystemVerilog constructs - a testbench that does not compile measures nothing.',
   '  - Declare EVERY `reg`, `integer`, and array at MODULE scope, before the first',
@@ -143,6 +145,23 @@ const DIALECT_RULE = [
   '  - There is no array-with-initializer syntax; assign array elements inside an',
   '    `initial` block.',
   "  - Write a signed literal with the sign in front: `-9'sd1`, never `9'sd-1`.",
+].join('\n');
+
+/**
+ * The Check_Report_Rule: each check is reported through the harness task, with both values.
+ *
+ * Unconditional, and it demands BOTH values because the expectation alone is the measured-null
+ * condition: the observed value is what makes a FAIL actionable. Path from the harness constant.
+ */
+export const CHECK_REPORT_RULE = [
+  'Reporting: report EVERY required check by calling the harness reporting task, once per',
+  'check, as a statement:',
+  `  ${CHECK_REPORT_TASK_PATH}("<name>", <expected>, <actual>);`,
+  'The three arguments are, in this order, the exact check name as a string literal, the value',
+  'you EXPECTED, and the value the design ACTUALLY produced. Pass BOTH at the moment you compare',
+  'them, while you still hold each one: passing only one is no better than passing neither. The',
+  'task decides PASS or FAIL and prints the line with both values. A `$display` that prints FAIL',
+  'is NOT a substitute for this call.',
 ].join('\n');
 
 /**
@@ -169,7 +188,7 @@ const DIALECT_RULE = [
  * nothing. The cross-reference is stated in the prompt text so the two cannot be read
  * as a conflict.
  */
-const CONCURRENCY_RULE = [
+export const CONCURRENCY_RULE = [
   'Concurrency: a design is a CONCURRENT machine you OBSERVE, not a sequential program',
   'you step. At one active clock edge every register updates at once, so a reset',
   'deassertion and the first state update can resolve on the SAME edge - "reset ends,',
@@ -202,7 +221,7 @@ function describeReset(clocking: ClockingContract): string {
 }
 
 /** Render the module interface as a compact, unambiguous port list. */
-function describeInterface(spec: Spec): string {
+export function describeInterface(spec: Spec): string {
   const ports = spec.moduleInterface.ports
     .map((port) => `  - ${port.name}: ${port.direction} [${port.width}]`)
     .join('\n');
@@ -226,7 +245,7 @@ function describeInterface(spec: Spec): string {
  * The reset-free sentence is emitted only when there is genuinely no reset port, so
  * the model is never told to reason about a control this module does not have.
  */
-function describeStateAnchoring(clocking: ClockingContract): string {
+export function describeStateAnchoring(clocking: ClockingContract): string {
   const reachableAnchors =
     clocking.resetName === null
       ? [
@@ -344,7 +363,7 @@ function describeTiming(moduleInterface: ModuleInterface): string {
  * than over accumulation, because the same shape reaches any design that accepts data
  * under a qualifier.
  */
-function describeInputWindow(moduleInterface: ModuleInterface): string {
+export function describeInputWindow(moduleInterface: ModuleInterface): string {
   const qualifiers = inputQualifierNames(moduleInterface);
   const legalDerivation =
     qualifiers.length === 0
@@ -405,7 +424,7 @@ export function declaresVectorDataPort(moduleInterface: ModuleInterface): boolea
  * a committed fixture pair cannot make: a fixture written to obey the rule shows the
  * rule is sufficient, never that prose was enough to obtain it.
  */
-function describeStimulusAdequacy(moduleInterface: ModuleInterface): string {
+export function describeStimulusAdequacy(moduleInterface: ModuleInterface): string {
   const rangeRules = [
     '  - drive the lowest and the highest value each declared port can carry, so a',
     '    boundary that sits one position off the specified one is reached rather than',
@@ -445,15 +464,38 @@ const OUTPUT_CONTRACT_INSTRUCTION =
   'Return a JSON object with exactly one field: "source", whose value is the\n' +
   'complete Verilog testbench as a string. Return nothing else.';
 
+/** The Grounded_Arm's output contract: one fenced Verilog block, so no JSON escaping (Q-08). */
+export const FENCED_OUTPUT_CONTRACT_INSTRUCTION =
+  'Return the complete Verilog testbench as exactly one fenced code block that opens\n' +
+  'with ```verilog and closes with ```. Return nothing else.';
+
+/** The label the Grounded_Arm puts above the Spec's Architecture_Text (Q-02). */
+export const ARCHITECTURE_SECTION_LABEL =
+  "Specified behaviour (from the Spec's architecture text):";
+
+/** Names the concurrency rule by content, because the repair prompt does not restate it. */
+export const ARCHITECTURE_FRAMING =
+  'Use it to decide what each output must be and how each input must be driven; it is ' +
+  'not code to copy into the testbench, and the concurrency rule (no second ' +
+  'implementation of the design inside the testbench) still applies.';
+
+/** The Architecture_Section lines, or none for a whitespace-only Architecture_Text (Req 1.3). */
+export function describeArchitectureSection(spec: Spec): readonly string[] {
+  if (spec.architecture.trim().length === 0) {
+    return [];
+  }
+  return [ARCHITECTURE_SECTION_LABEL, ARCHITECTURE_FRAMING, spec.architecture, ''];
+}
+
 /** Render each required check as a naming instruction traceable to its source. */
-function describeRequiredChecks(checks: readonly RequiredCheck[]): string {
+export function describeRequiredChecks(checks: readonly RequiredCheck[]): string {
   return checks
     .map((check) => `  - ${CHECK_KEYWORD} ${check.name}: ${check.description}`)
     .join('\n');
 }
 
 /** Render OKF passages as clearly-labeled, size-bounded hints (never authority). */
-function describeOkfHints(passages: readonly KnowledgePassage[]): string {
+export function describeOkfHints(passages: readonly KnowledgePassage[]): string {
   if (passages.length === 0) {
     return 'No OKF hints were retrieved.';
   }
@@ -465,21 +507,30 @@ function describeOkfHints(passages: readonly KnowledgePassage[]): string {
 /**
  * The instruction block that pins the output contract, the independence rule, and
  * the expected-value, state-anchoring, concurrency, timing, input-window,
- * stimulus-adequacy, and dialect rules for the interface actually declared by the
- * Spec.
+ * stimulus-adequacy, dialect, and check-report rules for the interface actually declared
+ * by the Spec.
  *
  * Order is deliberate. The concurrency rule sits between state anchoring and the two
  * moment-choosing rules because it is the mental model those two rest on, and because
- * it cross-references the anchoring rule immediately above it. The dialect rule sits
- * last among the rules, next to the output contract, because it is the only one about
- * how the file must be WRITTEN rather than about what it must assert.
+ * it cross-references the anchoring rule immediately above it. The dialect and
+ * check-report rules sit last, next to the output contract, because they are about how
+ * the file is WRITTEN and how its result is REPORTED rather than about what it asserts.
  */
-function instructions(checks: readonly RequiredCheck[], moduleInterface: ModuleInterface): string {
+/** The four opening lines every generation prompt starts with, whatever its approach. */
+export const GENERATION_PREAMBLE: readonly string[] = [
+  'You are the Testbench_Agent for a single Verilog module.',
+  'You are given ONLY the approved Spec, the intent, and OKF hints. You are NOT',
+  'given any implementation or RTL, and you must NOT assume one: compute every',
+  'expected value independently from the Spec, never from an implementation.',
+];
+
+function instructions(
+  checks: readonly RequiredCheck[],
+  moduleInterface: ModuleInterface,
+  outputContract: string,
+): string {
   return [
-    'You are the Testbench_Agent for a single Verilog module.',
-    'You are given ONLY the approved Spec, the intent, and OKF hints. You are NOT',
-    'given any implementation or RTL, and you must NOT assume one: compute every',
-    'expected value independently from the Spec, never from an implementation.',
+    ...GENERATION_PREAMBLE,
     '',
     'Write a self-checking Verilog testbench that instantiates the module by its',
     'interface, drives nominal stimulus AND boundary/error stimulus implied by the',
@@ -500,8 +551,10 @@ function instructions(checks: readonly RequiredCheck[], moduleInterface: ModuleI
     '',
     DIALECT_RULE,
     '',
-    'For EACH required check below, print exactly one line to standard output of',
-    `the form "${CHECK_KEYWORD} <name> PASS" or "${CHECK_KEYWORD} <name> FAIL",`,
+    CHECK_REPORT_RULE,
+    '',
+    'For EACH required check below, that task call prints exactly one line to standard',
+    `output of the form "${CHECK_KEYWORD} <name> PASS" or "${CHECK_KEYWORD} <name> FAIL",`,
     'using the exact check name given. Use $finish when done. You may print other',
     'diagnostics freely; only these CHECK lines are read as the verdict.',
     'The verdict word is exactly PASS or FAIL, never PASSED or FAILURE. A reason may',
@@ -512,7 +565,7 @@ function instructions(checks: readonly RequiredCheck[], moduleInterface: ModuleI
     'Required checks (emit every one, with its exact name):',
     describeRequiredChecks(checks),
     '',
-    OUTPUT_CONTRACT_INSTRUCTION,
+    outputContract,
   ].join('\n');
 }
 
@@ -529,8 +582,40 @@ export function buildTestbenchModelInput(
   checks: readonly RequiredCheck[],
 ): ModelRequest {
   const prompt = [
-    instructions(checks, input.spec.moduleInterface),
+    instructions(checks, input.spec.moduleInterface, OUTPUT_CONTRACT_INSTRUCTION),
     '',
+    generationSections(input),
+  ].join('\n');
+  return { prompt };
+}
+
+/**
+ * The Grounded_Arm's generation request: the Control request with the Architecture_Section
+ * and the fenced contract. Built from the same RTL-free input, so isolation is unchanged.
+ */
+export function buildGroundedTestbenchModelInput(
+  input: TestbenchGenerationInput,
+  checks: readonly RequiredCheck[],
+): ModelRequest {
+  const prompt = [
+    instructions(checks, input.spec.moduleInterface, FENCED_OUTPUT_CONTRACT_INSTRUCTION),
+    '',
+    sectionsWithArchitecture(input, describeArchitectureSection(input.spec)),
+  ].join('\n');
+  return { prompt };
+}
+
+/** The Spec sections that follow a generation instruction block, whatever its approach. */
+export function generationSections(input: TestbenchGenerationInput): string {
+  return sectionsWithArchitecture(input, []);
+}
+
+/** The generation Spec sections with `architecture` lines placed before the interface. */
+function sectionsWithArchitecture(
+  input: TestbenchGenerationInput,
+  architecture: readonly string[],
+): string {
+  return [
     'Intent summary:',
     input.intentSummary,
     '',
@@ -540,13 +625,13 @@ export function buildTestbenchModelInput(
     'Constraints:',
     input.spec.constraints.map((constraint) => `  - ${constraint}`).join('\n'),
     '',
+    ...architecture,
     'Module interface:',
     describeInterface(input.spec),
     '',
     'OKF hints (advisory only, never authority over correctness):',
     describeOkfHints(input.okfPassages),
   ].join('\n');
-  return { prompt };
 }
 
 /**
@@ -583,14 +668,19 @@ export function describeRepairHint(hint: RepairHint): string {
  * cross-references the relevant rule by name; the model is not left without
  * it.
  */
-function repairInstructions(hint: RepairHint): string {
+/** The six opening lines every repair prompt starts with, whatever its approach. */
+export const REPAIR_PREAMBLE: readonly string[] = [
+  'You are the Testbench_Agent for a single Verilog module, revising a',
+  'testbench you previously wrote for this Spec. You are given ONLY the',
+  'approved Spec, your previous testbench source, and a hint about what',
+  'failed. You are NOT given any implementation or RTL, and you must NOT',
+  'assume one: compute every expected value independently from the Spec,',
+  'never from an implementation.',
+];
+
+function repairInstructions(hint: RepairHint, outputContract: string): string {
   return [
-    'You are the Testbench_Agent for a single Verilog module, revising a',
-    'testbench you previously wrote for this Spec. You are given ONLY the',
-    'approved Spec, your previous testbench source, and a hint about what',
-    'failed. You are NOT given any implementation or RTL, and you must NOT',
-    'assume one: compute every expected value independently from the Spec,',
-    'never from an implementation.',
+    ...REPAIR_PREAMBLE,
     '',
     describeRepairHint(hint),
     '',
@@ -599,7 +689,7 @@ function repairInstructions(hint: RepairHint): string {
     'before, and verify every acceptance criterion. Do not remove or rename',
     'any `CHECK <name>` line already present.',
     '',
-    OUTPUT_CONTRACT_INSTRUCTION,
+    outputContract,
   ].join('\n');
 }
 
@@ -613,20 +703,50 @@ function repairInstructions(hint: RepairHint): string {
  * the model already has a testbench to revise rather than a blank page.
  */
 export function buildRepairModelInput(input: RepairTestbenchModelInput): ModelRequest {
+  return repairRequest(input, OUTPUT_CONTRACT_INSTRUCTION, repairSpecSections(input));
+}
+
+/** The Grounded_Arm's repair request: the Control repair plus the section and the contract. */
+export function buildGroundedRepairModelInput(input: RepairTestbenchModelInput): ModelRequest {
+  const sections = repairSectionsWithArchitecture(input, describeArchitectureSection(input.spec));
+  return repairRequest(input, FENCED_OUTPUT_CONTRACT_INSTRUCTION, sections);
+}
+
+function repairRequest(
+  input: RepairTestbenchModelInput,
+  outputContract: string,
+  specSections: string,
+): ModelRequest {
   const prompt = [
-    repairInstructions(input.hint),
+    repairInstructions(input.hint, outputContract),
     '',
+    specSections,
+    '',
+    'Previous testbench source (revise this):',
+    input.previousSource,
+  ].join('\n');
+  return { prompt };
+}
+
+/** The Spec sections a repair prompt carries, whatever its approach. */
+export function repairSpecSections(input: RepairTestbenchModelInput): string {
+  return repairSectionsWithArchitecture(input, []);
+}
+
+/** The repair Spec sections with `architecture` lines placed before the interface. */
+function repairSectionsWithArchitecture(
+  input: RepairTestbenchModelInput,
+  architecture: readonly string[],
+): string {
+  return [
     'Spec goal:',
     input.spec.goal,
     '',
     'Constraints:',
     input.spec.constraints.map((constraint) => `  - ${constraint}`).join('\n'),
     '',
+    ...architecture,
     'Module interface:',
     describeInterface(input.spec),
-    '',
-    'Previous testbench source (revise this):',
-    input.previousSource,
   ].join('\n');
-  return { prompt };
 }

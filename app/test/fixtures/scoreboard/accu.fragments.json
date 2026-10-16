@@ -1,0 +1,9 @@
+{
+  "runLength": 4,
+  "expectations": {
+    "data_out": "txn_data_in[0] + txn_data_in[1] + txn_data_in[2] + txn_data_in[3]"
+  },
+  "stimulus": {
+    "ac1_under_simulation_accu_produces_the_behav": "repeat (16) begin stage_data_in = $random; send_transaction; end"
+  }
+}

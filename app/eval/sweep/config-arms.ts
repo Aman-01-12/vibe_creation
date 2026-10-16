@@ -12,7 +12,7 @@
 // either one model or a complete per-role map (never both, never neither), and arm
 // names must be unique because they key every persisted record.
 
-import { MODEL_TASKS, type ModelTask } from '@app/agent';
+import { MODEL_TASKS, STRATEGY_ARMS, type ModelTask, type StrategyArm } from '@app/agent';
 
 import { asRtllmCategory, type RtllmCategory } from '../corpus/pinned-source.js';
 import {
@@ -124,7 +124,48 @@ function parseArm(raw: unknown, index: number): SweepConfigResult<SweepArmConfig
   if (!models.ok) {
     return models;
   }
-  return configValue({ name, roleModels: models.value });
+  if (record.strategy === undefined) {
+    return configValue({ name, roleModels: models.value });
+  }
+  if (!STRATEGY_ARMS.includes(record.strategy as StrategyArm)) {
+    return configFailure(
+      'ARM_STRATEGY_INVALID',
+      `${field}.strategy`,
+      `${field}.strategy must be one of ${STRATEGY_ARMS.join(', ')}`,
+    );
+  }
+  return configValue({ name, roleModels: models.value, strategy: record.strategy as StrategyArm });
+}
+
+/** The key two arms collide on: the same models in every role under the same strategy. */
+function pairingKey(arm: SweepArmConfig): string {
+  const models = MODEL_TASKS.map((task) => arm.roleModels[task]);
+  return JSON.stringify([models, arm.strategy ?? null]);
+}
+
+/**
+ * Refuse two arms that would measure the same (models, strategy) cell (Req 7.11).
+ * Applies only when some arm declares a strategy, so strategy-free configs keep today's rules.
+ */
+function duplicatedStrategyArm(
+  arms: readonly SweepArmConfig[],
+): SweepConfigResult<readonly SweepArmConfig[]> {
+  if (!arms.some((arm) => arm.strategy !== undefined)) {
+    return configValue(arms);
+  }
+  const seen = new Set<string>();
+  for (const [index, arm] of arms.entries()) {
+    const key = pairingKey(arm);
+    if (seen.has(key)) {
+      return configFailure(
+        'ARM_STRATEGY_DUPLICATED',
+        `arms[${index}]`,
+        `arms[${index}] repeats the models and strategy of an earlier arm; each (models, strategy) pair is one cell`,
+      );
+    }
+    seen.add(key);
+  }
+  return configValue(arms);
 }
 
 /**
@@ -163,7 +204,7 @@ export function parseArms(raw: unknown): SweepConfigResult<readonly SweepArmConf
     seen.add(arm.value.name);
     arms.push(arm.value);
   }
-  return configValue(arms);
+  return duplicatedStrategyArm(arms);
 }
 
 /** Parse the explicit-id selection, bounding the list and requiring non-blank ids. */

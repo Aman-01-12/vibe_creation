@@ -29,6 +29,10 @@ import type { KnowledgePassage } from '@app/knowledge';
 import type { RepairHint } from '../../orchestrator/repair-hint.js';
 import type { ModelRouterFailure } from '../../model-router/index.js';
 
+import type { CheckingApproach } from './approach-router.js';
+import type { TestbenchParseRefusal } from './parse.js';
+import type { FragmentRefusal } from './scoreboard/fragments.js';
+
 /**
  * The complete, closed set of inputs from which a Testbench is generated.
  *
@@ -120,7 +124,12 @@ export interface TestbenchDraft {
 
 /** Why testbench generation could not yield a validated Testbench (fail safe). */
 export type TestbenchGenerationFailureReason =
-  'spec-not-approved' | 'no-simulation-criteria' | 'model-call-failed' | 'unparseable-output';
+  | 'spec-not-approved'
+  | 'no-simulation-criteria'
+  | 'model-call-failed'
+  | 'unparseable-output'
+  /** The interface cannot carry a Scoreboard_Scaffold; raised before any model call. */
+  | 'scaffold-unrenderable';
 
 /** A failure that prevented producing a Testbench, carrying a sanitized detail. */
 export interface TestbenchGenerationFailure {
@@ -129,6 +138,8 @@ export interface TestbenchGenerationFailure {
   readonly detail: string;
   /** The redacted router failure, when the cause was the Model_Router. */
   readonly routerFailure?: ModelRouterFailure;
+  /** The closed parse-refusal code; present exactly when `reason` is `unparseable-output`. */
+  readonly parseRefusal?: TestbenchParseRefusal;
 }
 
 /** A required per-check signal the generated testbench must emit. */
@@ -150,6 +161,8 @@ export interface TestbenchGenerated {
   readonly testbench: Testbench;
   /** The required checks confirmed present in the source. */
   readonly checks: readonly RequiredCheck[];
+  /** How the testbench decides when to compare an output; copied onto the eval record. */
+  readonly checkingApproach: CheckingApproach;
 }
 
 /**
@@ -163,6 +176,17 @@ export interface TestbenchCoverageIncomplete {
   /** The required checks whose `CHECK <name>` emission was absent from the source. */
   readonly missingChecks: readonly RequiredCheck[];
   /** The rejected draft source, so the caller can inspect or re-prompt. */
+  readonly source: string;
+}
+
+/**
+ * The model's Model_Fragments were refused at the trust boundary, so no testbench was
+ * assembled (testbench-in-order-scoreboard, Req 4.10). The loop turns this into one repair.
+ */
+export interface TestbenchFragmentsRefused {
+  readonly status: 'fragments-refused';
+  readonly refusal: FragmentRefusal;
+  /** The model's own reply, bounded by the reply cap, so a repair can revise it. */
   readonly source: string;
 }
 
@@ -180,4 +204,7 @@ export interface TestbenchGenerationFailed {
  * any produced Testbench.
  */
 export type TestbenchGenerationOutcome =
-  TestbenchGenerated | TestbenchCoverageIncomplete | TestbenchGenerationFailed;
+  | TestbenchGenerated
+  | TestbenchCoverageIncomplete
+  | TestbenchFragmentsRefused
+  | TestbenchGenerationFailed;

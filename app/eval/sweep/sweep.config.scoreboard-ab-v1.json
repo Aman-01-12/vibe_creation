@@ -1,0 +1,242 @@
+{
+  "_README": [
+    "IN-ORDER SCOREBOARD A/B CAMPAIGN (testbench-in-order-scoreboard, task 9.2).",
+    "",
+    "22 Sweep_Arms: each of the 11 baseline models runs a Control_Arm (Cycle_Timed, today's",
+    "testbench) and a Treatment_Arm (In_Order_Scoreboard for Streaming_Group designs). Pair-major",
+    "dispatch keeps each Control slot next to its Treatment slot, so drift hits both arms alike.",
+    "",
+    "Designs: the 15 stage1-screen-dialect-v1 designs, then the Streaming_Supplement printed by",
+    "app/eval/scripts/scoreboard-supplement.ts. 19 designs x 11 models x 3 samples x 2 arms =",
+    "1254 slots. Every other setting is copied verbatim from the baseline config.",
+    "",
+    "The Success_Criterion below is pre-registered: the parser accepts only these values, and",
+    "the manifest records them before the first dispatch. At most 2 resumes are allowed.",
+    "",
+    "npm run eval:sweep -- --config app/eval/sweep/sweep.config.scoreboard-ab-v1.json",
+    "",
+    "The credential NEVER goes in this file. It comes only from .secrets/bedrock-token."
+  ],
+  "schemaVersion": 1,
+  "runName": "scoreboard-ab-v1",
+  "arms": [
+    {
+      "name": "moonshotai.kimi-k2.5.control",
+      "model": "moonshotai.kimi-k2.5",
+      "strategy": "control"
+    },
+    {
+      "name": "moonshotai.kimi-k2.5.treatment",
+      "model": "moonshotai.kimi-k2.5",
+      "strategy": "treatment"
+    },
+    {
+      "name": "zai.glm-5.control",
+      "model": "zai.glm-5",
+      "strategy": "control"
+    },
+    {
+      "name": "zai.glm-5.treatment",
+      "model": "zai.glm-5",
+      "strategy": "treatment"
+    },
+    {
+      "name": "zai.glm-4.7.control",
+      "model": "zai.glm-4.7",
+      "strategy": "control"
+    },
+    {
+      "name": "zai.glm-4.7.treatment",
+      "model": "zai.glm-4.7",
+      "strategy": "treatment"
+    },
+    {
+      "name": "deepseek.v3.2.control",
+      "model": "deepseek.v3.2",
+      "strategy": "control"
+    },
+    {
+      "name": "deepseek.v3.2.treatment",
+      "model": "deepseek.v3.2",
+      "strategy": "treatment"
+    },
+    {
+      "name": "qwen.qwen3-coder-480b-a35b-instruct.control",
+      "model": "qwen.qwen3-coder-480b-a35b-instruct",
+      "strategy": "control"
+    },
+    {
+      "name": "qwen.qwen3-coder-480b-a35b-instruct.treatment",
+      "model": "qwen.qwen3-coder-480b-a35b-instruct",
+      "strategy": "treatment"
+    },
+    {
+      "name": "qwen.qwen3-coder-next.control",
+      "model": "qwen.qwen3-coder-next",
+      "strategy": "control"
+    },
+    {
+      "name": "qwen.qwen3-coder-next.treatment",
+      "model": "qwen.qwen3-coder-next",
+      "strategy": "treatment"
+    },
+    {
+      "name": "qwen.qwen3-coder-30b-a3b-instruct.control",
+      "model": "qwen.qwen3-coder-30b-a3b-instruct",
+      "strategy": "control"
+    },
+    {
+      "name": "qwen.qwen3-coder-30b-a3b-instruct.treatment",
+      "model": "qwen.qwen3-coder-30b-a3b-instruct",
+      "strategy": "treatment"
+    },
+    {
+      "name": "qwen.qwen3-235b-a22b-2507.control",
+      "model": "qwen.qwen3-235b-a22b-2507",
+      "strategy": "control"
+    },
+    {
+      "name": "qwen.qwen3-235b-a22b-2507.treatment",
+      "model": "qwen.qwen3-235b-a22b-2507",
+      "strategy": "treatment"
+    },
+    {
+      "name": "mistral.mistral-large-3-675b-instruct.control",
+      "model": "mistral.mistral-large-3-675b-instruct",
+      "strategy": "control"
+    },
+    {
+      "name": "mistral.mistral-large-3-675b-instruct.treatment",
+      "model": "mistral.mistral-large-3-675b-instruct",
+      "strategy": "treatment"
+    },
+    {
+      "name": "mistral.devstral-2-123b.control",
+      "model": "mistral.devstral-2-123b",
+      "strategy": "control"
+    },
+    {
+      "name": "mistral.devstral-2-123b.treatment",
+      "model": "mistral.devstral-2-123b",
+      "strategy": "treatment"
+    },
+    {
+      "name": "minimax.minimax-m2.5.control",
+      "model": "minimax.minimax-m2.5",
+      "strategy": "control"
+    },
+    {
+      "name": "minimax.minimax-m2.5.treatment",
+      "model": "minimax.minimax-m2.5",
+      "strategy": "treatment"
+    }
+  ],
+  "problems": {
+    "kind": "ids",
+    "ids": [
+      "rtllm/arithmetic/adder_8bit",
+      "rtllm/arithmetic/adder_16bit",
+      "rtllm/arithmetic/adder_pipe_64bit",
+      "rtllm/arithmetic/multi_16bit",
+      "rtllm/arithmetic/multi_pipe_8bit",
+      "rtllm/arithmetic/multi_booth_8bit",
+      "rtllm/arithmetic/div_16bit",
+      "rtllm/control/fsm",
+      "rtllm/control/counter_12",
+      "rtllm/control/JC_counter",
+      "rtllm/memory/right_shifter",
+      "rtllm/memory/asyn_fifo",
+      "rtllm/miscellaneous/signal_generator",
+      "rtllm/miscellaneous/calendar",
+      "rtllm/miscellaneous/traffic_light",
+      "rtllm/arithmetic/accu",
+      "rtllm/miscellaneous/parallel2serial",
+      "rtllm/miscellaneous/serial2parallel",
+      "rtllm/miscellaneous/width_8to16"
+    ]
+  },
+  "sampleCount": 3,
+  "ks": [1, 3],
+  "seed": 20240601,
+  "temperature": 0,
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+  "limits": {
+    "cpu": 1,
+    "memMb": 512,
+    "procs": 128,
+    "diskMb": 128,
+    "wallMs": 30000
+  },
+  "costEnvelopeCents": 25,
+  "modelHost": {
+    "region": "us-east-1",
+    "maxOutputTokens": 6000,
+    "requestTimeoutMs": 240000
+  },
+  "prices": {},
+  "outputDir": ".eval-runs/scoreboard-ab-v1",
+  "captureArtifacts": true,
+  "concurrency": 3,
+  "transportRetry": {
+    "maxAttempts": 4,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000,
+    "jitterRatio": 0.5,
+    "breakerFailureThreshold": 8,
+    "breakerCooldownMs": 60000,
+    "breakerMaxTrips": 3
+  },
+  "_killSwitch": [
+    "1254 planned slots plus headroom; 15.2h wall. Stops dispatch at a sample boundary, so every recorded slot stays resumable."
+  ],
+  "killSwitch": {
+    "maxWallClockMs": 54720000,
+    "maxSamples": 1394
+  },
+  "scoreboardCampaign": {
+    "designGroups": {
+      "rtllm/arithmetic/adder_8bit": "cycle-exact",
+      "rtllm/arithmetic/adder_16bit": "cycle-exact",
+      "rtllm/arithmetic/adder_pipe_64bit": "cycle-exact",
+      "rtllm/arithmetic/multi_16bit": "streaming",
+      "rtllm/arithmetic/multi_pipe_8bit": "cycle-exact",
+      "rtllm/arithmetic/multi_booth_8bit": "cycle-exact",
+      "rtllm/arithmetic/div_16bit": "cycle-exact",
+      "rtllm/control/fsm": "cycle-exact",
+      "rtllm/control/counter_12": "cycle-exact",
+      "rtllm/control/JC_counter": "cycle-exact",
+      "rtllm/memory/right_shifter": "cycle-exact",
+      "rtllm/memory/asyn_fifo": "cycle-exact",
+      "rtllm/miscellaneous/signal_generator": "cycle-exact",
+      "rtllm/miscellaneous/calendar": "cycle-exact",
+      "rtllm/miscellaneous/traffic_light": "cycle-exact",
+      "rtllm/arithmetic/accu": "streaming",
+      "rtllm/miscellaneous/parallel2serial": "streaming",
+      "rtllm/miscellaneous/serial2parallel": "streaming",
+      "rtllm/miscellaneous/width_8to16": "streaming"
+    },
+    "streamingSupplement": [
+      "rtllm/arithmetic/accu",
+      "rtllm/miscellaneous/parallel2serial",
+      "rtllm/miscellaneous/serial2parallel",
+      "rtllm/miscellaneous/width_8to16"
+    ],
+    "successCriterion": {
+      "minModelArmsGreater": 9,
+      "maxModelArmsAgreementLower": 2,
+      "tieCountsAsGreater": false,
+      "undefinedAgreementCountsAsLower": true,
+      "modelArmCount": 11
+    },
+    "baseline": {
+      "resultsPath": ".eval-runs/stage1-screen-dialect-v1/results.jsonl",
+      "configHash": "e27c5b40e6e7983f"
+    },
+    "maxResumes": 2
+  }
+}

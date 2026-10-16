@@ -15,15 +15,20 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
+import { SIMULATION_HARNESS_VERSION } from '@app/tools';
+
 import { NO_REPAIR } from '@app/agent';
 import type { SetupFailureCause, VerificationOutcome, VerificationSetupFailed } from '@app/agent';
 import {
   makePort,
+  makeTimingContract,
   newUlid,
   type AcceptanceCriterion,
+  type ModuleInterface,
   type Port,
   type PortDirection,
   type Spec,
+  type TimingContract,
 } from '@app/core';
 
 import { sampleSeed } from '../reproducibility.js';
@@ -45,7 +50,8 @@ import {
   type ResultsLogPort,
   type SweepSampleRecord,
 } from './results-log.js';
-import { SweepRunner } from './runner.js';
+import { campaignStartRefusal, SweepRunner } from './runner.js';
+import { PRE_REGISTERED_SUCCESS_CRITERION } from './success-criterion.js';
 import { THROTTLE_GOVERNOR_LIMITS, ThrottleGovernor } from './throttle-governor.js';
 
 /** Build a fixture `Port` through the validating constructor, failing loudly on a bad width. */
@@ -62,6 +68,18 @@ function criterion(text: string): AcceptanceCriterion {
   return { id: newUlid(), text, measurable: true, method: 'simulation' };
 }
 
+/** A placeholder Timing_Contract placing every output port at `registered`; nothing here reads it. */
+function timingContractFor(moduleInterface: ModuleInterface): TimingContract {
+  const entries = moduleInterface.ports
+    .filter((port) => port.direction === 'output')
+    .map((port) => ({ portName: port.name, timing: 'registered' as const }));
+  const built = makeTimingContract(moduleInterface, entries);
+  if (!built.ok) {
+    throw new Error(`fixture built an invalid timing contract: ${built.error.message}`);
+  }
+  return built.value;
+}
+
 /**
  * A minimal approved Spec; the fake runner never reads it, the harness only passes it on.
  *
@@ -70,16 +88,19 @@ function criterion(text: string): AcceptanceCriterion {
  */
 function spec(id: string): Spec {
   const moduleName = id.replace(/\W/g, '_');
+  const moduleInterface: ModuleInterface = {
+    validityOutputName: null,
+    moduleName,
+    ports: [port('a', 'input', 1), port('y', 'output', 1)],
+    clocking: { clockName: null, resetName: null, resetActiveLow: false },
+  };
   return {
     id: newUlid(),
     projectId: newUlid(),
     goal: `Build ${moduleName}.`,
     constraints: ['Purely combinational'],
-    moduleInterface: {
-      moduleName,
-      ports: [port('a', 'input', 1), port('y', 'output', 1)],
-      clocking: { clockName: null, resetName: null, resetActiveLow: false },
-    },
+    moduleInterface,
+    timingContract: timingContractFor(moduleInterface),
     acceptanceCriteria: [criterion('the output tracks the input')],
     architecture: 'A single continuous assignment from the input to the output.',
     approved: true,
@@ -174,7 +195,15 @@ function verifiedWithTestbench(iterations: number, rtl: string): VerificationOut
 /** A control that always returns the same verdict, with no toolchain behind it. */
 function fixedControl(verdict: InstrumentControlResult['verdict']): InstrumentControl {
   return {
-    check: () => Promise.resolve({ verdict, stdout: '', stderr: '', exitCode: 0, mutation: null }),
+    check: () =>
+      Promise.resolve({
+        verdict,
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        mutation: null,
+        positiveRun: null,
+      }),
   };
 }
 
@@ -264,6 +293,7 @@ function buildRunner(parts: {
   readonly instrumentControl?: InstrumentControl;
   readonly governor?: ThrottleGovernor;
   readonly waitMs?: (ms: number) => Promise<void>;
+  readonly writeManifest?: () => Promise<void>;
 }): { readonly runner: SweepRunner; readonly progress: string[] } {
   const progress: string[] = [];
   const clock = parts.clock ?? (() => 0);
@@ -292,6 +322,7 @@ function buildRunner(parts: {
     waitMs: parts.waitMs ?? ((): Promise<void> => Promise.resolve()),
     now: clock,
     onProgress: (line) => progress.push(line),
+    writeManifest: parts.writeManifest ?? ((): Promise<void> => Promise.resolve()),
   });
   return { runner, progress };
 }
@@ -376,6 +407,139 @@ describe('SweepRunner - the plan', () => {
       expect(request.limits).toEqual(cfg.limits);
       expect(request.temperature).toBe(cfg.reproducibility.temperature);
     }
+  });
+});
+
+describe('SweepRunner - Property 15: paired slots are adjacent', () => {
+  // Feature: testbench-in-order-scoreboard, Property 15: Paired slots are adjacent;
+  // strategy-free order is unchanged. Validates: Requirements 7.10.
+
+  /** Run a config at concurrency 1 and return the dispatch order as (arm, problem, index). */
+  async function dispatchOrder(
+    arms: readonly Record<string, unknown>[],
+    problemCount: number,
+  ): Promise<readonly string[]> {
+    const log = new MemoryResultsLog();
+    const problems = Array.from({ length: problemCount }, (_, at) => problem(`p${at}`));
+    const { runner } = buildRunner({
+      config: config({ arms }),
+      problems,
+      loopRunner: alwaysVerifies(),
+      log,
+    });
+    await runner.run();
+    return log.records().map((r) => `${r.armName}|${r.problemId}|${r.sampleIndex}`);
+  }
+
+  // testbench-spec-grounding, Property 19: the same rule carries the Grounded Slot_Pairs,
+  // because `planUnits` groups by model signature and never reads the strategy itself.
+  it.each(['treatment', 'grounded'])(
+    'dispatches each Control slot immediately before its %s slot',
+    async (second) => {
+      await fc.assert(
+        fc.asyncProperty(
+          fc.integer({ min: 1, max: 3 }),
+          fc.integer({ min: 1, max: 3 }),
+          async (models, problemCount) => {
+            const arms = Array.from({ length: models }, (_, at) => [
+              { name: `m${at}-control`, model: `model.${at}`, strategy: 'control' },
+              { name: `m${at}-${second}`, model: `model.${at}`, strategy: second },
+            ]).flat();
+            const order = await dispatchOrder(arms, problemCount);
+            expect(order).toHaveLength(models * problemCount * 2 * 2);
+            for (let at = 0; at < order.length; at += 2) {
+              const [controlArm, ...controlSlot] = (order[at] ?? '').split('|');
+              const [secondArm, ...secondSlot] = (order[at + 1] ?? '').split('|');
+              expect(controlArm?.endsWith('-control')).toBe(true);
+              expect(secondArm).toBe(controlArm?.replace('-control', `-${second}`));
+              expect(secondSlot).toEqual(controlSlot);
+            }
+          },
+        ),
+        { numRuns: 20 },
+      );
+    },
+  );
+
+  it('keeps arm-major order for strategy-free arms, even when two share a model', async () => {
+    const order = await dispatchOrder(
+      [
+        { name: 'armA', model: 'model.a' },
+        { name: 'armB', model: 'model.a' },
+      ],
+      1,
+    );
+    expect(order).toEqual(['armA|p0|0', 'armA|p0|1', 'armB|p0|0', 'armB|p0|1']);
+  });
+});
+
+describe('SweepRunner - Campaign start (Req 8.4, 8.8, 10.2)', () => {
+  it('writes the manifest before the first model call', async () => {
+    let manifestWritten = false;
+    const loopRunner = new SpyLoopRunner((request) => {
+      if (!manifestWritten) {
+        throw new Error('a model call ran before the manifest was written');
+      }
+      return Promise.resolve(verifiedOutcome(1, `module ${request.problem.id} endmodule`));
+    });
+    const log = new MemoryResultsLog();
+    const { runner } = buildRunner({
+      config: config(),
+      problems: [problem('p1')],
+      loopRunner,
+      log,
+      writeManifest: () => {
+        manifestWritten = true;
+        return Promise.resolve();
+      },
+    });
+    await runner.run();
+    expect(log.records().map((record) => record.outcomeStatus)).toEqual(['verified', 'verified']);
+  });
+
+  /** A Campaign over the fixture problems, whose Specs are clocked with no output qualifier. */
+  function campaign(
+    designGroups: Record<string, 'streaming' | 'cycle-exact'>,
+    supplement: string[],
+  ) {
+    return {
+      designGroups,
+      streamingSupplement: supplement,
+      successCriterion: PRE_REGISTERED_SUCCESS_CRITERION,
+      baseline: { resultsPath: 'base.jsonl', configHash: '0123456789abcdef' },
+      maxResumes: 2 as const,
+    };
+  }
+
+  it('starts when the recorded lists match the imported Specs', () => {
+    const problems = [problem('p1'), problem('p2')];
+    expect(
+      campaignStartRefusal(
+        campaign({ p1: 'cycle-exact', p2: 'cycle-exact' }, []),
+        problems,
+        problems,
+      ),
+    ).toBeNull();
+  });
+
+  it('refuses a hand edit to designGroups, naming the problem', () => {
+    const problems = [problem('p1'), problem('p2')];
+    const refusal = campaignStartRefusal(
+      campaign({ p1: 'cycle-exact', p2: 'streaming' }, []),
+      problems,
+      problems,
+    );
+    expect(refusal).toContain('p2');
+  });
+
+  it('refuses a supplement the rule does not select', () => {
+    const problems = [problem('p1'), problem('p2')];
+    const refusal = campaignStartRefusal(
+      campaign({ p1: 'cycle-exact', p2: 'cycle-exact' }, ['p2']),
+      problems,
+      problems,
+    );
+    expect(refusal).toContain('streamingSupplement');
   });
 });
 
@@ -492,6 +656,15 @@ describe('SweepRunner - per-sample artifact capture', () => {
   function recordedSampleZero(): SweepSampleRecord {
     return {
       schemaVersion: RESULTS_SCHEMA_VERSION,
+      strategyArm: 'control',
+      checkingApproach: 'cycle-timed',
+      designGroup: 'cycle-exact',
+      testbenchPromptVersion: 4,
+      simulationHarnessVersion: SIMULATION_HARNESS_VERSION,
+      testbenchParseRefusal: null,
+      positiveControlRun: null,
+      // The fixture outcome carries no normalization provenance, so the harness records `null`.
+      valuelessFailureReports: null,
       configHash: 'cfg-test',
       armName: 'armA',
       modelSignature: 'model.a',
@@ -518,6 +691,19 @@ describe('SweepRunner - per-sample artifact capture', () => {
       repairAccepted: false,
       repairDeclineReason: null,
       checkNameVisibilitySignal: false,
+      // No formal gate is wired in these fixtures, so nothing was submitted, no pre-pass was
+      // read, and no admission gate ran. `'not-gated'` and NOT `'no-gate-set'`, which would
+      // claim a gate ran and found nothing to hold the property set to.
+      formal: null,
+      formalFallbackReason: null,
+      formalFallbackRoute: 'not-applicable',
+      formalResetContract: null,
+      formalAssertionGateEmitted: false,
+      formalClockPolarity: null,
+      propertySetAdmitted: 'not-gated',
+      propertySetAuthoredUpFront: false,
+      propertySetSurvivorCount: 0,
+      formalMutationCounts: null,
       durationMs: 10,
       completedAtMs: 10,
       failureNote: null,
@@ -628,6 +814,15 @@ describe('SweepRunner - resume never re-pays', () => {
     const log = new MemoryResultsLog();
     const already: SweepSampleRecord = {
       schemaVersion: RESULTS_SCHEMA_VERSION,
+      strategyArm: 'control',
+      checkingApproach: 'cycle-timed',
+      designGroup: 'cycle-exact',
+      testbenchPromptVersion: 4,
+      simulationHarnessVersion: SIMULATION_HARNESS_VERSION,
+      testbenchParseRefusal: null,
+      positiveControlRun: null,
+      // The fixture outcome carries no normalization provenance, so the harness records `null`.
+      valuelessFailureReports: null,
       configHash: 'cfg-test',
       armName: 'armA',
       modelSignature: 'model.a',
@@ -654,6 +849,19 @@ describe('SweepRunner - resume never re-pays', () => {
       repairAccepted: false,
       repairDeclineReason: null,
       checkNameVisibilitySignal: false,
+      // No formal gate is wired in these fixtures, so nothing was submitted, no pre-pass was
+      // read, and no admission gate ran. `'not-gated'` and NOT `'no-gate-set'`, which would
+      // claim a gate ran and found nothing to hold the property set to.
+      formal: null,
+      formalFallbackReason: null,
+      formalFallbackRoute: 'not-applicable',
+      formalResetContract: null,
+      formalAssertionGateEmitted: false,
+      formalClockPolarity: null,
+      propertySetAdmitted: 'not-gated',
+      propertySetAuthoredUpFront: false,
+      propertySetSurvivorCount: 0,
+      formalMutationCounts: null,
       durationMs: 10,
       completedAtMs: 10,
       failureNote: null,
@@ -679,6 +887,15 @@ describe('SweepRunner - resume never re-pays', () => {
     const loopRunner = alwaysVerifies();
     const foreign: SweepSampleRecord = {
       schemaVersion: RESULTS_SCHEMA_VERSION,
+      strategyArm: 'control',
+      checkingApproach: 'cycle-timed',
+      designGroup: 'cycle-exact',
+      testbenchPromptVersion: 4,
+      simulationHarnessVersion: SIMULATION_HARNESS_VERSION,
+      testbenchParseRefusal: null,
+      positiveControlRun: null,
+      // The fixture outcome carries no normalization provenance, so the harness records `null`.
+      valuelessFailureReports: null,
       configHash: 'another-experiment',
       armName: 'armA',
       modelSignature: 'model.a',
@@ -705,6 +922,19 @@ describe('SweepRunner - resume never re-pays', () => {
       repairAccepted: false,
       repairDeclineReason: null,
       checkNameVisibilitySignal: false,
+      // No formal gate is wired in these fixtures, so nothing was submitted, no pre-pass was
+      // read, and no admission gate ran. `'not-gated'` and NOT `'no-gate-set'`, which would
+      // claim a gate ran and found nothing to hold the property set to.
+      formal: null,
+      formalFallbackReason: null,
+      formalFallbackRoute: 'not-applicable',
+      formalResetContract: null,
+      formalAssertionGateEmitted: false,
+      formalClockPolarity: null,
+      propertySetAdmitted: 'not-gated',
+      propertySetAuthoredUpFront: false,
+      propertySetSurvivorCount: 0,
+      formalMutationCounts: null,
       durationMs: 10,
       completedAtMs: 10,
       failureNote: null,

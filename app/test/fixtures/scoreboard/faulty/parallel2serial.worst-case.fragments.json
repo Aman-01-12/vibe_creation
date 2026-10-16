@@ -1,0 +1,10 @@
+{
+  "runLength": 1,
+  "expectations": {
+    "dout": "txn_d[0] >> 3"
+  },
+  "stimulus": {
+    "ac1_under_simulation_parallel2serial_produce": "repeat (256) begin stage_d = $random; send_transaction; end",
+    "known_answer_counter_increments": "repeat (256) begin stage_d = $random; send_transaction; end"
+  }
+}

@@ -23,6 +23,7 @@ import {
 import {
   armCostIsKnown,
   DEFAULT_CAPTURE_ARTIFACTS,
+  DEFAULT_FORMAL_GATE_ENABLED,
   DEFAULT_NEGATIVE_CONTROL_CONFIG,
   DEFAULT_NEGATIVE_CONTROL_ENABLED,
   isSingleModel,
@@ -139,6 +140,26 @@ describe('parseSweepConfig - artifact capture', () => {
     expect(error.field).toBe('captureArtifacts');
   });
 
+  it('defaults the FORMAL GATE to OFF, so no existing campaign changes behaviour or cost', () => {
+    // The opposite default to artifact capture above, and for the opposite reason: a formal
+    // run costs a model call plus a Yosys pre-pass and up to four solver invocations per
+    // property per sample, and it needs a toolchain the simulation oracle does not - a run
+    // that enables it is REFUSED where the composed invocation cannot run (Req 11.18). Off is
+    // the only default that leaves every committed campaign runnable where it was measured.
+    expect(parseOk(baseConfig()).formalGateEnabled).toBe(false);
+    expect(DEFAULT_FORMAL_GATE_ENABLED).toBe(false);
+  });
+
+  it('accepts an explicit formal-gate opt-in', () => {
+    expect(parseOk(baseConfig({ formalGateEnabled: true })).formalGateEnabled).toBe(true);
+  });
+
+  it('refuses a non-boolean formal-gate value rather than reading "true" as truthy', () => {
+    const error = parseErr(baseConfig({ formalGateEnabled: 'true' }));
+    expect(error.code).toBe('FIELD_NOT_A_BOOLEAN');
+    expect(error.field).toBe('formalGateEnabled');
+  });
+
   it('ignores keys prefixed with an underscore so the file can carry comments', () => {
     expect(parseOk(baseConfig({ _note: 'this is documentation' })).runName).toBe('bakeoff-v1');
   });
@@ -155,6 +176,47 @@ describe('parseSweepConfig - artifact capture', () => {
     const text = await readFile(resolve(here, 'sweep.config.example.json'), 'utf8');
     const parsed = parseSweepConfig(JSON.parse(text));
     expect(parsed.ok).toBe(true);
+  });
+});
+
+describe('parseSweepConfig - top-level replayGateReportPath (C8)', () => {
+  /** The committed Confirmatory config, whose grounding block names its own report. */
+  async function confirmatory(): Promise<Record<string, unknown>> {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const path = resolve(here, 'sweep.config.grounding-confirmatory-v1.json');
+    return JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  }
+
+  it('leaves the field off a config that does not declare it, so its identity is unchanged', () => {
+    expect('replayGateReportPath' in parseOk(baseConfig())).toBe(false);
+  });
+
+  it('carries the path on a config that is not a Campaign', () => {
+    const config = parseOk(baseConfig({ replayGateReportPath: ' .eval-runs/x/replay-gate.json ' }));
+    expect(config.replayGateReportPath).toBe('.eval-runs/x/replay-gate.json');
+    expect(config.groundingCampaign).toBeUndefined();
+  });
+
+  it('refuses an empty or non-string path', () => {
+    for (const bad of ['', '   ', 7, null]) {
+      const error = parseErr(baseConfig({ replayGateReportPath: bad }));
+      expect(error.code).toBe('FIELD_NOT_A_STRING');
+      expect(error.field).toBe('replayGateReportPath');
+    }
+  });
+
+  it('refuses a config naming a different report than its grounding block', async () => {
+    const raw = { ...(await confirmatory()), replayGateReportPath: '.eval-runs/other.json' };
+    const error = parseErr(raw);
+    expect(error.field).toBe('replayGateReportPath');
+    expect(error.message).toContain('.eval-runs/other.json');
+  });
+
+  it('accepts a top-level path equal to the grounding block one', async () => {
+    const raw = await confirmatory();
+    const block = raw.groundingCampaign as { replayGateReportPath: string };
+    const config = parseOk({ ...raw, replayGateReportPath: block.replayGateReportPath });
+    expect(config.replayGateReportPath).toBe(block.replayGateReportPath);
   });
 });
 

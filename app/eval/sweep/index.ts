@@ -11,14 +11,17 @@ export {
   armCostIsKnown,
   armModelIds,
   DEFAULT_CAPTURE_ARTIFACTS,
+  DEFAULT_FORMAL_GATE_ENABLED,
   DEFAULT_NEGATIVE_CONTROL_CONFIG,
   DEFAULT_NEGATIVE_CONTROL_ENABLED,
   isSingleModel,
   modelSignatureOf,
   mutationConfigFor,
+  SCOREBOARD_CAMPAIGN_MAX_RESUMES,
   SWEEP_CONFIG_BOUNDS,
   SWEEP_CONFIG_SCHEMA_VERSION,
   SWEEP_NAME_PATTERN,
+  type ScoreboardCampaignConfig,
   type SweepArmConfig,
   type SweepConfig,
   type SweepModelHostConfig,
@@ -28,6 +31,65 @@ export {
 export { parseSweepConfig } from './config-parse.js';
 export type { SweepConfigError, SweepConfigErrorCode, SweepConfigResult } from './config-values.js';
 export { parseArms, parseProblemSelection } from './config-arms.js';
+export { parseScoreboardCampaign } from './config-campaign.js';
+export {
+  campaignCells,
+  renderCampaignTable,
+  type CampaignCell,
+  type CampaignScope,
+} from './campaign-table.js';
+export {
+  renderCampaignReport,
+  verdictFigures,
+  type CampaignReportInput,
+} from './campaign-report.js';
+export {
+  BASELINE_SCHEMA_VERSION,
+  readBaseline,
+  renderBaselineReading,
+  type BaselineCell,
+  type BaselineReading,
+} from './baseline-reading.js';
+export {
+  agreementLower,
+  evaluateSuccessCriterion,
+  isPreRegisteredCriterion,
+  PRE_REGISTERED_SUCCESS_CRITERION,
+  type CampaignVerdict,
+  type CriterionResult,
+  type ModelArmStreamingFigures,
+  type StreamingFigures,
+  type SuccessCriterion,
+  type VerdictReport,
+} from './success-criterion.js';
+// The Grounding Campaign's pre-registered rule (testbench-spec-grounding, C17).
+export {
+  CLAUSE_OUTCOMES,
+  PRE_REGISTERED_GROUNDING_CRITERION,
+  evaluateGroundingCriterion,
+  isPreRegisteredGroundingCriterion,
+  mcnemarUpperTailNumerator,
+  nonInferior,
+  type ClauseOutcome,
+  type Fraction,
+  type GroundingCriterionResults,
+  type GroundingFigures,
+  type GroundingSuccessCriterion,
+  type GroundingVerdictReport,
+  type GuardFigures,
+  type MutantFigures,
+  type NonInferiorityRule,
+  type SlotPairOutcome,
+} from './grounding-criterion.js';
+// The Grounding Campaign's table and Slot_Pairs (testbench-spec-grounding, C16).
+export {
+  GROUNDING_STRATEGY_ARMS,
+  groundingCells,
+  slotPairs,
+  type GroundingCell,
+  type GroundingScope,
+  type GroundingStrategyArm,
+} from './grounding-table.js';
 export { selectProblems } from './problem-selection.js';
 
 // The experiment identity that scopes a resume.
@@ -45,11 +107,13 @@ export {
   MAX_RECORDED_SURVIVORS,
   MAX_RESULTS_FILE_BYTES,
   parseResultsLog,
+  recordedFormalRun,
   RESULTS_LOG_FILENAME,
   RESULTS_SCHEMA_VERSION,
   sampleKey,
   STALE_SCHEMA_ADVICE,
   type ParsedResultsLog,
+  type RecordedFormalRun,
   type ResultsLogHealth,
   type ResultsLogPort,
   type SweepSampleRecord,
@@ -132,15 +196,21 @@ export {
   type ManifestHost,
   type ManifestInput,
   type ManifestToolchain,
+  type ProbedVersion,
   type SweepManifest,
 } from './manifest.js';
 export {
+  classifyVersionProbe,
   findWorkerPython,
+  probeFormalToolchainAvailability,
   probeHarnessProvenance,
   probeHost,
   probeToolchainAvailability,
   probeToolchainVersions,
+  withoutFilesystemPaths,
+  yosysBuildIdOf,
   type ToolchainAvailability,
+  type VersionProbeRun,
 } from './host-facts.js';
 
 // One-sample scheduling through the harness.
@@ -152,16 +222,26 @@ export {
 } from './sample-scheduler.js';
 
 // The execution engine.
-export { SweepRunner, type SweepRunResult, type SweepRunnerDeps } from './runner.js';
+export {
+  SweepRunner,
+  type SweepPropertySetGate,
+  type SweepRunResult,
+  type SweepRunnerDeps,
+} from './runner.js';
 
 // Preflight: never start a run that cannot produce a real verdict.
 export {
   checkCorpus,
   checkCredential,
+  checkFormalToolchain,
   preflightFailure,
   renderPreflightFailure,
   toolchainFailure,
   type CheckoutPresencePort,
+  type CredentialProbeDeps,
+  type FormalToolchainProbePort,
+  type ModelListAnswer,
+  type ModelListProbePort,
   type PreflightFailure,
   type PreflightFailureCode,
 } from './preflight.js';
@@ -190,3 +270,9 @@ export {
   type SweepCliResult,
   type SweepCommand,
 } from './cli.js';
+
+// The run-time credential watch: the one question answered WHILE samples land.
+export { appendedSampleFacts, AuthFailureWatch, type AppendedSampleFacts } from './cli.js';
+
+// The exit-status taxonomy, exported for the property test that grades it from `@app/test`.
+export { runExitStatus, runShapeOf, type RunShape } from './cli.js';
