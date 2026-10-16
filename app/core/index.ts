@@ -11,6 +11,7 @@ export * from './verdict/index.js';
 export * from './trust/index.js';
 export * from './budget/index.js';
 export * from './eval-gate/index.js';
+export * from './redaction/index.js';
 
 /** Layer identifier, used to prove cross-package resolution through the scaffold. */
 export const CORE_LAYER = 'core' as const;

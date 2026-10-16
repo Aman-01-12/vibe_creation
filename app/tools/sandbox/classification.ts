@@ -26,6 +26,8 @@ function outputCaptured(output: RequiredOutput, capture: RawRunCapture): boolean
       return capture.exitCode !== null;
     case 'vcd':
     case 'netlistJson':
+    case 'formalReport':
+    case 'formalPrepassReport':
       return Object.prototype.hasOwnProperty.call(capture.artifacts, output);
     default: {
       // Exhaustiveness: a new RequiredOutput must be handled explicitly.
