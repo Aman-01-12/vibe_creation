@@ -8,13 +8,21 @@
 // unchanged, fail-safe handling of a throwing runner, recording of each run, and
 // up-front config validation.
 
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
-import type { SetupFailureCause, VerificationOutcome, VerificationSetupFailed } from '@app/agent';
-import type { ResourceLimits } from '@app/tools';
+import {
+  NO_REPAIR,
+  type NormalizationProvenance,
+  type SetupFailureCause,
+  type VerificationOutcome,
+  type VerificationSetupFailed,
+} from '@app/agent';
+import { countValuelessFailureReports, type ResourceLimits } from '@app/tools';
 
 import {
   ARTIFACT_CAPS,
+  testbenchSourceOf,
   type EvalArtifactDescriptor,
   type EvalArtifactSink,
   type EvalSampleArtifacts,
@@ -795,6 +803,127 @@ describe('EvalHarness.run - the golden denominator is unharmed by a refusal (che
       },
     ]);
     expect(instrumentReport.countedSamples).toBe(0);
+  });
+});
+
+/** Normalization provenance as the loop builds it, carrying the given count. */
+function provenanceWithCount(valuelessFailureReports: number): NormalizationProvenance {
+  return {
+    report: { normalizerVersion: 1, changed: false, findings: [], refusedWholeSource: null },
+    preNormalizationSource: null,
+    preNormalizationCheckNames: [],
+    valuelessFailureReports,
+  };
+}
+
+/** A verified outcome over a fixed testbench whose provenance carries the given count. */
+function measuredOutcome(valuelessFailureReports: number): VerificationOutcome {
+  const base = verifiedWithEvidence({
+    rtl: 'module m(input a, output y); assign y = a; endmodule',
+    testbench: 'module m_tb; endmodule',
+    simulation: { verdict: 'pass', checks: [], stdout: '', stderr: '' },
+  });
+  return {
+    ...base,
+    normalization: provenanceWithCount(valuelessFailureReports),
+  } as unknown as VerificationOutcome;
+}
+
+/** The one sample recorded for a single run of the given decision. */
+async function sampleOf(decision: Decision) {
+  const report = await harness({
+    loopRunner: new FakeLoopRunner(() => decision),
+    config: config({ sampleCount: 1 }),
+    ks: [1],
+  }).run([firstProblem()]);
+  return report.problems[0]?.samples[0];
+}
+
+describe('EvalHarness.run - valuelessFailureReports is copied from the loop (Req 5.4)', () => {
+  it('records null for a setup-failed sample, because no testbench was measured', async () => {
+    const sample = await sampleOf({ kind: 'setup-failed', detail: 'no candidate' });
+    expect(sample?.valuelessFailureReports).toBeNull();
+  });
+
+  it('records 0, not null, for a measured testbench with no valueless report', async () => {
+    const sample = await sampleOf({ kind: 'outcome', outcome: measuredOutcome(0) });
+    expect(sample?.valuelessFailureReports).toBe(0);
+  });
+
+  it('records the loop provenance count for a measured testbench with valueless reports', async () => {
+    const sample = await sampleOf({ kind: 'outcome', outcome: measuredOutcome(3) });
+    expect(sample?.valuelessFailureReports).toBe(3);
+  });
+});
+
+describe('Feature: testbench-failure-reportability, Property 7: The recorded count describes the source the sample measured', () => {
+  /** One testbench line: a valueless FAIL report, a FAIL report with a value, or a PASS. */
+  const checkLine = fc.constantFrom(
+    '  $display("CHECK c FAIL");\n',
+    '  $display("CHECK c FAIL got %h", y);\n',
+    '  $display("CHECK c PASS");\n',
+  );
+  const testbenchSource = fc
+    .array(checkLine, { maxLength: 6 })
+    .map((lines) => `module m_tb;\ninitial begin\n${lines.join('')}end\nendmodule\n`);
+
+  /** An outcome measuring `source`, with its provenance counted the way the loop counts it. */
+  function outcomeMeasuring(
+    status: 'verified' | 'unverified' | 'instrument-refused',
+    source: string,
+    repairProvenance: unknown,
+  ): VerificationOutcome {
+    const rtl = { rtl: 'module m(input a, output y); assign y = a; endmodule' };
+    return {
+      status,
+      iterations: 1,
+      ...(status === 'verified' ? { moduleVersion: rtl } : { candidate: rtl }),
+      testbench: { source },
+      normalization: provenanceWithCount(countValuelessFailureReports(source)),
+      repairProvenance,
+    } as unknown as VerificationOutcome;
+  }
+
+  const status = fc.constantFrom<'verified' | 'unverified' | 'instrument-refused'>(
+    'verified',
+    'unverified',
+    'instrument-refused',
+  );
+  const firstDraft = fc
+    .tuple(status, testbenchSource)
+    .map(([s, source]) => outcomeMeasuring(s, source, NO_REPAIR));
+  // The accepted repair measures the revised source; the first draft survives only as
+  // `replacedSource`, so a harness reading the wrong source would disagree with the oracle.
+  const repaired = fc.tuple(status, testbenchSource, testbenchSource).map(([s, draft, revision]) =>
+    outcomeMeasuring(s, `${revision}// repaired\n`, {
+      attempted: true,
+      accepted: true,
+      hint: { kind: 'build-diagnostic' },
+      replacedSource: draft,
+    }),
+  );
+  const unmeasured = fc.string().map((detail) => setupFailedOutcome(detail));
+
+  it('equals a fresh detector reading of testbenchSourceOf(outcome), or null without one', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.oneof(firstDraft, repaired, unmeasured), async (drawn) => {
+        const sample = await sampleOf({ kind: 'outcome', outcome: drawn });
+        const measured = testbenchSourceOf(drawn);
+        const expected = measured === null ? null : countValuelessFailureReports(measured);
+        expect(sample?.valuelessFailureReports).toBe(expected);
+      }),
+      { numRuns: 100 },
+    );
+  });
+
+  it('copies the provenance count even when it disagrees with the source (C4 contract)', async () => {
+    // C4: the harness copies the loop's count and never recomputes it, so a disagreeing
+    // provenance is recorded as-is. The property above holds only because the loop agrees.
+    const drawn = measuredOutcome(3);
+    const measured = testbenchSourceOf(drawn);
+    expect(measured === null ? null : countValuelessFailureReports(measured)).toBe(0);
+    const sample = await sampleOf({ kind: 'outcome', outcome: drawn });
+    expect(sample?.valuelessFailureReports).toBe(3);
   });
 });
 

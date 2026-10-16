@@ -19,6 +19,14 @@
 /** What the scanner is currently inside. */
 export type ScanMode = 'code' | 'line-comment' | 'block-comment' | 'string' | 'directive';
 
+/** One string literal's extent, quotes included, from the scan that found it. */
+export interface StringSpan {
+  /** Offset of the opening `"`. */
+  readonly start: number;
+  /** Offset of the closing `"`. */
+  readonly end: number;
+}
+
 /**
  * Per-character classification of a Verilog source, offset-for-offset.
  *
@@ -32,6 +40,13 @@ export interface SourceMask {
   readonly bracketDepth: Uint8Array;
   /** Offset of the first character of each line, so a site can report line and column. */
   readonly lineStarts: readonly number[];
+  /**
+   * Every CLOSED string literal, in source order; an unterminated one has no span.
+   *
+   * A literal is entirely non-code under `code`, so this is how a caller tells a literal apart
+   * from a comment adjacent to it.
+   */
+  readonly stringSpans: readonly StringSpan[];
   /**
    * The mode the scan ENDED in.
    *
@@ -112,15 +127,22 @@ export function scanSource(source: string): SourceMask {
   const code = new Uint8Array(source.length);
   const bracketDepth = new Uint8Array(source.length);
   const lineStarts: number[] = [0];
+  const stringSpans: StringSpan[] = [];
   let mode: ScanMode = 'code';
   let depth = 0;
   let index = 0;
+  let stringStart = 0;
   while (index < source.length) {
     const character = source.charAt(index);
     if (character === '\n') {
       lineStarts.push(index + 1);
     }
     const step = advanceScan({ source, index, character, mode });
+    if (mode === 'code' && step.mode === 'string') {
+      stringStart = index;
+    } else if (mode === 'string' && step.mode === 'code') {
+      stringSpans.push({ start: stringStart, end: index });
+    }
     mode = step.mode;
     if (step.isCode) {
       depth = openBracket(character, depth);
@@ -130,7 +152,17 @@ export function scanSource(source: string): SourceMask {
     }
     index += step.width;
   }
-  return { code, bracketDepth, lineStarts, endMode: mode };
+  return { code, bracketDepth, lineStarts, stringSpans, endMode: mode };
+}
+
+/** Whether every character of `source` in `[start, end)` lies in a code span of `mask`. */
+export function isEntirelyCode(mask: SourceMask, start: number, end: number): boolean {
+  for (let index = start; index < end; index += 1) {
+    if (mask.code[index] !== 1) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

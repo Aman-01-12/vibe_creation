@@ -47,9 +47,11 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
-import { normalizeDialect } from '@app/agent';
+import { normalizeDialect, type DialectFinding } from '@app/agent';
+import { CHECK_REPORT_TASK_NAME, CHECK_REPORT_TASK_PATH } from '@app/tools';
 
 import {
+  checkNameArbitrary,
   codeWordTokens,
   commentSpans,
   executableStatements,
@@ -182,5 +184,294 @@ describe(PROPERTY, () => {
     expect(coverage.forHeaderDeclaration).toBeGreaterThan(0);
     expect(coverage.genvarBlock).toBeGreaterThan(0);
     expect(coverage.declarationsAlreadyFirst).toBeGreaterThan(0);
+  });
+});
+
+// testbench-failure-reportability, Property 17. The oracle is this file's own scan: a report is a
+// `$display(...)` or Check_Report_Task call at a code position, spanned to its balanced `)`.
+// Validates: Requirements 9.5
+
+const PROPERTY_17 =
+  'Feature: testbench-failure-reportability, Property 17: The Dialect_Normalizer leaves every ' +
+  'report untouched';
+
+/** A report call at a code position; the lookbehind stops `tb.ece_check` or `my_ece_check`. */
+const REPORT_CALL_START = new RegExp(
+  `(?<![\\w$.])(?:\\$display|${CHECK_REPORT_TASK_PATH.replace('.', '\\.')}|${CHECK_REPORT_TASK_NAME})\\s*\\(`,
+  'y',
+);
+
+/** A Verilog string literal, escapes included. */
+const STRING_LITERAL = /"(?:[^"\\]|\\.)*"/g;
+
+/** The index just past the comment or string starting at `index`, or `null` when none does. */
+function skipNonCode(source: string, index: number): number | null {
+  if (source.startsWith('//', index)) {
+    const newline = source.indexOf('\n', index);
+    return newline === -1 ? source.length : newline;
+  }
+  if (source.startsWith('/*', index)) {
+    const close = source.indexOf('*/', index + 2);
+    return close === -1 ? source.length : close + 2;
+  }
+  if (source[index] !== '"') {
+    return null;
+  }
+  let cursor = index + 1;
+  while (cursor < source.length && source[cursor] !== '"') {
+    cursor += source[cursor] === '\\' ? 2 : 1;
+  }
+  return cursor + 1;
+}
+
+/** The index just past the `)` closing the argument list opened before `index`. */
+function closingParenEnd(source: string, index: number): number {
+  let depth = 1;
+  let cursor = index;
+  while (cursor < source.length && depth > 0) {
+    const skipped = skipNonCode(source, cursor);
+    if (skipped !== null) {
+      cursor = skipped;
+      continue;
+    }
+    depth += source[cursor] === '(' ? 1 : source[cursor] === ')' ? -1 : 0;
+    cursor += 1;
+  }
+  return cursor;
+}
+
+/** One report call: its full text, name through closing `)`, and its 1-based line range. */
+interface ReportSpan {
+  readonly text: string;
+  readonly firstLine: number;
+  readonly lastLine: number;
+}
+
+/** The 1-based line holding `offset`, counted the way the normalizer's findings count it. */
+function lineOf(source: string, offset: number): number {
+  return source.slice(0, offset).split('\n').length;
+}
+
+/** Every report call in source order. */
+function reportSpans(source: string): readonly ReportSpan[] {
+  const spans: ReportSpan[] = [];
+  let cursor = 0;
+  while (cursor < source.length) {
+    const skipped = skipNonCode(source, cursor);
+    if (skipped !== null) {
+      cursor = skipped;
+      continue;
+    }
+    REPORT_CALL_START.lastIndex = cursor;
+    const match = REPORT_CALL_START.exec(source);
+    if (match === null) {
+      cursor += 1;
+      continue;
+    }
+    const end = closingParenEnd(source, cursor + match[0].length);
+    spans.push({
+      text: source.slice(cursor, end),
+      firstLine: lineOf(source, cursor),
+      lastLine: lineOf(source, end),
+    });
+    cursor = end;
+  }
+  return spans;
+}
+
+/** The Check_Report_Task calls among the report spans. */
+function taskCallSpans(source: string): readonly ReportSpan[] {
+  return reportSpans(source).filter((span) => !span.text.startsWith('$display'));
+}
+
+/** The call head, name through `(`, which a permitted rewrite never touches. */
+function callHead(span: ReportSpan): string {
+  return span.text.slice(0, span.text.indexOf('(') + 1);
+}
+
+function stringLiterals(text: string): readonly string[] {
+  return text.match(STRING_LITERAL) ?? [];
+}
+
+/** The INPUT lines the normalizer's rewritten `malformed-sized-literal` findings name. */
+function sizedLiteralRewriteLines(findings: readonly DialectFinding[]): ReadonlySet<number> {
+  return new Set(
+    findings
+      .filter((f) => f.dialectClass === 'malformed-sized-literal' && f.action === 'rewritten')
+      .map((f) => f.line),
+  );
+}
+
+/**
+ * The restated Requirement 9.5 oracle. Calls pair by order, not line, because the unnamed-begin
+ * rule moves declaration lines; finding lines are resolved against the input, which is the only
+ * source the normalizer plans its edits on.
+ */
+function expectReportsPreserved(
+  input: string,
+  output: string,
+  findings: readonly DialectFinding[],
+): void {
+  const before = reportSpans(input);
+  const after = reportSpans(output);
+  expect(after).toHaveLength(before.length);
+  expect(taskCallSpans(output)).toHaveLength(taskCallSpans(input).length);
+  const namedLines = sizedLiteralRewriteLines(findings);
+  before.forEach((inputCall, index) => {
+    const outputCall = after[index];
+    expect(outputCall).toBeDefined();
+    if (outputCall === undefined) {
+      return;
+    }
+    expect(callHead(outputCall)).toBe(callHead(inputCall));
+    expect(stringLiterals(outputCall.text)).toEqual(stringLiterals(inputCall.text));
+    if (outputCall.text !== inputCall.text) {
+      const named = [...namedLines].some(
+        (line) => line >= inputCall.firstLine && line <= inputCall.lastLine,
+      );
+      expect(named, `unexplained change: ${inputCall.text} -> ${outputCall.text}`).toBe(true);
+    }
+  });
+}
+
+/** The four report shapes; every generated source carries each one at least once. */
+const REPORT_KINDS = Object.freeze([
+  'bare-task',
+  'path-task',
+  'valueless-display',
+  'valued-display',
+] as const);
+type ReportKind = (typeof REPORT_KINDS)[number];
+
+/** Argument expressions; the last two are malformed sized literals the normalizer rewrites. */
+const REPORT_ARGUMENTS: readonly string[] = Object.freeze([
+  'q',
+  'acc + 1',
+  "4'd3",
+  "{q[3:0], 4'h0}",
+  "(acc == 2) ? 8'd1 : 8'd0",
+  "16'd(-15)",
+  "8'd-1",
+]);
+
+interface ReportPlan {
+  readonly kind: ReportKind;
+  readonly name: string;
+  readonly expected: string;
+  readonly actual: string;
+}
+
+/** The call text of one report, without its terminating `;`. */
+function renderReport(report: ReportPlan): string {
+  const values = `${report.expected}, ${report.actual}`;
+  switch (report.kind) {
+    case 'bare-task':
+      return `${CHECK_REPORT_TASK_NAME}("${report.name}", ${values})`;
+    case 'path-task':
+      return `${CHECK_REPORT_TASK_PATH}("${report.name}", ${values})`;
+    case 'valueless-display':
+      return `$display("CHECK ${report.name} FAIL")`;
+    case 'valued-display':
+      return `$display("CHECK ${report.name} FAIL expected=%0d actual=%0d", ${values})`;
+  }
+}
+
+function reportPlanArbitrary(kind: fc.Arbitrary<ReportKind>): fc.Arbitrary<ReportPlan> {
+  const argument = fc.constantFrom(...REPORT_ARGUMENTS);
+  return fc.record({ kind, name: checkNameArbitrary(), expected: argument, actual: argument });
+}
+
+/**
+ * An unnamed block whose declaration follows its first report, plus a malformed literal in an
+ * assignment, so both rewriting rules fire around the reports on every case.
+ */
+function renderReportBlock(reports: readonly ReportPlan[], index: number): readonly string[] {
+  const [first, ...rest] = reports.map((report) => `    ${renderReport(report)};`);
+  return [
+    '  initial begin',
+    ...(first === undefined ? [] : [first]),
+    `    integer r${String(index)};`,
+    "    acc = 16'd(-15);",
+    ...rest,
+    '  end',
+  ];
+}
+
+interface ReportingSource {
+  readonly text: string;
+  /** The planned report spans, which are the LAST spans of `text` in this order. */
+  readonly planned: readonly string[];
+}
+
+function reportingSourceArbitrary(): fc.Arbitrary<ReportingSource> {
+  const everyKind = fc
+    .shuffledSubarray([...REPORT_KINDS], { minLength: REPORT_KINDS.length })
+    .chain((kinds) => fc.tuple(...kinds.map((kind) => reportPlanArbitrary(fc.constant(kind)))));
+  const extraBlock = fc.array(reportPlanArbitrary(fc.constantFrom(...REPORT_KINDS)), {
+    minLength: 1,
+    maxLength: 3,
+  });
+  return fc
+    .record({
+      base: generatedVerilogArbitrary(),
+      blocks: fc.tuple(everyKind, fc.array(extraBlock, { maxLength: 2 })),
+    })
+    .map(({ base, blocks: [first, extras] }) => {
+      const blocks: readonly (readonly ReportPlan[])[] = [first, ...extras];
+      const cut = base.text.lastIndexOf('endmodule');
+      const lines = [
+        '  reg [7:0] q;',
+        ...blocks.flatMap((reports, index) => renderReportBlock(reports, index)),
+      ];
+      return {
+        text: `${base.text.slice(0, cut)}${lines.join('\n')}\n${base.text.slice(cut)}`,
+        planned: blocks.flat().map(renderReport),
+      };
+    });
+}
+
+describe(PROPERTY_17, () => {
+  it('changes a report only at a rewritten sized-literal site, never a string, adds no call', () => {
+    fc.assert(
+      fc.property(reportingSourceArbitrary(), ({ text: input, planned }) => {
+        const inputSpans = reportSpans(input).map((span) => span.text);
+        // The scan is the oracle, so it must find exactly what was planted, where it was planted.
+        expect(inputSpans.slice(-planned.length)).toEqual(planned);
+
+        const { source: output, report } = normalizeDialect(input);
+        expect(report.refusedWholeSource).toBeNull();
+        const rewritten = new Set(
+          report.findings.filter((f) => f.action === 'rewritten').map((f) => f.dialectClass),
+        );
+        expect(rewritten).toContain('unnamed-begin-declaration');
+        expect(rewritten).toContain('malformed-sized-literal');
+
+        expectReportsPreserved(input, output, report.findings);
+      }),
+      propertyParameters(),
+    );
+  });
+
+  it('rewrites the known DQ-04 case on a finding-named line and keeps its name literal', () => {
+    const call = `${CHECK_REPORT_TASK_NAME}("ac1_holds", 16'd(-15), q)`;
+    const input = [
+      'module tb;',
+      '  reg [15:0] q;',
+      '  initial begin',
+      `    ${call};`,
+      '  end',
+      'endmodule',
+      '',
+    ].join('\n');
+
+    const { source: output, report } = normalizeDialect(input);
+
+    const [outputCall] = taskCallSpans(output);
+    expect(outputCall?.text).toBe(`${CHECK_REPORT_TASK_NAME}("ac1_holds", (-16'd15), q)`);
+    expect(stringLiterals(outputCall?.text ?? '')).toEqual(['"ac1_holds"']);
+    expect(
+      sizedLiteralRewriteLines(report.findings).has(input.split('\n').indexOf(`    ${call};`) + 1),
+    ).toBe(true);
+    expectReportsPreserved(input, output, report.findings);
   });
 });

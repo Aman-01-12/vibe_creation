@@ -167,7 +167,7 @@ The distinction is: the normalizer may DESUGAR what the model meant, and may nev
 - **Negative_Control**: the half of the Instrument_Control that runs our Testbench against deliberately mutated reference designs (`app/eval/mutation-control.ts`).
 - **Instrument_Refused**: the terminal Verification_Loop outcome reporting that the Testbench was not admissible.
 - **Recorded_Instrument_Verdict**: the closed discriminated union one sample's instrument verdict is reported, persisted, and rendered as (`app/eval/instrument-control.ts`).
-- **Session_Budget**: the single per-sample budget every model call and every simulate call in the loop is charged against (`SessionBudgetHandle`).
+- **Session_Budget**: the single per-sample budget every model call and every iteration's simulate call in the loop is charged against (`SessionBudgetHandle`).
 - **Eval_Harness**: the module that runs the subset, measures each sample, and assembles the report (`app/eval/harness.ts`).
 - **Results_Log**: the persisted sample-record schema, its encoder, and its decoder (`app/eval/sweep/results-log.ts`).
 - **Artifact_Sink**: the per-sample evidence seam and its derivation (`app/eval/artifact-sink.ts`).

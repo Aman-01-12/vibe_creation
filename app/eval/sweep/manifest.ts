@@ -21,7 +21,8 @@
 //   testbenches, so the simulator version is part of what a verdict MEANS. The version
 //   strings are supplied by a probe (`./host-facts.ts`) rather than hardcoded here; a
 //   probe that could not read a version records `null`, which reads as "unknown" and
-//   not as "some default".
+//   not as "some default". The Formal_Toolchain entries go further and record the REASON
+//   they could not be read, which is what `ProbedVersion` below is for.
 //
 // THE PROMPT VERSION AND THE INSTRUMENT POLICY VERSION ARE PINNED THE SAME WAY THE
 // CORPUS COMMIT IS
@@ -36,6 +37,10 @@
 //   `TESTBENCH_REPAIR_POLICY_VERSION` following the same discipline, and
 //   `normalizerVersion` is read directly from `NORMALIZER_VERSION` following the same
 //   discipline: a manifest must not be able to claim a transform the run did not use.
+//   `formalOracleVersion` is read directly from `FORMAL_ORACLE_VERSION` - the SAME constant
+//   the Config_Identity folds in (Req 12.5) - for the identical reason: a manifest must not
+//   be able to claim a formal gate the run did not apply, and reading the one constant both
+//   places means the recorded version and the hash that scopes a resume can never disagree.
 //
 // WHAT IS DELIBERATELY ABSENT
 //   No credential, obviously - but also no hostname and no absolute paths. A machine
@@ -44,6 +49,7 @@
 //   every fact is injected, so manifest assembly is unit-tested with no host at all.
 
 import {
+  FORMAL_ORACLE_VERSION,
   INSTRUMENT_POLICY_VERSION,
   MODEL_TASKS,
   NORMALIZER_VERSION,
@@ -51,6 +57,7 @@ import {
   TESTBENCH_REPAIR_POLICY_VERSION,
   type ModelTask,
 } from '@app/agent';
+import { SIMULATION_HARNESS_VERSION } from '@app/tools';
 
 import { RTLLM_PINNED_COMMIT } from '../corpus/pinned-source.js';
 import {
@@ -59,13 +66,26 @@ import {
   type Stage0QuarantineEntry,
 } from '../corpus/stage0-quarantine.js';
 import type { ReproducibilityConfig } from '../reproducibility.js';
-import { armCostIsKnown, isSingleModel, modelSignatureOf, type SweepConfig } from './config.js';
+import {
+  armCostIsKnown,
+  isSingleModel,
+  modelSignatureOf,
+  type GroundingCampaignConfig,
+  type SweepConfig,
+} from './config.js';
+import type { ReplayGateReport } from '../replay-gate.js';
+import type { SuccessCriterion } from './success-criterion.js';
 
 /** The manifest filename inside a run's output directory. */
 export const MANIFEST_FILENAME = 'manifest.json';
 
-/** The manifest schema version, bumped only when a field's meaning changes. */
-export const MANIFEST_SCHEMA_VERSION = 1;
+/**
+ * The manifest schema version, bumped only when a field's meaning changes.
+ *
+ * Version 2 added the Formal_Toolchain entries. Without the bump, a manifest written
+ * before those fields existed and a host whose tools could not be read look the same.
+ */
+export const MANIFEST_SCHEMA_VERSION = 3;
 
 /** One arm as the manifest records it: the exact models, and whether cost is real. */
 export interface ManifestArm {
@@ -96,14 +116,37 @@ export interface ManifestCorpus {
   readonly quarantined: readonly ManifestExclusion[];
 }
 
+/**
+ * One probed tool version: the string that was read, or the reason it was not.
+ *
+ * A union rather than `string | null` because an absence has to carry its reason. A tool
+ * that is missing, one that timed out, and one that prints usage instead of a version
+ * need three different fixes, and a `null` names none of them.
+ */
+export type ProbedVersion =
+  | { readonly kind: 'read'; readonly value: string }
+  | { readonly kind: 'not-measured'; readonly reason: string };
+
 /** The EDA toolchain that decided every verdict in this run. */
 export interface ManifestToolchain {
+  // ponytail: these three stay `string | null`, so a null still conflates "not read" with
+  // "no reason recorded". Upgrade path is the parent spec's merge-gate pass over this file.
   /** `iverilog -V` first line, or null when it could not be read. */
   readonly iverilogVersion: string | null;
   /** `vvp -V` first line, or null when it could not be read. */
   readonly vvpVersion: string | null;
   /** The interpreter that ran the sandbox worker, as a bare name (never a full path). */
   readonly workerPython: string | null;
+  /** The yosys release, which decides how the vacuous lowering chain behaves. */
+  readonly yosysVersion: ProbedVersion;
+  /** The yosys git revision: a release reading `0.69+post` names no single commit. */
+  readonly yosysBuildId: ProbedVersion;
+  /** Ships with yosys and answers `--version` with usage, so yosys is its provenance. */
+  readonly yosysSmtBmcVersion: ProbedVersion;
+  /** The solver `yosys-smtbmc` is invoked with. */
+  readonly bitwuzlaVersion: ProbedVersion;
+  /** The second solver any proved result is re-checked under. */
+  readonly z3Version: ProbedVersion;
 }
 
 /** The host, described only as far as reproducibility requires. */
@@ -180,6 +223,27 @@ export interface SweepManifest {
    * transform the run did not use.
    */
   readonly normalizerVersion: number;
+  /**
+   * The Formal_Oracle's gate version that decided every formal verdict in this run
+   * (Req 12.5).
+   *
+   * Read directly from `FORMAL_ORACLE_VERSION` - the same build constant the Config_Identity
+   * folds in - the same way `normalizerVersion` is read directly from its own constant: a
+   * manifest must not be able to claim a gate the run did not apply, and sharing the one
+   * constant keeps the recorded version and the hash that scopes a resume in agreement.
+   */
+  readonly formalOracleVersion: number;
+  /**
+   * The `SIMULATION_HARNESS_VERSION` every Testbench_Run of this run compiled (Req 9.3).
+   *
+   * Recorded for the reason the five version fields above are: the harness decides how a run
+   * ENDS, so a reader of two runs' records needs to know they ended under the same rules.
+   */
+  readonly simulationHarnessVersion: number;
+  /** The Grounding Campaign block this run was started with, or `null` (Req 12.2). */
+  readonly groundingCampaign: GroundingCampaignConfig | null;
+  /** The Replay_Gate report the Campaign refused to start without, or `null` (Req 6.9). */
+  readonly replayGate: ReplayGateReport | null;
   readonly reproducibility: ReproducibilityConfig;
   readonly toolchain: ManifestToolchain;
   readonly host: ManifestHost;
@@ -189,6 +253,10 @@ export interface SweepManifest {
   readonly finishedAt: string | null;
   /** Why the run stopped, or null while it is still running. */
   readonly stopReason: string | null;
+  /** The Campaign's pre-registered Success_Criterion, recorded before dispatch; null outside it. */
+  readonly successCriterion: SuccessCriterion | null;
+  /** 0 for a Campaign's first pass, n for its n-th resume; null outside a Campaign. */
+  readonly campaignPass: number | null;
 }
 
 /** Render one reviewed Stage 0 exclusion into the manifest's flat shape. */
@@ -214,6 +282,10 @@ export interface ManifestInput {
   /** The problem ids this run selected, already resolved against the scored corpus. */
   readonly selectedProblemIds: readonly string[];
   readonly facts: ManifestFacts;
+  /** The Replay_Gate report the caller already read and checked, or `null` (Req 6.9). */
+  readonly replayGate?: ReplayGateReport | null;
+  /** This start's Campaign pass from `nextCampaignPass`; null outside a Campaign. */
+  readonly campaignPass: number | null;
 }
 
 /**
@@ -242,6 +314,10 @@ export function assembleManifest(input: ManifestInput): SweepManifest {
     instrumentPolicyVersion: INSTRUMENT_POLICY_VERSION,
     testbenchRepairPolicyVersion: TESTBENCH_REPAIR_POLICY_VERSION,
     normalizerVersion: NORMALIZER_VERSION,
+    formalOracleVersion: FORMAL_ORACLE_VERSION,
+    simulationHarnessVersion: SIMULATION_HARNESS_VERSION,
+    groundingCampaign: config.groundingCampaign ?? null,
+    replayGate: input.replayGate ?? null,
     reproducibility: config.reproducibility,
     toolchain: facts.toolchain,
     host: facts.host,
@@ -249,7 +325,29 @@ export function assembleManifest(input: ManifestInput): SweepManifest {
     startedAt: facts.startedAt,
     finishedAt: null,
     stopReason: null,
+    successCriterion: config.scoreboardCampaign?.successCriterion ?? null,
+    // Either Campaign block makes a run a Campaign, and a pass number is what a resume reads.
+    campaignPass:
+      config.scoreboardCampaign === undefined && config.groundingCampaign === undefined
+        ? null
+        : input.campaignPass,
   };
+}
+
+/**
+ * The pass a Campaign start is (Req 8.11): one past the pass the previous manifest in the
+ * output directory recorded for the same config, else 0. The previous manifest is untrusted.
+ */
+export function nextCampaignPass(previousManifest: unknown, configHash: string): number {
+  if (typeof previousManifest !== 'object' || previousManifest === null) {
+    return 0;
+  }
+  const previous = previousManifest as { configHash?: unknown; campaignPass?: unknown };
+  const pass = previous.campaignPass;
+  if (previous.configHash !== configHash || !Number.isSafeInteger(pass) || (pass as number) < 0) {
+    return 0;
+  }
+  return (pass as number) + 1;
 }
 
 /** The manifest with its ending recorded; written again when the run stops. */

@@ -115,6 +115,7 @@ function outcomeFor(scenario: Scenario): VerificationOutcome {
         refusedWholeSource: null,
       },
       preNormalizationCheckNames: scenario.preNormalizationCheckNames,
+      valuelessFailureReports: 0,
     },
   } as unknown as VerificationOutcome;
 }
@@ -151,7 +152,7 @@ class ScriptedLoopRunner implements EvalLoopRunner {
 class ScriptedControl implements InstrumentControl {
   readonly #result: InstrumentControlResult;
   constructor(verdict: RecordedInstrumentVerdict, stdout: string) {
-    this.#result = { verdict, stdout, stderr: '', exitCode: 0, mutation: null };
+    this.#result = { verdict, stdout, stderr: '', exitCode: 0, mutation: null, positiveRun: null };
   }
   check(): Promise<InstrumentControlResult> {
     return Promise.resolve(this.#result);

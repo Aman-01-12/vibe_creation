@@ -26,79 +26,12 @@
 // boundary); `deniedOperations`, `verdict`, and the captured streams here are
 // exactly the fields the Action_Recorder records as a Trace span downstream.
 
-import { execFileSync } from 'node:child_process';
-
 import { describe, expect, it } from 'vitest';
 
-import {
-  buildContainerSpec,
-  RunscSandboxRuntime,
-  SANDBOX_WORKER_IMAGE,
-  SandboxToolRunner,
-} from './index.js';
+import { buildContainerSpec, RunscSandboxRuntime, SandboxToolRunner } from './index.js';
 import type { ResourceLimits, SandboxJob, SourceFile } from './index.js';
-
-/** The container runtime name that provides the isolation boundary. */
-const GVISOR_RUNTIME = 'runsc';
-
-/** Container CLI and worker image, overridable so deployment can pin exact values. */
-const SANDBOX_CLI = process.env.ECE_SANDBOX_CLI ?? 'docker';
-const WORKER_IMAGE = process.env.ECE_SANDBOX_IMAGE ?? SANDBOX_WORKER_IMAGE;
-
-/** The outcome of probing the host for a usable real sandbox runtime. */
-interface RuntimeProbe {
-  readonly available: boolean;
-  readonly reason: string;
-  readonly cli: string;
-  readonly image: string;
-}
-
-/** Run a short, read-only probe command; never throws, reports ok + stdout. */
-function tryExec(
-  bin: string,
-  args: readonly string[],
-): { readonly ok: boolean; readonly stdout: string } {
-  try {
-    const stdout = execFileSync(bin, [...args], {
-      timeout: 10_000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      encoding: 'utf8',
-    });
-    return { ok: true, stdout };
-  } catch {
-    return { ok: false, stdout: '' };
-  }
-}
-
-/**
- * Detect whether a real gVisor runtime and the worker image are usable here.
- *
- * Robust and side-effect free: it checks the CLI exists, that the `runsc`
- * runtime is registered, and that the worker image is present, returning a clear
- * reason for the first missing piece so the skip message is actionable.
- */
-function detectSandboxRuntime(): RuntimeProbe {
-  const base = { cli: SANDBOX_CLI, image: WORKER_IMAGE };
-  if (!tryExec(SANDBOX_CLI, ['--version']).ok) {
-    return { ...base, available: false, reason: `container CLI "${SANDBOX_CLI}" is not available` };
-  }
-  const runtimes = tryExec(SANDBOX_CLI, ['info', '--format', '{{json .Runtimes}}']);
-  if (!runtimes.ok || !runtimes.stdout.includes(GVISOR_RUNTIME)) {
-    return {
-      ...base,
-      available: false,
-      reason: `gVisor runtime "${GVISOR_RUNTIME}" is not registered with "${SANDBOX_CLI}"`,
-    };
-  }
-  if (!tryExec(SANDBOX_CLI, ['image', 'inspect', WORKER_IMAGE]).ok) {
-    return {
-      ...base,
-      available: false,
-      reason: `worker image "${WORKER_IMAGE}" is not built or present`,
-    };
-  }
-  return { ...base, available: true, reason: 'gVisor runtime and worker image present' };
-}
+// One detection rule, shared with the Default_Timescale image acceptance test (C11).
+import { GVISOR_RUNTIME, detectSandboxRuntime, tryExec } from './runsc-capability.js';
 
 const PROBE = detectSandboxRuntime();
 

@@ -11,6 +11,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { INSTRUMENT_POLICY_VERSION, TESTBENCH_PROMPT_VERSION } from '@app/agent';
+import { SIMULATION_HARNESS_VERSION } from '@app/tools';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
@@ -22,7 +23,14 @@ import {
 import { canonicalSweepConfigJson, sweepConfigHash } from './config-identity.js';
 import { parseSweepConfig } from './config-parse.js';
 import type { SweepConfig } from './config.js';
-import { assembleManifest, finalizeManifest, type ManifestFacts } from './manifest.js';
+import { withoutFilesystemPaths } from './host-facts.js';
+import {
+  assembleManifest,
+  finalizeManifest,
+  MANIFEST_SCHEMA_VERSION,
+  nextCampaignPass,
+  type ManifestFacts,
+} from './manifest.js';
 
 /**
  * The config hash the committed smoke config currently produces.
@@ -118,8 +126,61 @@ import { assembleManifest, finalizeManifest, type ManifestFacts } from './manife
  *     decline is now REPORTED (version 3 declined it silently, undercounting the class)
  *     under a new `rewrite-context-not-established` cause, and that guard's doc comment was
  *     corrected against a re-measurement of `iverilog -g2012` with its behaviour unchanged.
+ *   - when `FORMAL_ORACLE_VERSION` was folded into the identity (task 12.1 of
+ *     formal-property-oracle) - the identical reason recorded for every prior move above.
+ *     That ONE constant moved and nothing else in the identity did: it identifies the gate
+ *     the Formal_Oracle applied, so a run whose samples were decided under one
+ *     Lowering_Sequence, five-condition rule, Property_Dialect, Proof_Depth rule, and
+ *     Property_Time_Budget is a different experiment from one decided under another.
+ *     Pooling across it would average a verified count taken under one gate with a
+ *     verified count taken under another, which is exactly the attribution the version
+ *     exists to protect.
+ *   - when the Formal_Gate's enabled-or-not choice was folded in under `__formalGateEnabled`
+ *     (task 8.8 of formal-property-oracle) - the identical reason recorded for every prior
+ *     move above. This is the SECOND identity move of this spec, and it is a choice rather
+ *     than a version: a run with the gate on can decide a sample by proof and can fall back
+ *     for a formal reason, while a run with it off takes the simulation path for every
+ *     sample, so the two answer different questions and their samples must never pool. Note
+ *     which direction the committed configs took: they leave the gate OFF, so this hash moved
+ *     purely because the identity now STATES that choice rather than leaving it unsaid - and
+ *     stating it is what stops a later gate-on run from pooling with these records.
+ *   - when `FORMAL_ORACLE_VERSION` went 1 -> 2 (task 4.16 of formal-gate-first-light) - the
+ *     identical reason recorded for every prior move above. That ONE constant moved and nothing
+ *     else in the identity did: the Property_Dialect moved three ways, the Past_Depth ceiling
+ *     from 16 to 18, a depth above it or in an unreadable form from a silent render to a named
+ *     validation refusal, and a combinational `$past` or `$stable` from emitted-and-silent to
+ *     refused at assembly. This configuration leaves the gate OFF and the hash moves anyway,
+ *     because `canonicalSweepConfigJson` folds the version into EVERY configuration
+ *     unconditionally - which is what stops a gate-on run under version 2 from pooling with one
+ *     under version 1.
+ *   - when `FORMAL_ORACLE_VERSION` went 2 -> 3 (task 4.29 of formal-gate-first-light) - the
+ *     identical reason recorded for every prior move above. That ONE constant moved and nothing
+ *     else in the identity did: the emitted reset assume widened, so a Reset_Contract carrying an
+ *     enabling signal now assumes that signal beside the reset and the assumed reset step is one
+ *     that actually fires. A `proved` taken with the enable free and one taken with it asserted
+ *     are not comparable - measured on `LIFObuffer`, the same property moved from
+ *     `could-not-verify` to `proved` at Proof_Depth 20. This configuration leaves the gate OFF and
+ *     the hash moves anyway, for the unconditional-fold-in reason recorded one bullet above.
+ *   - when `FORMAL_ORACLE_VERSION` went 3 -> 4 (refutation-lost-to-cover-cross-check): a cover
+ *     cross-check no longer overrides a refutation, so a verdict can move; same fold-in reason.
+ *   - when `TESTBENCH_PROMPT_VERSION` went 3 -> 4 (testbench-in-order-scoreboard): the
+ *     Treatment_Arm's model input changed, and identity is per build even though this config's
+ *     Cycle_Timed inputs are byte-identical.
+ *   - when `TESTBENCH_PROMPT_VERSION` went 4 -> 5 (the runLength integer wording), same reason.
+ *   - when `TESTBENCH_PROMPT_VERSION` went 5 -> 6 (testbench-spec-grounding), same reason.
+ *   - when `NORMALIZER_VERSION` went 4 -> 5 (Model_Dump_Task removal), same fold-in reason.
+ *   - when `SIMULATION_HARNESS_VERSION` joined the identity at 1 (testbench-spec-grounding): the
+ *     harness decides how every Testbench_Run ENDS, so two harness versions do not pool.
+ *   - when `SIMULATION_HARNESS_VERSION` went 1 -> 2: the Replay_Gate's select pass measured the
+ *     Watchdog_Budget at 2,000,000 ns, replacing the placeholder, and a run under a different
+ *     liveness bound ends differently.
+ *   - when `TESTBENCH_PROMPT_VERSION` went 6 -> 7 (testbench-failure-reportability, the
+ *     Check_Report_Rule) and `SIMULATION_HARNESS_VERSION` went 2 -> 3 (the `ece_check` task) -
+ *     the identical reason recorded for every prior move above: a testbench written under the
+ *     Check_Report_Rule and simulated by a harness that renders its task answers a different
+ *     question about instrument validity than one written and simulated before either existed.
  */
-const SMOKE_RUN_CONFIG_HASH = '966bf684a2ddcb65';
+const SMOKE_RUN_CONFIG_HASH = '080862f80a43dce9';
 
 /**
  * The config hash the committed campaign-readiness slice config currently produces.
@@ -183,8 +244,44 @@ const SMOKE_RUN_CONFIG_HASH = '966bf684a2ddcb65';
  *     normalizer runs on every testbench it produces, so pooling across a change that can
  *     flip a signed comparison would average the instrument under one transform with the
  *     instrument under another.
+ *   - when `FORMAL_ORACLE_VERSION` was folded into the identity (task 12.1 of
+ *     formal-property-oracle) - the identical reason recorded in `SMOKE_RUN_CONFIG_HASH`'s
+ *     history above. That ONE constant moved and nothing else in the identity did: it
+ *     identifies the gate the Formal_Oracle applied, so two runs reporting the same version
+ *     applied the same gate and two reporting different versions did not. This slice's
+ *     samples are keyed by this hash, so pooling across the boundary would average samples
+ *     decided under one gate with samples decided under another.
+ *   - when the Formal_Gate's enabled-or-not choice was folded in under `__formalGateEnabled`
+ *     (task 8.8 of formal-property-oracle) - the identical reason recorded in
+ *     `SMOKE_RUN_CONFIG_HASH`'s history above, and this spec's SECOND move of this hash. A
+ *     choice rather than a version: this slice leaves the gate OFF, so the hash moved purely
+ *     because the identity now STATES that choice, and stating it is what stops a later
+ *     gate-on run from pooling with these records.
+ *   - when `FORMAL_ORACLE_VERSION` went 1 -> 2 (task 4.16 of formal-gate-first-light) - the
+ *     identical reason recorded in `SMOKE_RUN_CONFIG_HASH`'s history above. That ONE constant
+ *     moved and nothing else in the identity did: the Property_Dialect moved three ways, the
+ *     Past_Depth ceiling from 16 to 18, a depth above it or in an unreadable form from a silent
+ *     render to a named validation refusal, and a combinational `$past` or `$stable` from
+ *     emitted-and-silent to refused at assembly. This slice leaves the gate OFF and the hash
+ *     moves anyway, because the version is folded into EVERY configuration unconditionally, so
+ *     this slice's recorded samples are keyed under version 1 and must not pool with a rerun
+ *     under version 2.
+ *   - when `FORMAL_ORACLE_VERSION` went 2 -> 3 (task 4.29 of formal-gate-first-light) - the
+ *     identical reason recorded in `SMOKE_RUN_CONFIG_HASH`'s history above. That ONE constant
+ *     moved and nothing else in the identity did: the emitted reset assume widened, so a
+ *     Reset_Contract carrying an enabling signal now assumes that signal beside the reset, which
+ *     changes what a `proved` verdict means - measured on `LIFObuffer`, the same property moved
+ *     from `could-not-verify` to `proved` at Proof_Depth 20. This slice's recorded samples are
+ *     therefore keyed under version 2 and must not pool with a rerun under version 3.
+ *   - when `FORMAL_ORACLE_VERSION` went 3 -> 4, then again when `TESTBENCH_PROMPT_VERSION` went
+ *     3 -> 4, then 4 -> 5, then 5 -> 6, when `NORMALIZER_VERSION` went 4 -> 5, and when
+ *     `SIMULATION_HARNESS_VERSION` joined the identity, and when it went 1 -> 2 - separate
+ *     moves, for the reasons in `SMOKE_RUN_CONFIG_HASH`'s history.
+ *   - when `TESTBENCH_PROMPT_VERSION` went 6 -> 7 and `SIMULATION_HARNESS_VERSION` went 2 -> 3
+ *     (testbench-failure-reportability) - the identical reason recorded in
+ *     `SMOKE_RUN_CONFIG_HASH`'s history above.
  */
-const TBSLICE_RUN_CONFIG_HASH = 'cd12d948960492ce';
+const TBSLICE_RUN_CONFIG_HASH = '160d4c72d4b61874';
 
 /** Lowercase hex SHA-256, the digest the CLI injects. */
 function sha256Hex(text: string): string {
@@ -229,6 +326,13 @@ function config(overrides: Record<string, unknown> = {}): SweepConfig {
   return parsed.value;
 }
 
+/** The `yosys -V` line this host actually prints, used verbatim so the shape stays real. */
+const YOSYS_VERSION_LINE =
+  'Yosys 0.69+post (git sha1 143eb14f9cc55d6f8927e68523b0c9d2166ed02c, Release, AppleClang clang++ 21.0.0.21000334)';
+
+/** The build identifier inside that line; `0.69+post` on its own names no commit. */
+const YOSYS_BUILD_ID = '143eb14f9cc55d6f8927e68523b0c9d2166ed02c';
+
 /** Probed host facts; every one injected so the test needs no host. */
 function facts(overrides: Partial<ManifestFacts> = {}): ManifestFacts {
   return {
@@ -236,6 +340,15 @@ function facts(overrides: Partial<ManifestFacts> = {}): ManifestFacts {
       iverilogVersion: 'Icarus Verilog version 13.0 (devel)',
       vvpVersion: 'Icarus Verilog runtime version 13.0 (devel)',
       workerPython: 'python',
+      yosysVersion: { kind: 'read', value: YOSYS_VERSION_LINE },
+      yosysBuildId: { kind: 'read', value: YOSYS_BUILD_ID },
+      // The designed-for case, not an edge case: `--version` prints usage only.
+      yosysSmtBmcVersion: {
+        kind: 'not-measured',
+        reason: 'yosys-smtbmc printed usage rather than a version',
+      },
+      bitwuzlaVersion: { kind: 'read', value: '0.9.1' },
+      z3Version: { kind: 'read', value: 'Z3 version 4.15.4 - 64 bit' },
     },
     host: { platform: 'darwin', arch: 'arm64', release: '24.0.0', runtimeVersion: 'v20.19.0' },
     harness: { commit: 'a'.repeat(40), workingTreeDirty: false },
@@ -250,6 +363,7 @@ function manifest(overrides: { readonly facts?: ManifestFacts } = {}) {
     config: config(),
     configHash: 'deadbeefdeadbeef',
     selectedProblemIds: ['rtllm/arithmetic/adder_8bit', 'rtllm/control/counter'],
+    campaignPass: null,
     facts: overrides.facts ?? facts(),
   });
 }
@@ -311,10 +425,70 @@ describe('assembleManifest - reproducibility and toolchain', () => {
 
   it('records unknown tool versions as null, never as a default string', () => {
     const unknown = manifest({
-      facts: facts({ toolchain: { iverilogVersion: null, vvpVersion: null, workerPython: null } }),
+      facts: facts({
+        toolchain: {
+          ...facts().toolchain,
+          iverilogVersion: null,
+          vvpVersion: null,
+          workerPython: null,
+        },
+      }),
     });
     expect(unknown.toolchain.iverilogVersion).toBeNull();
     expect(unknown.toolchain.vvpVersion).toBeNull();
+  });
+
+  it('records a version for every member of the formal toolchain', () => {
+    const toolchain = manifest().toolchain;
+    expect(toolchain.yosysVersion).toEqual({ kind: 'read', value: YOSYS_VERSION_LINE });
+    expect(toolchain.yosysBuildId).toEqual({ kind: 'read', value: YOSYS_BUILD_ID });
+    expect(toolchain.bitwuzlaVersion).toEqual({ kind: 'read', value: '0.9.1' });
+    expect(toolchain.z3Version).toEqual({ kind: 'read', value: 'Z3 version 4.15.4 - 64 bit' });
+  });
+
+  it('records yosys-smtbmc as not measured, with the reason rather than a bare absence', () => {
+    // It ships with yosys and answers `--version` with usage, so the release and the build
+    // identifier above are its provenance. A `null` here would say "unknown" and stop there.
+    const smtbmc = manifest().toolchain.yosysSmtBmcVersion;
+
+    expect(smtbmc.kind).toBe('not-measured');
+    expect(smtbmc.kind === 'not-measured' ? smtbmc.reason : '').toContain('usage');
+  });
+
+  it('carries no filesystem path on any formal toolchain entry this host produces', () => {
+    const toolchain = manifest().toolchain;
+    const probed = [
+      toolchain.yosysVersion,
+      toolchain.yosysBuildId,
+      toolchain.yosysSmtBmcVersion,
+      toolchain.bitwuzlaVersion,
+      toolchain.z3Version,
+    ];
+
+    for (const entry of probed) {
+      expect(entry.kind === 'read' ? entry.value : entry.reason).not.toContain('/');
+    }
+  });
+
+  it('strips a path out of a version line a tool prints its install directory in', () => {
+    // The probe is where that rule lives; assembly copies the entry through untouched. A
+    // leaked home directory cannot be un-committed, so the rule over-redacts on purpose.
+    expect(withoutFilesystemPaths('Yosys 0.69 (/Users/someone/src/yosys, Release)')).toBe(
+      'Yosys 0.69 <path> Release)',
+    );
+    // A relative path goes too, because its first segment can itself be a username.
+    expect(withoutFilesystemPaths('built from someone/yosys')).toBe('built from <path>');
+    expect(withoutFilesystemPaths('Z3 version 4.15.4 - 64 bit')).toBe('Z3 version 4.15.4 - 64 bit');
+  });
+
+  it('stamps a schema version that tells an older manifest from an unreadable version', () => {
+    // The bump is the whole mechanism: a manifest with no formal fields at all reads as
+    // version 1, which is a different fact from a version-2 manifest full of not-measured.
+    expect(manifest().schemaVersion).toBe(MANIFEST_SCHEMA_VERSION);
+    // Pinned, because the number IS the gate a reader of an older manifest is refused by.
+    // v3 (testbench-spec-grounding) adds the harness version, the Grounding block, and the
+    // Replay_Gate report; a v2 manifest carries none of the three.
+    expect(MANIFEST_SCHEMA_VERSION).toBe(3);
   });
 
   it('describes the host without naming the machine', () => {
@@ -420,6 +594,24 @@ describe('the config identity that scopes a resume', () => {
     expect(canonicalSweepConfigJson(on)).not.toContain('captureArtifacts');
   });
 
+  it('CHANGES when the FORMAL GATE is enabled, because a second oracle is a new experiment', () => {
+    // THE EXACT MIRROR IMAGE of the `captureArtifacts` exclusion above, which is why the two
+    // sit side by side: capturing evidence writes files BESIDE the results and moves no
+    // measured number, so that flag hashes identically on and off. Enabling a SECOND ORACLE
+    // moves one - a run with the gate on can decide a sample by proof and can fall back for a
+    // formal reason, while a run with it off takes the simulation path for every sample. Two
+    // different questions, so their samples must never pool under one fingerprint (Req 11.17).
+    const off = config({ formalGateEnabled: false });
+    const on = config({ formalGateEnabled: true });
+
+    expect(on.formalGateEnabled).not.toBe(off.formalGateEnabled);
+    expect(sweepConfigHash(on, digest)).not.toBe(sweepConfigHash(off, digest));
+    // And under its OWN reserved key, beside the five build-constant versions, so a reader
+    // auditing what the fingerprint covers finds the second oracle without hunting for one
+    // boolean among thirty config fields.
+    expect(canonicalSweepConfigJson(on)).toContain('__formalGateEnabled');
+  });
+
   it('CHANGES when the negative-control settings change, because that is a different experiment', () => {
     // The mirror image of the `captureArtifacts` exclusion above. These CAN move a measured
     // number: instrument validity decides the pass@k denominator, so a run over 24 mutants and a
@@ -484,6 +676,44 @@ describe('the config identity that scopes a resume', () => {
     // taken from that run would write this value back (see
     // `chipAgent/_inbox/gotcha-a-build-constant-bump-is-invisible-to-vitest-until-tsc-b-rebuilds-dist.md`).
     expect(SMOKE_RUN_CONFIG_HASH).not.toBe('f7a172ae94c67954');
+    // And once more: `966bf684a2ddcb65` is the hash under NORMALIZER_VERSION 4 and no
+    // FORMAL_ORACLE_VERSION in the identity at all. If the constant above ever reads it
+    // again, the formal-oracle fold-in silently did not reach the identity - and because
+    // vitest resolves `@app/agent` through `dist/`, this is also the value a pin taken
+    // before `tsc -b` rebuilt the compiled constant would have written back.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('966bf684a2ddcb65');
+    // The SIXTH, stacked for the same reason as the five above: `9f5e64dc9780a8a0` is the
+    // hash with FORMAL_ORACLE_VERSION folded in but the Formal_Gate's enabled-or-not choice
+    // still unsaid. If the constant above ever reads it again, the `__formalGateEnabled`
+    // fold-in silently did not reach the identity, and a gate-on run would pool with these
+    // gate-off records.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('9f5e64dc9780a8a0');
+    // The SEVENTH, stacked for the same reason as the six above: `a57ccea01b8651ce` is the hash
+    // under FORMAL_ORACLE_VERSION 1. If the constant above ever reads it again, the 1 -> 2 bump
+    // silently did not reach the identity - and because vitest resolves `@app/agent` through
+    // `dist/`, this is also the value a pin taken before `tsc -b` rebuilt the compiled constant
+    // would have written back.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('a57ccea01b8651ce');
+    // The EIGHTH, stacked for the same reason as the seven above: `24a7dad497b43ab5` is the hash
+    // under FORMAL_ORACLE_VERSION 2. If the constant above ever reads it again, the 2 -> 3 bump
+    // silently did not reach the identity - and because vitest resolves `@app/agent` through
+    // `dist/`, this is also the value a pin taken before `tsc -b` rebuilt the compiled constant
+    // would have written back.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('24a7dad497b43ab5');
+    // `64214ed63083de0e` is the hash under TESTBENCH_PROMPT_VERSION 3, the value a pre-`tsc -b` re-pin writes back.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('64214ed63083de0e');
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('8d42fed9033aa03e');
+    // The hash under TESTBENCH_PROMPT_VERSION 5, the value a pre-`tsc -b` re-pin writes back.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('3d9a4ae99a3439be');
+    // The hash under NORMALIZER_VERSION 4 (prompt version 6).
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('aaa00da99d2105ee');
+    // The hash before SIMULATION_HARNESS_VERSION joined the identity.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('b7a157eea92b7408');
+    // The hash under the placeholder Watchdog_Budget, at harness version 1.
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('ab37ec814612fe4a');
+    // The hash before TESTBENCH_PROMPT_VERSION 6 -> 7 and SIMULATION_HARNESS_VERSION 2 -> 3
+    // reached the identity (testbench-failure-reportability).
+    expect(SMOKE_RUN_CONFIG_HASH).not.toBe('abd7ce567eee11cc');
   });
 
   it('still matches the committed campaign-readiness slice config, so its recorded samples stay resumable', async () => {
@@ -523,6 +753,36 @@ describe('the config identity that scopes a resume', () => {
     // the value a pin taken before `tsc -b` rebuilt `dist/` would have written back, since
     // vitest resolves `@app/agent` through the compiled output rather than the source.
     expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('fa9ec5a014b07e0f');
+    // And once more: `cd12d948960492ce` is the hash under NORMALIZER_VERSION 4 and no
+    // FORMAL_ORACLE_VERSION in the identity at all, which is also the value a pin taken
+    // before `tsc -b` rebuilt `dist/` would have written back, since vitest resolves
+    // `@app/agent` through the compiled output rather than the source.
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('cd12d948960492ce');
+    // The SIXTH, stacked for the same reason as the five above: `c56a7666bcd5eef7` is the
+    // hash with FORMAL_ORACLE_VERSION folded in but the Formal_Gate's enabled-or-not choice
+    // still unsaid. If the constant above ever reads it again, the `__formalGateEnabled`
+    // fold-in silently did not reach the identity.
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('c56a7666bcd5eef7');
+    // The SEVENTH, stacked for the same reason as the six above: `12a318ae57adb477` is the hash
+    // under FORMAL_ORACLE_VERSION 1, which is also the value a pin taken before `tsc -b` rebuilt
+    // `dist/` would have written back, since vitest resolves `@app/agent` through the compiled
+    // output rather than the source.
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('12a318ae57adb477');
+    // The EIGHTH, stacked for the same reason as the seven above: `65078fed046814f4` is the hash
+    // under FORMAL_ORACLE_VERSION 2, which is also the value a pin taken before `tsc -b` rebuilt
+    // `dist/` would have written back, since vitest resolves `@app/agent` through the compiled
+    // output rather than the source.
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('65078fed046814f4');
+    // `f67bff1e97ff3529` is the hash under TESTBENCH_PROMPT_VERSION 3, the value a pre-`tsc -b` re-pin writes back.
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('f67bff1e97ff3529');
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('0bcd1003658f3ce9');
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('fd1be06c195d97c1');
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('0bde334256b4347f');
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('8e8e79d978b11318');
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('40f297c55f297710');
+    // The hash before TESTBENCH_PROMPT_VERSION 6 -> 7 and SIMULATION_HARNESS_VERSION 2 -> 3
+    // reached the identity (testbench-failure-reportability).
+    expect(TBSLICE_RUN_CONFIG_HASH).not.toBe('9e5796537d339d0a');
   });
 });
 
@@ -566,6 +826,10 @@ describe('the config identity that scopes a resume - Property 16', () => {
       fc.property(fc.integer({ min: 1, max: 100 }), (seed) => {
         const sweep = config({ seed });
         const real = JSON.parse(canonicalSweepConfigJson(sweep)) as Record<string, unknown>;
+        // `real` is the identity PRODUCTION built. The key must already be in it: the spread
+        // below ADDS the key when it is absent, so without this the two forms differ whether
+        // or not the fold-in happened.
+        expect(real).toHaveProperty('__testbenchPromptVersion', TESTBENCH_PROMPT_VERSION);
         const otherVersion = TESTBENCH_PROMPT_VERSION + 1;
         const refolded = { ...real, __testbenchPromptVersion: otherVersion };
 
@@ -639,6 +903,10 @@ describe('the config identity that scopes a resume - Property 13', () => {
       fc.property(fc.integer({ min: 1, max: 100 }), (seed) => {
         const sweep = config({ seed });
         const real = JSON.parse(canonicalSweepConfigJson(sweep)) as Record<string, unknown>;
+        // `real` is the identity PRODUCTION built. The key must already be in it: the spread
+        // below ADDS the key when it is absent, so without this the two forms differ whether
+        // or not the fold-in happened.
+        expect(real).toHaveProperty('__instrumentPolicyVersion', INSTRUMENT_POLICY_VERSION);
         const otherVersion = INSTRUMENT_POLICY_VERSION + 1;
         const refolded = { ...real, __instrumentPolicyVersion: otherVersion };
 
@@ -681,5 +949,39 @@ describe('assembleManifest - the recorded policy version agrees with the identit
       }),
       { numRuns: 25 },
     );
+  });
+});
+
+describe('nextCampaignPass - the resume limit reads the previous manifest (Req 8.11, 8.13)', () => {
+  it('counts a first pass, then each resume of the same config', () => {
+    expect(nextCampaignPass(null, 'abc')).toBe(0);
+    expect(nextCampaignPass({ configHash: 'abc', campaignPass: 0 }, 'abc')).toBe(1);
+    expect(nextCampaignPass({ configHash: 'abc', campaignPass: 1 }, 'abc')).toBe(2);
+    // A third resume is pass 3, which the Campaign's maxResumes of 2 refuses at start.
+    expect(nextCampaignPass({ configHash: 'abc', campaignPass: 2 }, 'abc')).toBe(3);
+  });
+
+  it('restarts the count for another config or an unreadable pass', () => {
+    expect(nextCampaignPass({ configHash: 'other', campaignPass: 2 }, 'abc')).toBe(0);
+    expect(nextCampaignPass({ configHash: 'abc', campaignPass: '2' }, 'abc')).toBe(0);
+    expect(nextCampaignPass({ configHash: 'abc', campaignPass: -1 }, 'abc')).toBe(0);
+    expect(nextCampaignPass('not a manifest', 'abc')).toBe(0);
+  });
+
+  it('records no Campaign fields outside a Campaign', () => {
+    const built = manifest({});
+    expect(built.successCriterion).toBeNull();
+    expect(built.campaignPass).toBeNull();
+  });
+});
+
+describe('the manifest at schema 3 (testbench-spec-grounding, C13)', () => {
+  it('records the harness version from the build, and no Campaign block by default', () => {
+    const recorded = manifest();
+
+    expect(recorded.simulationHarnessVersion).toBe(SIMULATION_HARNESS_VERSION);
+    // `null` is the honest value for a run that is not a Grounding Campaign and ran no gate.
+    expect(recorded.groundingCampaign).toBeNull();
+    expect(recorded.replayGate).toBeNull();
   });
 });

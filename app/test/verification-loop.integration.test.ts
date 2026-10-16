@@ -81,6 +81,7 @@ import {
   PROBE,
   realOracleAdapter,
 } from './real-oracle-harness.js';
+import { timingContractFor } from '@app/test';
 
 if (!PROBE.available) {
   console.warn(
@@ -107,11 +108,22 @@ const FAILING_CHECK = 'counts_up';
 /** An approved single-module Spec for the 4-bit counter the harness fixtures build. */
 function counterSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: COUNTER_MODULE_NAME,
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst', direction: 'input', width: 1 },
+        { name: 'count', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A 4-bit synchronous up-counter that clears to zero on reset.',
     constraints: [],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: COUNTER_MODULE_NAME,
       ports: [
         { name: 'clk', direction: 'input', width: 1 },
@@ -434,6 +446,7 @@ async function assertFailRepairPass(simulator: SimulatorAdapter): Promise<void> 
   ]);
   const testbench = new ScriptedTestbench({
     status: 'generated',
+    checkingApproach: 'cycle-timed',
     testbench: testbenchFor(spec),
     checks: [],
   });
@@ -474,6 +487,7 @@ async function assertBudgetExhaustion(simulator: SimulatorAdapter): Promise<void
   ]);
   const testbench = new ScriptedTestbench({
     status: 'generated',
+    checkingApproach: 'cycle-timed',
     testbench: testbenchFor(spec),
     checks: [],
   });

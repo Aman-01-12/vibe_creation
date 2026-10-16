@@ -40,6 +40,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import { normalizeDialect, type DialectFinding } from '@app/agent';
+import { scanSource } from '@app/tools';
 
 import { commentSpans, plantedNonCodeArbitrary, stringSpans } from './dialect-arbitraries.js';
 import { propertyParameters } from './property.js';
@@ -119,5 +120,29 @@ describe(PROPERTY, () => {
     // that never plants a real site would make every comparison above hold for the wrong reason.
     expect(total).toBeGreaterThan(0);
     expect(rewritten / total).toBeGreaterThanOrEqual(MIN_REWRITTEN_SHARE);
+  });
+});
+
+// testbench-failure-reportability task 3.1: the mask's own record of where each literal is.
+// Validates: Requirements 5.2
+describe('SourceMask.stringSpans', () => {
+  it('records one span per literal, quotes included', () => {
+    const source = '$display("ok" /* FAIL */); $display("b");';
+    const spans = scanSource(source).stringSpans;
+    expect(spans.map((span) => source.slice(span.start, span.end + 1))).toEqual(['"ok"', '"b"']);
+  });
+
+  it('does not close a literal on an escaped quote', () => {
+    const source = '$display("a\\"b");';
+    const mask = scanSource(source);
+    expect(mask.stringSpans).toEqual([{ start: 9, end: 14 }]);
+    expect(mask.endMode).toBe('code');
+  });
+
+  it('leaves the span list readable when a literal is unterminated', () => {
+    const source = '$display("done"); $display("FAIL';
+    const mask = scanSource(source);
+    expect(mask.endMode).not.toBe('code');
+    expect(mask.stringSpans).toEqual([{ start: 9, end: 14 }]);
   });
 });

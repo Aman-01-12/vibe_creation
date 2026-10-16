@@ -11,6 +11,7 @@ export * from './orchestrator/index.js';
 export * from './roles/index.js';
 export * from './model-router/index.js';
 export * from './action-recorder/index.js';
+export * from './consensus/index.js';
 
 /**
  * Layer identifier, proving inward resolution of every inner layer this package

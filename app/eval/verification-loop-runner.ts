@@ -15,6 +15,10 @@
 //                    injected `SandboxRuntime` - `LocalWorkerRuntime` on a
 //                    provisioned host, so real `iverilog` + `vvp` decide pass/fail.
 //   Gate + labeler   the real `GenerationGate` and `oracleTrustLabeler`.
+//   Formal_Gate      the real `YosysSmtBmcFormalOracle` over the same sandbox, paired with
+//                    the real RTL-blind Property_Author - and ABSENT unless a retention
+//                    store is injected, which is the off-by-default guarantee rather than a
+//                    half-wired state (see `formalArtifacts` and `#buildFormalGate`).
 //
 // THE ORACLE DECIDES, THIS RUNNER DOES NOT
 //   `runSample` returns whatever `VerificationLoop.verify` returned, unmodified. It
@@ -51,6 +55,10 @@ import type { KnowledgeRetriever } from '@app/knowledge';
 import {
   IcarusSimulatorAdapter,
   SandboxToolRunner,
+  YosysSmtBmcFormalOracle,
+  type FormalArtifactReader,
+  type FormalResourceCaps,
+  type ResourceLimits,
   type SandboxRuntime,
   type SimulatorAdapter,
 } from '@app/tools';
@@ -59,6 +67,9 @@ import {
   GenerationAgent,
   GenerationGate,
   InMemoryTracePersistence,
+  PropertyAgent,
+  type PropertyAgentDeps,
+  type PropertySetSource,
   SimulatorCandidateCompiler,
   TestbenchAgent,
   TraceActionRecorder,
@@ -68,6 +79,7 @@ import {
   intentArtifactLabel,
   primarySelectionFor,
   type ActionRecorder,
+  type FormalGate,
   type GenerationAdmissionRequest,
   type IntentSession,
   type JsonHttpPort,
@@ -130,6 +142,25 @@ export interface EvalVerificationLoopRunnerDeps {
   readonly sandboxRuntime: SandboxRuntime;
   /** OKF retrieval for the Testbench_Agent; hints only, never authority. */
   readonly retriever: KnowledgeRetriever;
+  /**
+   * The artifact store the FORMAL_GATE reads its own reports through - and the one switch
+   * that wires the gate at all (Req 11.16).
+   *
+   * ABSENT BY DEFAULT, which is also the whole of the off-by-default guarantee: with nothing
+   * here no `formal` dependency reaches the Verification_Loop, so a sample behaves exactly as
+   * it did before the gate existed and its record says `not-gated` rather than implying a
+   * formal run happened. No campaign's behaviour or cost changes until a config turns the gate
+   * on (`SweepConfig.formalGateEnabled`).
+   *
+   * IT IS THE STORE RATHER THAN A BOOLEAN, because this root cannot build it: a
+   * `SandboxResult` carries artifact REFS and no bytes and the runtime removes the workspace in
+   * a `finally`, so the oracle can only read the JSON report it just produced through the SAME
+   * retention store the injected `sandboxRuntime` was constructed with. A boolean here would
+   * make "gate enabled, nothing to read its own evidence through" representable, and that state
+   * cannot produce a verdict - only a wall of `toolchain-unavailable`. See
+   * `BoundedArtifactRetention` and the composition in `./sweep/cli.ts`.
+   */
+  readonly formalArtifacts?: FormalArtifactReader;
   /** Credential source; defaults to the env-backed manager (the only env reader). */
   readonly secretManager?: SecretManagerPort;
   /** Where the gate commits the approved Spec; defaults to the headless eval sink. */
@@ -149,6 +180,7 @@ interface ResolvedDeps {
   readonly http: JsonHttpPort;
   readonly sandboxRuntime: SandboxRuntime;
   readonly retriever: KnowledgeRetriever;
+  readonly formalArtifacts: FormalArtifactReader | null;
   readonly secretManager: SecretManagerPort;
   readonly approvalSink: SpecApprovalSink;
   readonly tracePersistence: TracePersistencePort | null;
@@ -262,6 +294,18 @@ interface SamplingParams {
  * throws HERE), so a wiring mistake can never masquerade as a provider outage or as a
  * model's poor score.
  */
+/**
+ * The per-sample Property_Author, constructed in ONE place.
+ *
+ * Exported because two callers need it and must not build it differently: this runner on the
+ * ungated shipping path, and a harness factory wiring `propertySetSourceFor` for a gated eval
+ * run. A second construction site is how the gated and ungated paths would start to differ by
+ * something other than the gate.
+ */
+export function propertyAuthorFor(deps: PropertyAgentDeps): PropertySetSource {
+  return new PropertyAgent(deps);
+}
+
 export class EvalVerificationLoopRunner implements EvalLoopRunner {
   readonly #deps: ResolvedDeps;
 
@@ -335,6 +379,12 @@ export class EvalVerificationLoopRunner implements EvalLoopRunner {
     readonly router: ModelRouter;
   }): VerificationLoop {
     const { request, recorder, simulator, router } = parts;
+    const formal = this.#buildFormalGate(
+      request.limits,
+      recorder,
+      router,
+      request.propertySetSource,
+    );
     return new VerificationLoop({
       gate: this.#buildGate(recorder),
       generator: this.#buildGenerationAgent(request, recorder, simulator, router),
@@ -344,6 +394,7 @@ export class EvalVerificationLoopRunner implements EvalLoopRunner {
         retriever: this.#deps.retriever,
         newId: this.#deps.newId,
         now: this.#deps.now,
+        strategyArm: request.strategyArm,
       }),
       simulator,
       recorder,
@@ -351,9 +402,54 @@ export class EvalVerificationLoopRunner implements EvalLoopRunner {
       ...(request.instrumentAdmission === undefined
         ? {}
         : { instrumentAdmission: request.instrumentAdmission }),
+      ...(formal === null ? {} : { formal }),
       newId: this.#deps.newId,
       now: this.#deps.now,
     });
+  }
+
+  /**
+   * The real FORMAL_GATE for one sample, or `null` where no store was injected (Req 11.16).
+   *
+   * THE TWO HALVES ARE BUILT IN ONE EXPRESSION, which is what makes "an oracle holding no
+   * property source" and "a property source holding no oracle" unrepresentable here rather
+   * than merely discouraged: `FormalGate` bundles them, and this method is the only place in
+   * production that constructs one, so there is no path that supplies half a gate.
+   *
+   * The Property_Author is RTL-blind by type - `propertySetFor` takes the Spec and the budget
+   * and has no parameter a candidate design could occupy - so pairing it with the oracle here
+   * adds no channel from the generated RTL to the property text (Req 6.16).
+   *
+   * Its own `SandboxToolRunner` over the SAME injected runtime, the way `cli.ts` already gives
+   * the judge and the two instrument controls one each: the tool runner holds no per-job state,
+   * while the two things that must be shared - the sandbox runtime and the retention store the
+   * oracle resolves its own report refs through - are the two injected dependencies.
+   */
+  #buildFormalGate(
+    limits: ResourceLimits,
+    recorder: ActionRecorder,
+    router: ModelRouter,
+    authored: PropertySetSource | undefined,
+  ): FormalGate | null {
+    const artifacts = this.#deps.formalArtifacts;
+    if (artifacts === null) {
+      return null;
+    }
+    return {
+      oracle: new YosysSmtBmcFormalOracle({
+        toolRunner: new SandboxToolRunner(this.#deps.sandboxRuntime),
+        artifacts,
+        // The harness's own caps, never a widened set: a proof runs on the same rails as the
+        // simulation oracle. `wallMs` is absent by construction - the adapter derives each
+        // job's wall clock from the remaining Property_Time_Budget instead.
+        caps: formalCapsOf(limits),
+        now: this.#deps.now,
+      }),
+      // The handed source where the harness authored up front, so the gate scored the set
+      // this loop reasons with; otherwise this runner's own author, which is the path a
+      // student session takes. One construction point either way, via `propertyAuthorFor`.
+      properties: authored ?? propertyAuthorFor({ router, recorder, now: this.#deps.now }),
+    };
   }
 
   /** The real generation gate; the loop opens its context once per sample. */
@@ -428,6 +524,17 @@ function createTransport(deps: ResolvedDeps, seed: number, temperature: number):
   });
 }
 
+/**
+ * The four sandbox caps a formal job runs under, from the sample's own limits.
+ *
+ * Written field by field rather than destructured, because `wallMs` has to be DROPPED and
+ * typescript-eslint's `no-unused-vars` defaults `ignoreRestSiblings` to false, so the
+ * omit-a-key destructure is a lint error in this repo.
+ */
+function formalCapsOf(limits: ResourceLimits): FormalResourceCaps {
+  return { cpu: limits.cpu, memMb: limits.memMb, procs: limits.procs, diskMb: limits.diskMb };
+}
+
 /** Default every optional collaborator exactly once, so no call site re-decides. */
 function resolveDeps(deps: EvalVerificationLoopRunnerDeps): ResolvedDeps {
   return {
@@ -436,6 +543,7 @@ function resolveDeps(deps: EvalVerificationLoopRunnerDeps): ResolvedDeps {
     http: deps.http,
     sandboxRuntime: deps.sandboxRuntime,
     retriever: deps.retriever,
+    formalArtifacts: deps.formalArtifacts ?? null,
     secretManager: deps.secretManager ?? new EnvSecretManager(),
     approvalSink: deps.approvalSink ?? HEADLESS_EVAL_APPROVAL_SINK,
     tracePersistence: deps.tracePersistence ?? null,
