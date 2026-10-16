@@ -1,0 +1,42 @@
+{
+  "_README": [
+    "The Cost_Pilot run of task 11.18. Run:",
+    "  npm run eval:property-only -- --config app/eval/property-only/cost-pilot.config.json",
+    "",
+    "No credential belongs in this file. It is read from the Credential_File alone, with no",
+    "environment fallback, and no config field can hold it.",
+    "",
+    "extrapolationFrom is null, which is what confines this run to the Cost_Pilot: while no",
+    "Per_Design_Extrapolation is recorded, nothing outside the three designs below dispatches.",
+    "The Per_Design_Extrapolation this run records is the MAXIMUM of its per-design figures."
+  ],
+  "runName": "property-only-cost-pilot",
+  "outputDir": ".eval-runs/property-only-cost-pilot",
+  "region": "us-east-1",
+  "authoringModels": ["zai.glm-5", "moonshotai.kimi-k2.5"],
+  "_costPilotDesignIds": [
+    "Three typical designs, each confirmed present in the pinned checkout and in the scored",
+    "corpus of 46. Two combinational adders and one reset-bearing counter, so the pilot covers",
+    "both a stateless and a sequential design without taking the heaviest ones: these figures",
+    "set the ceiling the Anomaly_Guard is a multiple of."
+  ],
+  "costPilotDesignIds": [
+    "rtllm/arithmetic/adder_8bit",
+    "rtllm/control/counter_12",
+    "rtllm/arithmetic/adder_16bit"
+  ],
+  "limits": {
+    "cpu": 1,
+    "memMb": 2048,
+    "procs": 128,
+    "diskMb": 512,
+    "wallMs": 300000
+  },
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+  "extrapolationFrom": null
+}

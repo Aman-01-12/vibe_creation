@@ -58,10 +58,23 @@ const REQUIRED_OUTPUTS: readonly RequiredOutput[] = [
   'exitCode',
   'vcd',
   'netlistJson',
+  'formalReport',
+  'formalPrepassReport',
 ];
 
-/** The two artifact-backed required outputs; their presence is tracked in the map. */
-const ARTIFACT_OUTPUTS: readonly RequiredOutput[] = ['vcd', 'netlistJson'];
+/**
+ * The artifact-backed required outputs; their presence is tracked in the map.
+ *
+ * Every member of the union that the map carries belongs here, not only the ones
+ * that existed when this test was written: a new member left out of the generator
+ * makes the property VACUOUS for it while the suite stays green.
+ */
+const ARTIFACT_OUTPUTS: readonly RequiredOutput[] = [
+  'vcd',
+  'netlistJson',
+  'formalReport',
+  'formalPrepassReport',
+];
 
 // -- Independent oracle -----------------------------------------------------
 
@@ -81,6 +94,8 @@ function outputPresent(output: RequiredOutput, capture: RawRunCapture): boolean 
       return capture.exitCode !== null;
     case 'vcd':
     case 'netlistJson':
+    case 'formalReport':
+    case 'formalPrepassReport':
       return Object.prototype.hasOwnProperty.call(capture.artifacts, output);
     default: {
       const unreachable: never = output;
@@ -133,16 +148,19 @@ function artifactBlobRefArbitrary(): fc.Arbitrary<ArtifactBlobRef> {
 }
 
 /**
- * A captured-artifacts map keyed only by known artifact names, so `vcd` and
- * `netlistJson` are each independently present or absent across runs.
+ * A captured-artifacts map keyed only by known artifact names, so every
+ * artifact-backed required output is independently present or absent across runs.
+ *
+ * Every member of `ARTIFACT_OUTPUTS` appears here plus one name (`coverage`) that is
+ * not a required output at all, so a present-but-irrelevant artifact is generated
+ * too. A member left out would never be generated as PRESENT, which would leave the
+ * non-error branch unreachable for jobs requiring it.
  */
 function artifactsArbitrary(): fc.Arbitrary<Readonly<Record<string, ArtifactBlobRef>>> {
   return fc.dictionary(
-    fc.constantFrom('vcd', 'netlistJson', 'coverage'),
+    fc.constantFrom(...ARTIFACT_OUTPUTS, 'coverage'),
     artifactBlobRefArbitrary(),
-    {
-      maxKeys: 3,
-    },
+    { maxKeys: ARTIFACT_OUTPUTS.length + 1 },
   );
 }
 
@@ -191,7 +209,9 @@ function jobArbitrary(): fc.Arbitrary<SandboxJob> {
     kind: fc.constantFrom('simulate', 'synthesize'),
     workspaceFiles: fc.array(sourceFileArbitrary(), { maxLength: 3 }),
     limits: limitsArbitrary(),
-    requiredOutputs: fc.uniqueArray(fc.constantFrom(...REQUIRED_OUTPUTS), { maxLength: 5 }),
+    requiredOutputs: fc.uniqueArray(fc.constantFrom(...REQUIRED_OUTPUTS), {
+      maxLength: REQUIRED_OUTPUTS.length,
+    }),
   });
 }
 
@@ -229,7 +249,7 @@ function jobAndCaptureArbitrary(): fc.Arbitrary<{ job: SandboxJob; capture: RawR
 /**
  * A capture that is complete by construction AND that ran to its own end: not timed
  * out, not killed for disk, no infra failure, every stream and exit code present,
- * and both artifact outputs present. Any required-output subset is therefore fully
+ * and every artifact output present. Any required-output subset is therefore fully
  * captured, isolating the "reflect the run" branch. The exit code is biased toward 0
  * so both pass and fail arise.
  *
@@ -241,9 +261,12 @@ function jobAndCaptureArbitrary(): fc.Arbitrary<{ job: SandboxJob; capture: RawR
  * dedicated facet below, which builds on this same arbitrary with the flag set.
  */
 function completeCaptureArbitrary(): fc.Arbitrary<RawRunCapture> {
-  const bothArtifacts = fc
-    .tuple(artifactBlobRefArbitrary(), artifactBlobRefArbitrary())
-    .map(([vcd, netlistJson]) => ({ vcd, netlistJson }));
+  // One blob per artifact-backed required output, derived FROM `ARTIFACT_OUTPUTS`
+  // rather than listed by hand, so a new member cannot leave this arbitrary claiming
+  // a completeness it no longer has - which would fail the callers' own guard.
+  const everyArtifact = fc.record(
+    Object.fromEntries(ARTIFACT_OUTPUTS.map((name) => [name, artifactBlobRefArbitrary()])),
+  );
   return fc.record({
     timedOut: fc.constant(false),
     infraFailure: fc.constant(false),
@@ -256,7 +279,7 @@ function completeCaptureArbitrary(): fc.Arbitrary<RawRunCapture> {
     stdoutTruncated: fc.boolean(),
     stderrTruncated: fc.boolean(),
     diskLimitExceeded: fc.constant(false),
-    artifacts: bothArtifacts,
+    artifacts: everyArtifact,
     deniedOperations: fc.array(deniedOperationArbitrary(), { maxLength: 2 }),
     resourceUsage: resourceUsageArbitrary(),
   });

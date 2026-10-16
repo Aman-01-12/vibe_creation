@@ -169,6 +169,9 @@ function specDraftArbitrary(): fc.Arbitrary<SpecDraft> {
       ports: fc.array(validPortArbitrary(), { minLength: 1, maxLength: 4 }),
       clocking: fc.constant({ clockName: 'clk', resetName: 'rst', resetActiveLow: false }),
     }),
+    // No case under this property proposes a Timing_Contract entry; the
+    // measurability gate under test does not read this field (task 1.3's migration).
+    timingContractEntries: fc.constant([]),
     acceptanceCriteria: criteriaArbitrary(),
   });
 }

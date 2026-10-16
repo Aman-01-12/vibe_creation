@@ -58,6 +58,7 @@ import {
   type Ulid,
   type VerificationResult,
 } from '@app/core';
+import { timingContractFor } from '@app/test';
 
 /** Unwrap a Result in a test, failing loudly if it is unexpectedly an error. */
 function unwrap<T>(result: Result<T, unknown>): T {
@@ -79,11 +80,18 @@ function buildSpec(projectId: Ulid): Spec {
     method: 'simulation',
   };
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'counter',
+      ports: [unwrap(makePort({ name: 'clk', direction: 'input', width: 1 }))],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId,
     goal: 'a 1-bit counter',
     constraints: ['synchronous reset'],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'counter',
       ports: [unwrap(makePort({ name: 'clk', direction: 'input', width: 1 }))],
       clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },

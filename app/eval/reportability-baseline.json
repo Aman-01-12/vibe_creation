@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "runPath": ".eval-runs/grounding-confirmatory-v1",
+    "configHash": "b99ca404f510c828"
+  },
+  "detector": {
+    "literalSubstring": "FAIL",
+    "caseSensitive": true
+  },
+  "total": {
+    "withReport": 560,
+    "sources": 1015
+  },
+  "perModelArm": {
+    "deepseek.v3.2": {
+      "withReport": 120,
+      "sources": 257
+    },
+    "moonshotai.kimi-k2.5": {
+      "withReport": 159,
+      "sources": 251
+    },
+    "zai.glm-4.7": {
+      "withReport": 112,
+      "sources": 247
+    },
+    "zai.glm-5": {
+      "withReport": 169,
+      "sources": 260
+    }
+  },
+  "perStrategyArm": {
+    "control": {
+      "withReport": 296,
+      "sources": 517
+    },
+    "grounded": {
+      "withReport": 264,
+      "sources": 498
+    }
+  },
+  "label": "measured"
+}

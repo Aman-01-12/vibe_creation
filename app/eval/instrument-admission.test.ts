@@ -35,7 +35,11 @@ import {
 
 const LIMITS: ResourceLimits = { cpu: 1, memMb: 256, procs: 64, diskMb: 64, wallMs: 5000 };
 
-const PARTIAL_REQUEST = { problemId: 'rtllm/arithmetic/adder_8bit', limits: LIMITS };
+const PARTIAL_REQUEST = {
+  problemId: 'rtllm/arithmetic/adder_8bit',
+  limits: LIMITS,
+  requiredCheckNames: [],
+};
 
 /**
  * A fake Model_Router that records every call and never resolves to a provider.
@@ -90,7 +94,7 @@ class ThrowingControl implements InstrumentControl {
 
 /** A control result with the given verdict and no interesting streams. */
 function result(verdict: InstrumentControlResult['verdict']): InstrumentControlResult {
-  return { verdict, stdout: '', stderr: '', exitCode: 0, mutation: null };
+  return { verdict, stdout: '', stderr: '', exitCode: 0, mutation: null, positiveRun: null };
 }
 
 describe('MemoizingInstrumentAdmission - the decision mapping (Req 4.11)', () => {
@@ -181,6 +185,7 @@ describe('MemoizingInstrumentAdmission - the control runs at most once (Req 4.12
       {
         problemId: PARTIAL_REQUEST.problemId,
         limits: PARTIAL_REQUEST.limits,
+        requiredCheckNames: [],
         testbench: 'module tb; endmodule\n',
       },
     ]);
@@ -217,6 +222,7 @@ describe('MemoizingInstrumentAdmission - recorded() (Req 4.12)', () => {
       stderr: '',
       exitCode: null,
       mutation: null,
+      positiveRun: null,
     });
   });
 

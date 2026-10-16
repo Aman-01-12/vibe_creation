@@ -18,11 +18,12 @@ import type { VerificationOutcome } from '@app/agent';
 import type { ResourceLimits } from '@app/tools';
 
 import type { GoldenJudge, RecordedGoldenVerdict } from './golden-judge.js';
-import { createEvalHarness } from './harness.js';
-import type {
-  InstrumentControl,
-  InstrumentControlRequest,
-  InstrumentControlResult,
+import { createEvalHarness, parseRefusalOf, positiveControlRunOf } from './harness.js';
+import {
+  VALID_INSTRUMENT,
+  type InstrumentControl,
+  type InstrumentControlRequest,
+  type InstrumentControlResult,
 } from './instrument-control.js';
 import { NO_MUTATION_CONTROL_MEASURED, type MutationProbeReport } from './mutation-control.js';
 import type { EvalLoopRunner, EvalSampleRequest, StudentSessionCaps } from './loop-runner.js';
@@ -103,7 +104,7 @@ function result(
   verdict: InstrumentControlResult['verdict'],
   mutation: InstrumentControlResult['mutation'] = null,
 ): InstrumentControlResult {
-  return { verdict, stdout: '', stderr: '', exitCode: 0, mutation };
+  return { verdict, stdout: '', stderr: '', exitCode: 0, mutation, positiveRun: null };
 }
 
 /** A control that always throws, to exercise the fail-safe path. */
@@ -439,5 +440,82 @@ describe('EvalHarness - the control cannot perturb a measured number', () => {
     expect(controlled.problems[0]?.iterationsToPass).toBe(
       uncontrolled.problems[0]?.iterationsToPass,
     );
+  });
+});
+
+// --- testbench-spec-grounding, C14: what the record carries about the run ---------------
+
+describe('the record fields the Grounded_Arm adds (Req 5.11, 7.10, 11.3, 11.4)', () => {
+  it('carries the parse refusal of a setup failure, and null for every other outcome', () => {
+    const refused = {
+      status: 'setup-failed',
+      reason: 'testbench-unavailable',
+      detail: 'model output contained no fenced code block',
+      cause: 'model-output-unusable',
+      testbenchParseRefusal: 'no-fence',
+    } as unknown as VerificationOutcome;
+
+    expect(parseRefusalOf(refused)).toBe('no-fence');
+    expect(parseRefusalOf(setupFailedOutcome())).toBeNull();
+    expect(parseRefusalOf(verifiedOutcome())).toBeNull();
+    expect(parseRefusalOf({ status: 'runner-error' })).toBeNull();
+  });
+
+  it('reduces the Positive_Control run to four booleans, dropping the tool-written names', () => {
+    const facts = positiveControlRunOf(
+      {
+        ...result({ validity: 'invalid', defect: 'TESTBENCH_FAILED_REFERENCE' }),
+        positiveRun: {
+          passed: false,
+          watchdogStopped: true,
+          waveformMissing: true,
+          failingCheckNames: ['known_answer_counter_increments'],
+        },
+      },
+      new Set(['known_answer_counter_increments']),
+    );
+
+    expect(facts).toEqual({
+      passed: false,
+      watchdogStopped: true,
+      waveformMissing: true,
+      knownAnswerOnlyFailure: true,
+    });
+  });
+
+  it('is not a known-answer-only failure when a Spec criterion check also failed', () => {
+    const facts = positiveControlRunOf(
+      {
+        ...result({ validity: 'invalid', defect: 'TESTBENCH_FAILED_REFERENCE' }),
+        positiveRun: {
+          passed: false,
+          watchdogStopped: false,
+          waveformMissing: false,
+          failingCheckNames: ['known_answer_counter_increments', 'ac1_counts_up'],
+        },
+      },
+      new Set(['known_answer_counter_increments']),
+    );
+
+    expect(facts?.knownAnswerOnlyFailure).toBe(false);
+  });
+
+  it('is not a known-answer-only failure when the run passed or failed no check', () => {
+    const base = result(VALID_INSTRUMENT);
+    const passing = positiveControlRunOf(
+      {
+        ...base,
+        positiveRun: {
+          passed: true,
+          watchdogStopped: false,
+          waveformMissing: false,
+          failingCheckNames: [],
+        },
+      },
+      new Set(['known_answer_counter_increments']),
+    );
+    expect(passing?.knownAnswerOnlyFailure).toBe(false);
+    // No Positive_Control simulation ran, so there is nothing to summarize.
+    expect(positiveControlRunOf(base, new Set())).toBeNull();
   });
 });

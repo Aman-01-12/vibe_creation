@@ -31,6 +31,7 @@ import { routedModelIdFor } from '@app/test';
 
 /** A well-formed Spec draft: every port positive-width, every criterion measurable. */
 const GOOD_DRAFT: SpecDraft = {
+  timingContractEntries: [],
   goal: 'A 4-bit synchronous up counter',
   constraints: ['synchronous active-high reset'],
   architecture: 'A single clocked always block increments q on each rising clk edge.',

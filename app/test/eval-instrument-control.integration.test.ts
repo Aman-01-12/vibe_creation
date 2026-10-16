@@ -213,6 +213,7 @@ async function check(testbench: string): Promise<InstrumentControlResult> {
     problemId: PROBLEM_ID,
     testbench,
     limits: REAL_LIMITS,
+    requiredCheckNames: [],
   });
   if (result === null) {
     throw new Error(`the control reported no reference design for ${PROBLEM_ID}`);

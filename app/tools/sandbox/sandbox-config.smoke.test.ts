@@ -59,13 +59,34 @@ const LIMIT_CASES: ReadonlyArray<{ readonly label: string; readonly limits: Reso
   { label: 'fractional-cpu tight job', limits: TIGHT_JOB },
 ];
 
-/** Build a minimal valid job for a kind and set of limits. */
+/**
+ * The kind-specific payload each kind must carry, and no other kind may.
+ *
+ * A total `Record` over `SandboxJobKind` rather than a comparison chain, so a FIFTH job kind is
+ * a compile error here instead of silently producing a job the contract rejects - which is how a
+ * whole isolation-posture case comes to assert about a job that would never run.
+ */
+const KIND_PAYLOAD: Readonly<Record<SandboxJobKind, Partial<SandboxJob>>> = Object.freeze({
+  simulate: {},
+  synthesize: {},
+  formal: { formal: { topModule: 'top', depth: 1 } },
+  formalPrepass: { formalPrepass: { topModule: 'top' } },
+});
+
+/**
+ * Build a minimal valid job for a kind and set of limits.
+ *
+ * Each kind carries exactly its own payload and no other kind's, because the seam requires it
+ * there and forbids it elsewhere - a job built without that rule would be one the contract
+ * rejects, whatever this file then asserts about it.
+ */
 function jobWith(limits: ResourceLimits, kind: SandboxJobKind = 'simulate'): SandboxJob {
   return {
     kind,
     workspaceFiles: [{ path: 'top.v', contents: 'module top; endmodule' }],
     limits,
     requiredOutputs: ['stdout', 'stderr', 'exitCode'],
+    ...KIND_PAYLOAD[kind],
   };
 }
 
@@ -212,7 +233,12 @@ describe('sandbox config smoke: wall-clock cap lives in the runtime, not the arg
 });
 
 describe('sandbox config smoke: guarantees hold across job kinds', () => {
-  it.each<SandboxJobKind>(['simulate', 'synthesize'])(
+  // Read off `KIND_PAYLOAD`'s keys rather than hand-listed, because `it.each<SandboxJobKind>`
+  // is TYPED by the union but not EXHAUSTIVE over it: a hand list silently leaves a new kind
+  // unchecked here, which is what happened when `formal` was added. The total `Record` above is
+  // what makes this list complete by construction (Req 14.11, 14.25 - the pre-pass executes
+  // under every isolation control a formal invocation does).
+  it.each<SandboxJobKind>(Object.keys(KIND_PAYLOAD) as SandboxJobKind[])(
     'keeps the isolation posture identical for a %s job',
     (kind) => {
       const args = buildRunscArgs(buildContainerSpec(jobWith(STUDENT_DEFAULTS, kind)));

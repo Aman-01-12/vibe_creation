@@ -1,0 +1,79 @@
+{
+  "_README": [
+    "Example Property_Only_Mode measurement. Copy, edit, and run:",
+    "  npm run eval:property-only -- --config app/eval/property-only/property-only.config.example.json",
+    "",
+    "THE CREDENTIAL DOES NOT BELONG IN THIS FILE, EVER.",
+    "It is read from the Credential_File alone, with no environment fallback, and there is",
+    "no config field that can hold it. A config file gets committed, pasted, and attached",
+    "to reports.",
+    "",
+    "WHAT THIS MEASURES: per design, the Property_Author writes a Property_Set from the Spec",
+    "alone and that set is decided against the UNMODIFIED golden reference design. No",
+    "Testbench_Agent call and no Instrument_Admission step is in this path, and nothing here",
+    "can move a Formal_Verdict, a trust label, or a Fallback_Route on the student path. A key",
+    "whose NAME is shaped like one of those refuses the run by name.",
+    "",
+    "THE COST_PILOT GATE: while no Per_Design_Extrapolation is recorded, NOTHING outside the",
+    "Cost_Pilot dispatches. Leave extrapolationFrom null for the first run; it dispatches the",
+    "three designs below against both Authoring_Models. Then point extrapolationFrom at this",
+    "run's own output directory and the next run covers the full population of 46, under an",
+    "Anomaly_Guard set at 10 times the MAXIMUM of the pilot's per-design figures.",
+    "",
+    "COST: this runs real paid model calls. designs x authoringModels authoring calls, plus",
+    "one deterministic proof run per authored property. Cost is recorded as provenance and is",
+    "never a limiter; every declared limit names a reason that is not cost.",
+    "",
+    "Prefix any key with \"_\" to use it as a comment."
+  ],
+  "runName": "property-only-cost-pilot",
+  "_outputDir": [
+    "Its own directory, named for the measurement, so no report of an end-to-end formal rate",
+    "reads it. The last segment must equal runName, and a directory already holding a sweep",
+    "results.jsonl is refused."
+  ],
+  "outputDir": ".eval-runs/property-only-cost-pilot",
+  "region": "us-east-1",
+  "_authoringModels": [
+    "At least two, including both zai.glm-5 and moonshotai.kimi-k2.5: a property-only rate",
+    "from one model is a fact about that model rather than about the gate. A third model from",
+    "another family is a change to this list and nothing else."
+  ],
+  "authoringModels": ["zai.glm-5", "moonshotai.kimi-k2.5"],
+  "_costPilotDesignIds": [
+    "At most three, which is the declared cost-pilot-design-count. Pick typical designs and",
+    "not the heaviest ones: these figures set the ceiling the Anomaly_Guard is a multiple of."
+  ],
+  "costPilotDesignIds": [
+    "rtllm/arithmetic/adder_8bit",
+    "rtllm/control/counter_12",
+    "rtllm/arithmetic/adder_16bit"
+  ],
+  "_limits": [
+    "The sandbox resource caps every proof runs under. Each proof's own wall clock comes from",
+    "the declared shipped Property_Time_Budget rather than from wallMs here."
+  ],
+  "limits": {
+    "cpu": 1,
+    "memMb": 2048,
+    "procs": 128,
+    "diskMb": 512,
+    "wallMs": 300000
+  },
+  "_caps": [
+    "The student-session caps one design's authoring is charged against. A fresh budget is",
+    "built per design, so no design's spend bounds another's."
+  ],
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+  "_extrapolationFrom": [
+    "The directory of an EARLIER property-only measurement this run reads its",
+    "Per_Design_Extrapolation from. null, absent, unreadable, or undecodable all mean no",
+    "extrapolation is recorded, which confines this run to the Cost_Pilot."
+  ],
+  "extrapolationFrom": null
+}

@@ -56,7 +56,7 @@ import {
   type Ulid,
   type VerificationResult,
 } from '@app/core';
-import { propertyParameters, propertyTag } from '@app/test';
+import { propertyParameters, propertyTag, timingContractFor } from '@app/test';
 
 const PROPERTY = propertyTag(29, 'Project state round-trips through persistence');
 
@@ -161,13 +161,18 @@ function specArbitrary(projectId: Ulid, approved?: boolean): fc.Arbitrary<Spec> 
         moduleName: identifierArbitrary(),
         ports: fc.array(portArbitrary(), { maxLength: 4 }),
         clocking: clockingArbitrary(),
+        validityOutputName: fc.constant(null),
       }),
       acceptanceCriteria: fc.array(criterionArbitrary(), { maxLength: 3 }),
       architecture: fc.string({ maxLength: 40 }),
       approved: approved === undefined ? fc.boolean() : fc.constant(approved),
       version: fc.integer({ min: 1, max: 10 }),
     })
-    .map((fields) => ({ ...fields, projectId }));
+    .map((fields) => ({
+      ...fields,
+      projectId,
+      timingContract: timingContractFor(fields.moduleInterface),
+    }));
 }
 
 /** A generated module version (RTL source) for the given project. */

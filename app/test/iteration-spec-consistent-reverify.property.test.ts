@@ -85,7 +85,7 @@ import {
   type VerificationResult,
 } from '@app/core';
 import type { ResourceLimits } from '@app/tools';
-import { propertyParameters, propertyTag } from '@app/test';
+import { propertyParameters, propertyTag, timingContractFor } from '@app/test';
 
 const PROPERTY = propertyTag(21, 'Iteration re-verifies with a spec-consistent testbench');
 
@@ -193,12 +193,17 @@ function approvedSpecArbitrary(): fc.Arbitrary<Spec> {
         moduleName: identifierArbitrary(),
         ports: fc.array(portArbitrary(), { minLength: 1, maxLength: 4 }),
         clocking: clockingArbitrary(),
+        validityOutputName: fc.constant(null),
       }),
       acceptanceCriteria: fc.array(criterionArbitrary(), { minLength: 1, maxLength: 3 }),
       architecture: phraseArbitrary(),
       version: fc.integer({ min: 1, max: 12 }),
     })
-    .map((fields) => ({ ...fields, approved: true as const }));
+    .map((fields) => ({
+      ...fields,
+      approved: true as const,
+      timingContract: timingContractFor(fields.moduleInterface),
+    }));
 }
 
 /** The full generated scenario for one iteration. */

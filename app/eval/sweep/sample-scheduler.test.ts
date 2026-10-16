@@ -48,6 +48,7 @@ function request(problemId: string, sampleIndex: number): EvalSampleRequest {
     seed: 1,
     temperature: 0,
     budget: BUDGET,
+    strategyArm: 'control',
     limits: LIMITS,
   };
 }
@@ -143,6 +144,11 @@ function declinedArtifacts(): EvalSampleArtifacts {
     preNormalizationTestbench: null,
     normalizerReport: null,
     normalizerReportFindingsTruncated: false,
+    // A declined slot never reached a candidate, so no Formal_Property decided it.
+    propertyWrapperSource: null,
+    formalAssertionCount: null,
+    formalCounterexample: null,
+    formalCounterexampleCapture: null,
   };
 }
 

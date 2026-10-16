@@ -15,7 +15,17 @@
 // that gates presentation, so the positive-width (Req 5.3, 5.9) and measurability
 // (Req 5.4) rules cannot be bypassed by approving directly.
 
-import { newUlid, ok, err, type Json, type Result, type Spec, type Ulid } from '@app/core';
+import {
+  makeTimingContract,
+  newUlid,
+  ok,
+  err,
+  type Json,
+  type Result,
+  type Spec,
+  type TimingContract,
+  type Ulid,
+} from '@app/core';
 
 import type { ActionRecorder, SpanDraft } from '../../action-recorder/index.js';
 import type {
@@ -298,9 +308,32 @@ function mergeDraft(current: SpecDraft, edit: SpecEdit): SpecDraft {
     goal: edit.goal ?? current.goal,
     constraints: edit.constraints ?? current.constraints,
     moduleInterface: edit.moduleInterface ?? current.moduleInterface,
+    timingContractEntries: edit.timingContractEntries ?? current.timingContractEntries,
     acceptanceCriteria: edit.acceptanceCriteria ?? current.acceptanceCriteria,
     architecture: edit.architecture ?? current.architecture,
   };
+}
+
+/**
+ * Build the Timing_Contract for an assembled Spec.
+ *
+ * ponytail: no current Spec_Agent prompt or draft field proposes a per-port timing
+ * entry (that is the Spec role's own follow-up this task does not implement, per
+ * `clarification-answers.md` Q-07), so every output port is placed at `registered`
+ * here. Nothing reads `Spec.timingContract` yet, so this placeholder changes no
+ * behaviour today; the upgrade path is wiring a real per-port proposal through
+ * `SpecDraft.timingContractEntries` once the Spec role grows one.
+ */
+function assembleTimingContract(core: ValidatedSpecCore): TimingContract {
+  const entries = core.moduleInterface.ports
+    .filter((port) => port.direction === 'output')
+    .map((port) => ({ portName: port.name, timing: 'registered' as const }));
+  const built = makeTimingContract(core.moduleInterface, entries);
+  if (!built.ok) {
+    // Unreachable: `entries` is derived from `core.moduleInterface`'s own output ports.
+    throw new Error(`Spec_Agent built an invalid timing contract: ${built.error.message}`);
+  }
+  return built.value;
 }
 
 /** Assemble the core Spec from a validated draft and its revision context. */
@@ -315,6 +348,7 @@ function assembleSpec(
     goal: core.goal,
     constraints: core.constraints,
     moduleInterface: core.moduleInterface,
+    timingContract: assembleTimingContract(core),
     acceptanceCriteria: core.acceptanceCriteria,
     architecture: core.architecture,
     approved,

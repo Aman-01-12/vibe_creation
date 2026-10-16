@@ -72,6 +72,8 @@ interface RunAccumulator {
   containerStdout: string;
   timedOut: boolean;
   spawnFailed: boolean;
+  /** The container CLI's stdin failed before the whole job was written, so it never ran our job. */
+  jobUndelivered: boolean;
 }
 
 /** An infrastructure-failure capture: nothing usable was produced. */
@@ -173,7 +175,12 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     wallMs: number,
   ): Promise<RawRunCapture> {
     return new Promise<RawRunCapture>((resolve) => {
-      const acc: RunAccumulator = { containerStdout: '', timedOut: false, spawnFailed: false };
+      const acc: RunAccumulator = {
+        containerStdout: '',
+        timedOut: false,
+        spawnFailed: false,
+        jobUndelivered: false,
+      };
       // No shell and array args prevent command injection from job contents. Spawned
       // in its own process group so the wall-clock kill uses the same shape as the
       // local runtime's, rather than two dissimilar kills for one bound.
@@ -190,11 +197,24 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       child.on('error', () => {
         acc.spawnFailed = true;
       });
-      child.on('close', () => {
-        clearTimeout(killTimer);
-        resolve(this.resolveCapture(acc));
-      });
+      // Resolve once BOTH the child and its stdin have closed: a stdin 'error' (the job was never
+      // delivered) can arrive after the child's 'close' and must still decide the capture.
+      let pendingCloses = child.stdin === null ? 1 : 2;
+      const settle = (): void => {
+        pendingCloses -= 1;
+        if (pendingCloses === 0) {
+          clearTimeout(killTimer);
+          resolve(this.resolveCapture(acc));
+        }
+      };
+      child.on('close', settle);
 
+      // A container that exits before reading closes the pipe under this write (EPIPE). Unhandled,
+      // that 'error' event is an uncaught exception that ends the whole server process.
+      child.stdin?.on('error', () => {
+        acc.jobUndelivered = true;
+      });
+      child.stdin?.on('close', settle);
       child.stdin?.end(JSON.stringify(job));
     });
   }
@@ -204,7 +224,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     if (acc.timedOut) {
       return infraCapture(true);
     }
-    if (acc.spawnFailed) {
+    if (acc.spawnFailed || acc.jobUndelivered) {
       return infraCapture(false);
     }
     return captureFromReport(parseWorkerReport(acc.containerStdout));

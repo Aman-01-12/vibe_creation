@@ -127,6 +127,7 @@ function buildModuleInterface(
   const clockName = shape.hasClock ? (uniqueNames[next++] as string) : null;
   const resetName = shape.hasReset ? (uniqueNames[next++] as string) : null;
   return {
+    validityOutputName: null,
     moduleName: shape.moduleName,
     ports,
     clocking: { clockName, resetName, resetActiveLow: shape.resetActiveLow },

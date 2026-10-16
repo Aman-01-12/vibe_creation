@@ -43,7 +43,7 @@ import {
   type SpecApprovalSinkError,
 } from '@app/agent';
 import { err, newUlid, ok, type Result, type Spec, type Ulid } from '@app/core';
-import { propertyParameters, propertyTag } from '@app/test';
+import { propertyParameters, propertyTag, timingContractFor } from '@app/test';
 
 const PROPERTY = propertyTag(13, 'Generation is gated on intent confirmation and spec approval');
 
@@ -119,11 +119,22 @@ function intentSession(confirmation: IntentConfirmationState): IntentSession {
 /** Build a minimal, structurally valid Spec in the requested approval state. */
 function spec(approved: boolean, projectId: Ulid = newUlid()): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'counter4',
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst_n', direction: 'input', width: 1 },
+        { name: 'count', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
+    }),
     id: newUlid(),
     projectId,
     goal: 'Count clock edges modulo 16.',
     constraints: ['synchronous'],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'counter4',
       ports: [
         { name: 'clk', direction: 'input', width: 1 },

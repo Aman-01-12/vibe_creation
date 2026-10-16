@@ -56,6 +56,7 @@ import {
   type Verdict,
   type VerificationResult,
 } from '@app/core';
+import { timingContractFor } from '@app/test';
 
 // --- Fixtures ----------------------------------------------------------------
 
@@ -67,12 +68,23 @@ const LIMITS: ResourceLimits = { cpu: 1, memMb: 512, procs: 128, diskMb: 128, wa
 /** An approved single-module Spec whose interface is held constant across the edit. */
 function counterSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: MODULE_NAME,
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'rst', direction: 'input', width: 1 },
+        { name: 'count', direction: 'output', width: 4 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A 4-bit synchronous up-counter that clears to zero on reset.',
     constraints: [],
     architecture: 'Single always block incrementing count on the clock edge.',
     moduleInterface: {
+      validityOutputName: null,
       moduleName: MODULE_NAME,
       ports: [
         { name: 'clk', direction: 'input', width: 1 },

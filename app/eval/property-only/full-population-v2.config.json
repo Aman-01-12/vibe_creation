@@ -1,0 +1,53 @@
+{
+  "_README": [
+    "The FL-27 re-run of the full population, over both Authoring_Models in ONE dispatch under one",
+    "Anomaly_Guard (Req 5.26). Run:",
+    "  npm run eval:property-only -- --config app/eval/property-only/full-population-v2.config.json",
+    "",
+    "No credential belongs in this file. It is read from the Credential_File alone, with no",
+    "environment fallback, and no config field can hold it.",
+    "",
+    "Why a second config rather than an edit to the first: the run it produced is a real paid record",
+    "under Formal_Oracle_Version 3 and stays on disk unaltered. It is superseded as the headline",
+    "measurement, not withdrawn, so it keeps its own output directory."
+  ],
+  "runName": "property-only-full-population-v2",
+  "outputDir": ".eval-runs/property-only-full-population-v2",
+  "region": "us-east-1",
+  "authoringModels": ["zai.glm-5", "moonshotai.kimi-k2.5"],
+  "_costPilotDesignIds": [
+    "Unread at this scope: with an extrapolation recorded the plan is the whole scored corpus.",
+    "Carried as the first pilot's own trio so the file names the population the extrapolation",
+    "below was taken over."
+  ],
+  "costPilotDesignIds": [
+    "rtllm/arithmetic/adder_8bit",
+    "rtllm/control/counter_12",
+    "rtllm/arithmetic/adder_16bit"
+  ],
+  "limits": {
+    "cpu": 1,
+    "memMb": 2048,
+    "procs": 128,
+    "diskMb": 512,
+    "wallMs": 300000
+  },
+  "caps": {
+    "maxIterations": 12,
+    "maxTokens": 1000000,
+    "maxWallClockMs": 900000,
+    "maxCostCents": 100000
+  },
+  "_extrapolationFrom": [
+    "The FIRST Cost_Pilot, 1250 tokens and 8227 ms, unchanged from the superseded run so the token",
+    "arm is the same 12500 and only the wall-clock arm's SPAN moved. Its elapsed figure is",
+    "provenance and a reported comparison (Req 5.7, 5.22), never an arm.",
+    "",
+    "Since FL-27 the wall-clock arm reads a design's Proof_Span against the declared",
+    "shipped-property-time-budget of 150000 ms, which is the span that budget actually bounds. The",
+    "superseded run compared a Design_Total against it and stopped moonshotai.kimi-k2.5 at 9 of 46",
+    "on div_16bit, whose proof reached the budget legitimately and whose authoring time then put",
+    "the total over the arm."
+  ],
+  "extrapolationFrom": ".eval-runs/property-only-cost-pilot"
+}

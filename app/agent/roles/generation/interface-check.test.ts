@@ -14,6 +14,7 @@ import { checkInterfaceExact, parseModuleInterface } from './interface-check.js'
 
 /** A Spec interface for a byte register: two data ports plus a clock/reset contract. */
 const REGISTER_INTERFACE: ModuleInterface = {
+  validityOutputName: null,
   moduleName: 'byte_reg',
   ports: [
     { name: 'd', direction: 'input', width: 8 },

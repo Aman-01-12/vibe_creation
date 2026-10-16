@@ -83,6 +83,7 @@ import {
   type SandboxJob,
 } from '@app/tools';
 import { propertyParameters } from './property.js';
+import { timingContractFor } from '@app/test';
 
 const PROPERTY =
   'instrument-precheck-and-attribution, Property 7: The only difference an admission port ' +
@@ -97,11 +98,21 @@ const PRECHECK_STUB_PATH = 'testbench_precheck_stub.v';
 /** An approved single-module Spec with one simulation-verifiable acceptance criterion. */
 function approvedSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'byte_reg',
+      ports: [
+        { name: 'd', direction: 'input', width: 8 },
+        { name: 'q', direction: 'output', width: 8 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A byte register that captures d on the clock edge.',
     constraints: [],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'byte_reg',
       ports: [
         { name: 'd', direction: 'input', width: 8 },
@@ -183,14 +194,24 @@ class AdmittingGate implements GenerationContextOpener {
  * admission decision could ever have influenced.
  */
 class FixedTestbench implements IndependentTestbenchGenerator {
-  readonly #outcome: { status: 'generated'; testbench: Testbench; checks: readonly [] };
+  readonly #outcome: {
+    status: 'generated';
+    checkingApproach: 'cycle-timed';
+    testbench: Testbench;
+    checks: readonly [];
+  };
   constructor(testbench: Testbench) {
-    this.#outcome = { status: 'generated', testbench, checks: [] };
+    this.#outcome = { status: 'generated', checkingApproach: 'cycle-timed', testbench, checks: [] };
   }
   generateTestbench(
     _request: GenerateTestbenchRequest,
     budget: MeteredSessionBudget,
-  ): Promise<{ status: 'generated'; testbench: Testbench; checks: readonly [] }> {
+  ): Promise<{
+    status: 'generated';
+    checkingApproach: 'cycle-timed';
+    testbench: Testbench;
+    checks: readonly [];
+  }> {
     budget.charge({ tokens: 1, costCents: 1, wallClockMs: 1 });
     return Promise.resolve(this.#outcome);
   }

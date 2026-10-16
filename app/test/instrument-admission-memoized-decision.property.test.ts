@@ -51,7 +51,11 @@ const PROPERTY =
   'refuses only on invalid';
 
 const LIMITS: ResourceLimits = { cpu: 1, memMb: 256, procs: 64, diskMb: 64, wallMs: 5000 };
-const PARTIAL_REQUEST = { problemId: 'rtllm/arithmetic/adder_8bit', limits: LIMITS };
+const PARTIAL_REQUEST = {
+  problemId: 'rtllm/arithmetic/adder_8bit',
+  limits: LIMITS,
+  requiredCheckNames: [],
+};
 
 // -- Generators ---------------------------------------------------------------
 
@@ -93,6 +97,7 @@ const controlOutcomeArbitrary: fc.Arbitrary<InstrumentControlResult | null> = fc
       stderr: '',
       exitCode: 0,
       mutation: null,
+      positiveRun: null,
     })),
   },
 );

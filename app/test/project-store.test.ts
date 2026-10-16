@@ -45,6 +45,7 @@ import {
   type VerificationResult,
 } from '@app/core';
 import type { AuthenticatedPrincipal } from '@app/api';
+import { timingContractFor } from '@app/test';
 
 /** Unwrap a Result in a test, failing loudly if it is unexpectedly an error. */
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -70,11 +71,18 @@ function buildSpec(projectId: Ulid, approved: boolean): Spec {
     method: 'simulation',
   };
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'counter',
+      ports: [buildPort()],
+      clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },
+    }),
     id: newUlid(),
     projectId,
     goal: 'a 1-bit counter',
     constraints: ['synchronous reset'],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'counter',
       ports: [buildPort()],
       clocking: { clockName: 'clk', resetName: 'rst', resetActiveLow: false },

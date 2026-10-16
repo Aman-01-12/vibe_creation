@@ -77,6 +77,7 @@ import {
   type SandboxJob,
 } from '@app/tools';
 import { propertyParameters } from './property.js';
+import { timingContractFor } from '@app/test';
 
 const PROPERTY =
   'testbench-repair-loop, Property 7: Repair_Provenance is exactly {attempted, accepted} and nothing else moves with it';
@@ -90,11 +91,21 @@ const PRECHECK_STUB_PATH = 'testbench_precheck_stub.v';
 /** An approved single-module Spec with one simulation-verifiable acceptance criterion. */
 function approvedSpec(): Spec {
   return {
+    timingContract: timingContractFor({
+      validityOutputName: null,
+      moduleName: 'byte_reg',
+      ports: [
+        { name: 'd', direction: 'input', width: 8 },
+        { name: 'q', direction: 'output', width: 8 },
+      ],
+      clocking: { clockName: 'clk', resetName: 'rst_n', resetActiveLow: true },
+    }),
     id: newUlid(),
     projectId: newUlid(),
     goal: 'A byte register that captures d on the clock edge.',
     constraints: [],
     moduleInterface: {
+      validityOutputName: null,
       moduleName: 'byte_reg',
       ports: [
         { name: 'd', direction: 'input', width: 8 },
@@ -178,6 +189,7 @@ class ScriptedTestbench implements IndependentTestbenchGenerator {
     budget.charge({ tokens: 1, costCents: 1, wallClockMs: 1 });
     return Promise.resolve({
       status: 'generated' as const,
+      checkingApproach: 'cycle-timed' as const,
       testbench: {
         id: newUlid(),
         specId: this.#spec.id,

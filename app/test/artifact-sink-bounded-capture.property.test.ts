@@ -43,14 +43,47 @@
 // override-builder. `SampleResult`'s pass-through fields are irrelevant to this
 // property, so `measured` is one fixed fixture throughout.
 //
-// Validates: Requirements 2.11, 6.3, 6.4, 6.6
+// THE FORMAL EVIDENCE (formal-property-oracle Req 12.15, 12.16, 12.22), in the second block
+//   The same capture now records three facts about the ONE Formal_Property that decided the
+//   sample: its Property_Wrapper source (HEAD-kept under `maxSourceChars`, written to
+//   `property-wrapper.v`), its generated SMT2 assertion count, and - for a refutation alone - its
+//   Counterexample REFERENCE. They are read off `measured.formal`, the object the results
+//   record's `formal` block is projected from, so the record's own `recordedFormalRun` is the
+//   independent witness of which property that is. Bounded and absent-when-unreadable for the
+//   same reasons as the fields above, so they live beside them.
+//
+// Validates: Requirements 2.11, 6.3, 6.4, 6.6 (instrument-precheck-and-attribution);
+// 12.15, 12.16, 12.22 (formal-property-oracle)
 
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
-import { NO_REPAIR, type VerificationOutcome } from '@app/agent';
-import { ARTIFACT_CAPS, captureSampleArtifacts, type SampleResult } from '@app/eval';
+import {
+  NO_FORMAL_RUN,
+  NO_REPAIR,
+  type FormalProvenance,
+  type VerificationOutcome,
+} from '@app/agent';
+import {
+  ARTIFACT_CAPS,
+  ARTIFACT_FILENAMES,
+  captureSampleArtifacts,
+  MAX_COUNTEREXAMPLE_TRACE_BYTES,
+  planArtifactFiles,
+  recordedFormalRun,
+  type EvalSampleArtifacts,
+  type SampleResult,
+} from '@app/eval';
 import { propertyParameters } from '@app/test';
+import {
+  admitProved,
+  MAX_RETAINED_ARTIFACT_BYTES,
+  type ArtifactBlobRef,
+  type ProofConditions,
+  type PropertyResult,
+} from '@app/tools';
+
+import { arbFormalProvenance } from './formal-arbitraries.js';
 
 const PROPERTY =
   'instrument-precheck-and-attribution, Property 12: The capture derives exactly what the outcome carries, bounded';
@@ -73,8 +106,19 @@ const MEASURED: SampleResult = {
   goldenVerdict: null,
   instrumentVerdict: { validity: 'unchecked', reason: 'no-testbench' },
   mutationProbe: null,
+  propertySetAdmitted: 'not-gated',
+  propertySetAuthoredUpFront: false,
+  propertySetSurvivorCount: 0,
+  formalMutationCounts: null,
   repairProvenance: NO_REPAIR,
+  formal: NO_FORMAL_RUN,
   checkNameVisibilitySignal: false,
+  checkingApproach: 'cycle-timed',
+  testbenchParseRefusal: null,
+  // A setup-failed sample measured no testbench.
+  valuelessFailureReports: null,
+  positiveControlRun: null,
+  designGroup: 'cycle-exact',
 };
 
 /** A `setup-failed` outcome whose coverage-gap fields are supplied by the caller. */
@@ -244,5 +288,284 @@ describe(PROPERTY, () => {
 
     expect(artifacts.rejectedTestbenchDraft).toBeNull();
     expect(artifacts.missingCheckNames).toEqual(['reset_clears_output']);
+  });
+});
+
+/** A Counterexample reference in the shape the worker registers a base-case trace under. */
+const COUNTEREXAMPLE: ArtifactBlobRef = Object.freeze({
+  name: 'formal-trace-base-bitwuzla.vcd',
+  sizeBytes: 2_048,
+  sha256: 'e'.repeat(64),
+});
+
+/** Five Proof_Conditions that all admit, over the given assertion count. */
+function admittingConditions(assertionCount: number): ProofConditions {
+  return {
+    assertionCount,
+    presat: 'satisfiable',
+    cover: { reached: 'not-applicable' },
+    base: 'passed',
+    induction: 'successful',
+  };
+}
+
+/** A `proved` result, its evidence built by `admitProved`, the sole constructor of one. */
+function provedResult(criterionRef: string, assertionCount: number): PropertyResult {
+  const evidence = admitProved(admittingConditions(assertionCount));
+  if (typeof evidence === 'string') {
+    throw new Error(`the fixture's own conditions were refused: ${evidence}`);
+  }
+  return { verdict: 'proved', evidence, depth: 20, elapsedMs: 10, criterionRef };
+}
+
+/** A `refuted` result: a failed base case, carrying the reference it was reported with. */
+function refutedResult(
+  criterionRef: string,
+  assertionCount: number,
+  counterexample: ArtifactBlobRef = COUNTEREXAMPLE,
+): PropertyResult {
+  return {
+    verdict: 'refuted',
+    counterexample,
+    conditions: { ...admittingConditions(assertionCount), base: 'failed', induction: 'not-run' },
+    depth: 20,
+    elapsedMs: 10,
+    criterionRef,
+  };
+}
+
+/** A `could-not-verify` result whose budget ran out, over the given count. */
+function couldNotVerifyResult(criterionRef: string, assertionCount: number): PropertyResult {
+  return {
+    verdict: 'could-not-verify',
+    cause: 'proof-timeout',
+    conditions: { ...admittingConditions(assertionCount), induction: 'not-run' },
+    depth: 20,
+    elapsedMs: 150_000,
+    criterionRef,
+    diagnostic: null,
+    crossCheckDisagreed: false,
+  };
+}
+
+/** The wrapper source the oracle submitted for one criterion; distinct per criterion. */
+function wrapperFor(criterionRef: string): string {
+  return `module formal_property_wrapper(input clk);\n  // ${criterionRef}\nendmodule\n`;
+}
+
+/** A provenance over these results, each wrapper paired with its result by index. */
+function provenanceOf(results: readonly PropertyResult[]): FormalProvenance {
+  return {
+    ...NO_FORMAL_RUN,
+    results,
+    propertyWrapperSources: results.map((result) => wrapperFor(result.criterionRef)),
+  };
+}
+
+/**
+ * Capture one sample whose measured provenance is `formal`.
+ *
+ * Untyped on purpose, so the unreadable shapes below can be handed in. The outcome carries the
+ * same value because the harness copies it from there; the capture reads `measured.formal`.
+ */
+function captureFormal(formal: unknown): EvalSampleArtifacts {
+  const measured = { ...MEASURED, outcomeStatus: 'unverified', formal } as unknown as SampleResult;
+  const outcome = { status: 'unverified', formal } as unknown as VerificationOutcome;
+  return captureSampleArtifacts({ outcome, measured, control: null });
+}
+
+/** A two-slot result list whose FIRST slot is a hole rather than a value. */
+function sparseResults(result: PropertyResult): readonly unknown[] {
+  const slots = new Array<unknown>(2);
+  slots[1] = result;
+  return slots;
+}
+
+/** A count as the capture may record one: a non-negative safe integer, or absent. */
+function usableCount(value: number | undefined): number | null {
+  return value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** A wrapper length spanning `maxSourceChars`, built by repetition - the claim is about length. */
+const wrapperLengthArbitrary: fc.Arbitrary<number> = fc.integer({
+  min: 1,
+  max: ARTIFACT_CAPS.maxSourceChars * 2,
+});
+
+describe('formal-property-oracle: the capture records what the deciding formal result rested on', () => {
+  it('bounds the deciding wrapper HEAD-kept under maxSourceChars and writes it to property-wrapper.v', () => {
+    fc.assert(
+      fc.property(wrapperLengthArbitrary, (length) => {
+        const source = 'w'.repeat(length);
+        const formal = {
+          ...provenanceOf([refutedResult('ac-1', 2)]),
+          propertyWrapperSources: [source],
+        };
+
+        const artifacts = captureFormal(formal);
+        const captured = artifacts.propertyWrapperSource;
+
+        expect(captured).not.toBeNull();
+        if (captured === null) {
+          return;
+        }
+        expect(captured.keptEnd).toBe('head');
+        expect(captured.originalChars).toBe(length);
+        expect(captured.truncated).toBe(length > ARTIFACT_CAPS.maxSourceChars);
+        expect(captured.text).toBe(source.slice(0, ARTIFACT_CAPS.maxSourceChars));
+        const file = planArtifactFiles(artifacts).find(
+          (planned) => planned.filename === ARTIFACT_FILENAMES.propertyWrapper,
+        );
+        // Banner-prefixed when cut, so the file ends with exactly the captured text either way.
+        expect(file?.contents.endsWith(captured.text)).toBe(true);
+        expect(file?.truncated).toBe(captured.truncated);
+      }),
+      propertyParameters(),
+    );
+  });
+
+  it('takes the wrapper, the count, and the reference from the ONE result that decided it', () => {
+    // `refuted` beats `could-not-verify` beats `proved`, and the refutation is deliberately NOT
+    // first, so a capture that read index 0 or the last result records a different property.
+    const formal = provenanceOf([
+      provedResult('ac-1', 5),
+      couldNotVerifyResult('ac-2', 0),
+      refutedResult('ac-3', 3),
+    ]);
+
+    const artifacts = captureFormal(formal);
+
+    expect(artifacts.propertyWrapperSource?.text).toBe(wrapperFor('ac-3'));
+    expect(artifacts.formalAssertionCount).toBe(3);
+    expect(artifacts.formalCounterexample).toEqual(COUNTEREXAMPLE);
+    // The same choice the results record's `formal` block makes, over the same object.
+    expect(recordedFormalRun(formal)?.conditions.assertionCount).toBe(3);
+  });
+
+  it('reads the count off the field each verdict carries it on, and a reference only on a refutation', () => {
+    // A `proved` result has no `conditions` and the other two have no `evidence`, so reading the
+    // wrong holder yields `null` here rather than a plausible number. Zero is a real count - the
+    // measured vacuous trap - and must be recorded as 0, never as absent.
+    const cases: readonly {
+      readonly result: PropertyResult;
+      readonly count: number;
+      readonly counterexample: ArtifactBlobRef | null;
+    }[] = [
+      { result: provedResult('ac-1', 7), count: 7, counterexample: null },
+      { result: couldNotVerifyResult('ac-1', 0), count: 0, counterexample: null },
+      { result: refutedResult('ac-1', 4), count: 4, counterexample: COUNTEREXAMPLE },
+    ];
+
+    for (const { result, count, counterexample } of cases) {
+      const artifacts = captureFormal(provenanceOf([result]));
+
+      expect(artifacts.formalAssertionCount, result.verdict).toBe(count);
+      expect(artifacts.formalCounterexample, result.verdict).toEqual(counterexample);
+    }
+  });
+
+  it('records a reference for exactly the samples the record calls refuted, and the record count', () => {
+    fc.assert(
+      fc.property(arbFormalProvenance(), (formal) => {
+        const artifacts = captureFormal(formal);
+        const recorded = recordedFormalRun(formal);
+
+        expect(artifacts.formalCounterexample !== null).toBe(recorded?.verdict === 'refuted');
+        expect(artifacts.formalAssertionCount).toBe(
+          usableCount(recorded?.conditions.assertionCount),
+        );
+        // A wrapper is only ever captured from a list that pairs with the results by index.
+        if (artifacts.propertyWrapperSource !== null) {
+          expect(formal.propertyWrapperSources).toHaveLength(formal.results.length);
+        }
+      }),
+      propertyParameters(),
+    );
+  });
+
+  it('yields an ABSENT artifact, never a thrown error, for every field it cannot read', () => {
+    const refuted = refutedResult('ac-1', 2);
+    const nothing = { wrapper: false, count: null, ref: false } as const;
+    const rows: readonly {
+      readonly name: string;
+      readonly formal: unknown;
+      readonly wrapper: boolean;
+      readonly count: number | null;
+      readonly ref: boolean;
+    }[] = [
+      { name: 'no provenance at all', formal: undefined, ...nothing },
+      {
+        name: 'results that are not a list',
+        formal: { ...NO_FORMAL_RUN, results: 'x' },
+        ...nothing,
+      },
+      {
+        name: 'a result that is not an object',
+        formal: { ...provenanceOf([refuted]), results: [null, refuted] },
+        ...nothing,
+      },
+      {
+        // `every` skips a hole and `find` visits one, so a guard written with `every` alone
+        // would hand `decidingResult` an `undefined` to read `verdict` off.
+        name: 'a sparse result list',
+        formal: { ...provenanceOf([refuted]), results: sparseResults(refuted) },
+        ...nothing,
+      },
+      {
+        name: 'a wrapper list an older double never returned',
+        formal: { ...provenanceOf([refuted]), propertyWrapperSources: undefined },
+        wrapper: false,
+        count: 2,
+        ref: true,
+      },
+      {
+        name: 'a wrapper list that cannot be paired by index',
+        formal: { ...provenanceOf([refuted]), propertyWrapperSources: ['a', 'b'] },
+        wrapper: false,
+        count: 2,
+        ref: true,
+      },
+      {
+        name: 'a reference whose digest is not a SHA-256',
+        formal: provenanceOf([refutedResult('ac-1', 2, { ...COUNTEREXAMPLE, sha256: 'nope' })]),
+        wrapper: true,
+        count: 2,
+        ref: false,
+      },
+      {
+        name: 'a count that is not a count',
+        formal: provenanceOf([refutedResult('ac-1', Number.NaN)]),
+        wrapper: true,
+        count: null,
+        ref: true,
+      },
+      {
+        // "Present for a refuted sample and for NO other" holds even for a malformed carrier: a
+        // reference on a result the oracle did not refute is not a Counterexample.
+        name: 'a stray reference on a result that is not a refutation',
+        formal: {
+          ...provenanceOf([couldNotVerifyResult('ac-1', 2)]),
+          results: [{ ...couldNotVerifyResult('ac-1', 2), counterexample: COUNTEREXAMPLE }],
+        },
+        wrapper: true,
+        count: 2,
+        ref: false,
+      },
+    ];
+
+    for (const row of rows) {
+      const artifacts = captureFormal(row.formal);
+
+      expect(artifacts.propertyWrapperSource !== null, row.name).toBe(row.wrapper);
+      expect(artifacts.formalAssertionCount, row.name).toBe(row.count);
+      expect(artifacts.formalCounterexample !== null, row.name).toBe(row.ref);
+    }
+  });
+
+  it('sizes the trace cap to hold whole every trace the retention store can resolve', () => {
+    // A trace is written whole or not at all, so a cap below the store's own would refuse traces
+    // it kept, and no character cap here could hold a retained trace whole.
+    expect(MAX_COUNTEREXAMPLE_TRACE_BYTES).toBeGreaterThanOrEqual(MAX_RETAINED_ARTIFACT_BYTES);
+    expect(MAX_COUNTEREXAMPLE_TRACE_BYTES).toBeGreaterThan(ARTIFACT_CAPS.maxSourceChars);
   });
 });

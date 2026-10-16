@@ -118,6 +118,7 @@ function port(input: {
  * whether the TESTBENCH parses, which is exactly the question this assertion asks.
  */
 const STANDALONE_INTERFACE: ModuleInterface = {
+  validityOutputName: null,
   moduleName: 'dialect_probe_dut',
   ports: [port({ name: 'a', direction: 'input', width: 1 })],
   clocking: { clockName: null, resetName: null, resetActiveLow: false },
