@@ -58,7 +58,7 @@ Design-phase open decisions DQ1 (reuse `'testbench'` as the `ModelTask`, no new 
     - Generate outcomes where `repairProvenance.attempted` is `false`; assert the oracle verdict, golden verdict, and Recorded_Instrument_Verdict are each identical to the value they would hold had the repair capability never been wired in
     - **Validates: Requirements 4.1, 4.2, 4.3, 4.4, 6.6**
 
-- [~] 3. Checkpoint - the hint module and the provenance shape are correct in isolation
+- [x] 3. Checkpoint - the hint module and the provenance shape are correct in isolation
   - Ensure all tests pass, ask the user if questions arise.
   - Confirm `npx tsc -b` reports no error and no existing fixture was left pinning `NO_REPAIR` where an arbitrary should vary it
 
@@ -75,15 +75,15 @@ Design-phase open decisions DQ1 (reuse `'testbench'` as the `ModelTask`, no new 
     - Apply the SAME `#validateCoverage` gate to the revised source that `generateTestbench` applies to a first draft, and return exactly one of the three existing `TestbenchGenerationOutcome` members (`generated`, `coverage-incomplete`, `generation-failed`) on every path, including a thrown or router-exhausted model call
     - _Requirements: 1.5, 1.6, 2.9, 6.3, 8.1, 8.2_
 
-  - [ ]* 4.3 Extend Property 4 (RTL isolation) to cover `repairTestbench`
+  - [x]* 4.3 Extend Property 4 (RTL isolation) to cover `repairTestbench`
     - Extend the existing property test asserting Property 4 of the base HDL-creation-loop design to also assert, *for any* `RepairTestbenchRequest`, the assembled model input text contains none of the candidate RTL that produced the triggering control run
     - **Validates: Requirements 2.4, 2.5, 2.6, 2.8, 9.6**
 
-  - [ ]* 4.4 Write the unit test for a repaired testbench that under-covers
+  - [x]* 4.4 Write the unit test for a repaired testbench that under-covers
     - Assert a `repairTestbench` call whose revised source fails `#validateCoverage` returns `coverage-incomplete` with the same shape `generateTestbench` already returns for a first-draft under-coverage
     - _Requirements: 6.3_
 
-- [~] 5. Checkpoint - the repair primitive is correct and isolated
+- [x] 5. Checkpoint - the repair primitive is correct and isolated
   - Ensure all tests pass, ask the user if questions arise.
   - Confirm `repairTestbench` and `generateTestbench` return the identical `TestbenchGenerationOutcome` union type, not two similar-looking types
   - Confirm no `app/agent` module added so far imports `app/eval`
@@ -109,31 +109,31 @@ Design-phase open decisions DQ1 (reuse `'testbench'` as the `ModelTask`, no new 
     - Widen `#admitInstrument`'s return type to thread `RepairProvenance` forward on every branch
     - _Requirements: 1.1, 1.3, 3.1, 3.3, 3.4, 5.1, 5.2, 5.3, 5.5, 6.1, 6.2, 6.3, 6.5, 8.3_
 
-  - [ ]* 6.5 Write the property test for the closed trigger set and at-most-once bound (Property 1)
+  - [x]* 6.5 Write the property test for the closed trigger set and at-most-once bound (Property 1)
     - **Property 1: A repair fires only on the closed trigger set, and at most once per sample**
     - Generate every member of `InstrumentDefectCode` and every `InstrumentUncheckedReason`, not only the two triggering ones, so the "never fires on these" half of the claim is exercised
     - **Validates: Requirements 1.1, 1.2, 1.3, 1.4**
 
-  - [ ]* 6.6 Write the property test for re-check parity on the precheck path (Property 4, precheck half)
+  - [x]* 6.6 Write the property test for re-check parity on the precheck path (Property 4, precheck half)
     - **Property 4: A repaired testbench is re-checked by the identical rule a first draft is held to**
     - Assert running a revised testbench back through `TestbenchPrecheck.run` yields the identical outcome the same source would yield as a first-draft testbench, via the exact same function with no parameter distinguishing "repaired" from "generated"
     - **Validates: Requirements 3.1, 3.2, 3.3, 3.5, 3.6**
 
-  - [ ]* 6.7 Write the property test for failed-re-check finalization (Property 5, precheck half)
+  - [x]* 6.7 Write the property test for failed-re-check finalization (Property 5, precheck half)
     - **Property 5: A failed re-check finalizes the pre-existing outcome, never a second repair**
     - **Validates: Requirements 3.4, 6.1, 6.2, 6.3**
 
-  - [ ]* 6.8 Write the unit test for the real measured precheck build failure
+  - [x]* 6.8 Write the unit test for the real measured precheck build failure
     - Run the real `adder_16bit` Testbench_Precheck build failure (from the precedent spec's fixtures) through `buildRepairHint`, asserting the resulting `BuildDiagnosticHint.diagnostic` is byte-identical to the precheck's own captured stderr
     - _Requirements: 2.1_
 
-- [~] 7. Checkpoint - the precheck-path repair is correct and the import boundary holds
+- [x] 7. Checkpoint - the precheck-path repair is correct and the import boundary holds
   - Ensure all tests pass, ask the user if questions arise.
   - Confirm no `app/agent` module imports `app/eval`
   - Confirm a repaired testbench that re-fails its precheck produces `InstrumentRefusedModule.reason` identical to the unrepaired failure, with `repairProvenance: { attempted: true, accepted: false }` the only visible difference
   - _Requirements: 8.5, 9.5_
 
-- [ ] 8. The `EvalTestbenchRepair` adapter and the harness wiring
+- [x] 8. The `EvalTestbenchRepair` adapter and the harness wiring
   - [x] 8.1 Add `EvalTestbenchRepair`
     - Create `app/eval/testbench-repair.ts` with `EvalTestbenchRepair implements TestbenchRepair`, constructed with the `RepairingTestbenchGenerator` (`repairTestbench`), the sample's `sessionId`, and the sample's own `SessionBudgetHandle`
     - Map a `repairTestbench` throw to `{ decision: 'undecided' }`, a `generated` outcome to `{ decision: 'repaired', revisedSource }`, and every other outcome to `{ decision: 'not-repaired' }`
@@ -152,17 +152,17 @@ Design-phase open decisions DQ1 (reuse `'testbench'` as the `ModelTask`, no new 
     - Add the optional `testbenchRepair?: TestbenchRepair` field to `EvalHarnessDeps`; when absent, every sample's positive-control-path repair is skipped
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 3.2, 3.6, 5.4, 6.1, 6.2, 6.3, 6.4, 6.5, 8.4_
 
-  - [ ]* 8.4 Write the property test for the budget-ordering guarantee (Property 8)
+  - [x]* 8.4 Write the property test for the budget-ordering guarantee (Property 8)
     - **Property 8: The repair's cost is charged to, and only to, the sample's own budget, before the record is closed**
     - Assert against a metered budget over a trajectory including at least one repair attempt, so "same handle charged" is non-vacuous
     - **Validates: Requirements 5.1, 5.2, 5.3, 5.4, 5.5**
 
-  - [ ]* 8.5 Write the property test for total repair-failure degradation (Property 6)
+  - [x]* 8.5 Write the property test for total repair-failure degradation (Property 6)
     - **Property 6: Every repair failure path degrades to exactly the unrepaired outcome, never to a pass**
     - Generate at least one trigger through each of: the model call throwing, the Model_Router exhausting its chain, the budget already exhausted, the revised source failing coverage validation, and the port itself throwing
     - **Validates: Requirements 6.1, 6.2, 6.3, 6.4, 6.5, 6.6**
 
-  - [ ]* 8.6 Write the property test for re-check parity on the positive-control path (Property 4, positive-control half)
+  - [x]* 8.6 Write the property test for re-check parity on the positive-control path (Property 4, positive-control half)
     - **Property 4: A repaired testbench is re-checked by the identical rule a first draft is held to**
     - Assert running a revised testbench back through `combineInstrumentControls` via a fresh Positive_Control and Negative_Control run yields the identical outcome the same source would yield as a first-draft testbench
     - **Validates: Requirements 3.1, 3.2, 3.3, 3.5, 3.6**
@@ -172,15 +172,15 @@ Design-phase open decisions DQ1 (reuse `'testbench'` as the `ModelTask`, no new 
     - Write the pre-repair source under a filename distinct from the accepted testbench's
     - _Requirements: 4.6, 4.7_
 
-  - [ ]* 8.8 Write the unit test for the real end-to-end repair-and-recheck path
+  - [x]* 8.8 Write the unit test for the real end-to-end repair-and-recheck path
     - One end-to-end harness run over a fake loop runner and a fake `TestbenchRepair` port asserting a `TESTBENCH_FAILED_REFERENCE` sample followed by a successful repair-and-recheck yields `repairAttempted: true, repairAccepted: true` and a `valid` final verdict, with `budget.consumed()` reflecting the repair's own charge
     - _Requirements: 3.5, 4.1, 5.4_
 
-  - [ ]* 8.9 Write the unit test for the real end-to-end precheck-repair path
+  - [x]* 8.9 Write the unit test for the real end-to-end precheck-repair path
     - One end-to-end `VerificationLoop` run over a fake simulator asserting a Testbench_Precheck build failure followed by a successful repair-and-recheck reaches the first iteration with the repaired testbench, never consulting `InstrumentAdmission` at all
     - _Requirements: 8.3_
 
-- [~] 9. Checkpoint - the two trigger points share one primitive and degrade identically
+- [x] 9. Checkpoint - the two trigger points share one primitive and degrade identically
   - Ensure all tests pass, ask the user if questions arise.
   - Confirm `EvalTestbenchRepair.repair` and the precheck-path branch in `#admitInstrument` both call the SAME `TestbenchAgent#repairTestbench` method, not two independently-evolving implementations
   - Confirm no `app/agent` module imports `app/eval`
@@ -192,7 +192,7 @@ Design-phase open decisions DQ1 (reuse `'testbench'` as the `ModelTask`, no new 
     - Extend `STALE_SCHEMA_ADVICE` with the v10 -> v11 paragraph naming both `instrumentValidity`'s meaning as unchanged and `repairAttempted`/`repairAccepted` as newly introduced
     - _Requirements: 4.3, 4.4, 7.7, 7.8, 7.9_
 
-  - [ ]* 10.2 Write the property test for stale-record refusal (Property 10)
+  - [x]* 10.2 Write the property test for stale-record refusal (Property 10)
     - **Property 10: A stale record is refused, never repaired into meaning something it did not measure**
     - **Validates: Requirements 7.7, 7.8, 7.9**
 
@@ -204,7 +204,7 @@ Design-phase open decisions DQ1 (reuse `'testbench'` as the `ModelTask`, no new 
     - In `app/eval/sweep/summary.ts`, render the per-arm count of samples for which a Testbench_Repair was attempted, and the count of those attempts that resulted in a `valid` Recorded_Instrument_Verdict on re-check, decomposing the headline `instrument-valid` total into "valid, no repair" and "valid, after repair"
     - _Requirements: 4.4, 4.5_
 
-  - [ ]* 10.5 Write the property test for summary reconciliation
+  - [x]* 10.5 Write the property test for summary reconciliation
     - Assert the per-arm repair-attempted and repair-accepted counts never exceed the arm's recorded sample count, and that "valid, no repair" plus "valid, after repair" equals the arm's total `instrument-valid` count
     - _Requirements: 4.4, 4.5_
 
@@ -213,7 +213,7 @@ Design-phase open decisions DQ1 (reuse `'testbench'` as the `ModelTask`, no new 
     - Record `testbenchRepairPolicyVersion` in `app/eval/sweep/manifest.ts`, read from the same constant
     - _Requirements: 7.2, 7.3, 7.4, 7.5_
 
-  - [ ]* 10.7 Write the property test for the identity fold-in (Property 9)
+  - [x]* 10.7 Write the property test for the identity fold-in (Property 9)
     - **Property 9: The policy version changes the experiment identity**
     - Vary `TESTBENCH_REPAIR_POLICY_VERSION` while holding `INSTRUMENT_POLICY_VERSION` and `TESTBENCH_PROMPT_VERSION` fixed, and vice versa, so a hash collision on the wrong axis would be detected
     - **Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.5**
@@ -237,8 +237,8 @@ Design-phase open decisions DQ1 (reuse `'testbench'` as the `ModelTask`, no new 
   - Run `npm run vault:manifest` after capturing any new vault note
   - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6_
 
-- [ ] 12. Re-measure against the stage1-screen slice
-  - [~] 12.1 Re-run the slice into a fresh output directory and compare
+- [x] 12. Re-measure against the stage1-screen slice
+  - [x] 12.1 Re-run the slice into a fresh output directory and compare
     - Run the same `stage1-screen` slice (or an equivalent smaller slice) into a NEW `outputDir`, because v10-and-earlier records are refused by design
     - Record, without adjusting any of them: `TESTBENCH_FAILED_REFERENCE` count, `TESTBENCH_REFERENCE_UNBUILDABLE` count, the per-arm repair-attempted count, the per-arm repair-accepted-on-recheck count, and the instrument-valid total decomposed into "no repair" and "after repair"
     - Confirm `repairAttempted` and `repairAccepted` appear correctly in the persisted results for samples that triggered a repair
