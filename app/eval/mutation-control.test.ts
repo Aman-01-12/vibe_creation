@@ -45,6 +45,7 @@ import {
   type MutationOperatorId,
   type MutationProbeReport,
   type MutationSample,
+  tallySurvivedOperators,
   type MutationSampleCounts,
   type MutationUnavailableReason,
 } from './mutation-control.js';
@@ -433,6 +434,51 @@ describe('summarizeMutationControl - the numbers an operator acts on', () => {
     expect(mutationControlMeasured(report)).toBe(true);
     expect(report.killRate).toBe(0);
   });
+
+  it('sums coverage-gap survivors over probed samples and rates them over valid mutants', () => {
+    const report = summarizeMutationControl([
+      {
+        problemId: 'p1',
+        probe: counts({ validCount: 10, coverageGapOperators: ['ARITH_PLUS_TO_MINUS'] }),
+      },
+      {
+        problemId: 'p2',
+        probe: counts({
+          validCount: 10,
+          coverageGapOperators: ['CONDITION_NEGATED', 'CONDITION_NEGATED'],
+        }),
+      },
+      { problemId: 'p3', probe: null },
+    ]);
+
+    expect(report.coverageGapSurvivors).toBe(3);
+    expect(report.coverageGapSurvivorRate).toBe(3 / 20);
+  });
+
+  it('lets an unprobed sample contribute no survivor', () => {
+    const probed = {
+      problemId: 'p1',
+      probe: counts({ coverageGapOperators: ['CONST_INCREMENTED'] }),
+    };
+
+    const report = summarizeMutationControl([probed, { problemId: 'p2', probe: null }]);
+
+    expect(report.coverageGapSurvivors).toBe(1);
+    expect(report.coverageGapSurvivorRate).toBe(
+      summarizeMutationControl([probed]).coverageGapSurvivorRate,
+    );
+  });
+
+  it('gives a null survivor rate, never 0, when no mutant was valid', () => {
+    // 0/0 is "not measured"; a 0 rate would claim a testbench with no gaps.
+    const report = summarizeMutationControl([
+      { problemId: 'p1', probe: counts({ validCount: 0, killedCount: 0 }) },
+    ]);
+
+    expect(report.coverageGapSurvivors).toBe(0);
+    expect(report.coverageGapSurvivorRate).toBeNull();
+    expect(NO_MUTATION_CONTROL_MEASURED.coverageGapSurvivorRate).toBeNull();
+  });
 });
 
 describe('describeMutationUnavailable - the wording has exactly one owner', () => {
@@ -535,5 +581,51 @@ describe('the calibration vocabulary - five causes, and none folded into another
     expect(mutantIsValid('non-compiling')).toBe(false);
     expect(mutantIsValid('golden-errored')).toBe(false);
     expect('non-compiling' === ('golden-errored' as string)).toBe(false);
+  });
+});
+
+describe('tallySurvivedOperators - the tally reads persisted counts, not whole samples', () => {
+  it('ignores an unprobed entry rather than counting it as a sample with no survivors', () => {
+    const tally = tallySurvivedOperators(
+      [counts({ coverageGapOperators: ['ARITH_PLUS_TO_MINUS'] }), null, null],
+      'coverageGapOperators',
+    );
+
+    expect(tally).toEqual([{ operator: 'ARITH_PLUS_TO_MINUS', count: 1 }]);
+  });
+
+  it('orders most frequent first and breaks a tie by operator name', () => {
+    const tally = tallySurvivedOperators(
+      [
+        counts({ coverageGapOperators: ['CONST_ZERO_TO_ONE', 'ARITH_PLUS_TO_MINUS'] }),
+        counts({ coverageGapOperators: ['ARITH_PLUS_TO_MINUS', 'INDEX_OFF_BY_ONE'] }),
+      ],
+      'coverageGapOperators',
+    );
+
+    expect(tally).toEqual([
+      { operator: 'ARITH_PLUS_TO_MINUS', count: 2 },
+      { operator: 'CONST_ZERO_TO_ONE', count: 1 },
+      { operator: 'INDEX_OFF_BY_ONE', count: 1 },
+    ]);
+  });
+
+  it('agrees with the report the run summary renders from the same samples', () => {
+    // The generalized signature must leave `summarizeMutationControl` byte-identical, so the
+    // tally is checked against the report rather than only against itself.
+    const samples = [
+      { problemId: 'p1', probe: counts({ coverageGapOperators: ['ARITH_PLUS_TO_MINUS'] }) },
+      { problemId: 'p2', probe: null },
+      { problemId: 'p3', probe: counts({ coverageGapOperators: ['ARITH_PLUS_TO_MINUS'] }) },
+    ];
+
+    const report = summarizeMutationControl(samples);
+
+    expect(report.coverageGapOperators).toEqual(
+      tallySurvivedOperators(
+        samples.map((sample) => sample.probe),
+        'coverageGapOperators',
+      ),
+    );
   });
 });
