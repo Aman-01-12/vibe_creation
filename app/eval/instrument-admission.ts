@@ -61,9 +61,9 @@ function uncheckedForThrow(): InstrumentControlResult {
     stderr: '',
     exitCode: null,
     mutation: null,
+    positiveRun: null,
   };
 }
-
 /** How each `RecordedInstrumentVerdict` validity maps onto the loop's admission decision. */
 function decisionFor(result: InstrumentControlResult | null): InstrumentAdmissionDecision {
   if (result === null) {

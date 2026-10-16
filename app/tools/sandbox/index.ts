@@ -12,6 +12,10 @@ export type {
   ContainerSpec,
   DeniedOperation,
   DeniedOperationKind,
+  FormalJobRequest,
+  FormalPrepassJobRequest,
+  DefaultTimescale,
+  SimulateJobRequest,
   RawRunCapture,
   RequiredOutput,
   ResourceLimits,
@@ -46,6 +50,11 @@ export {
   buildRunscArgs,
 } from './isolation.js';
 
+// The closed allowlist of host environment variables the local worker child may inherit,
+// and the pure projection that applies it, so no credential reaches generated Verilog.
+export { WORKER_ENVIRONMENT_ALLOWLIST, projectWorkerEnvironment } from './worker-environment.js';
+export type { ProjectedWorkerEnvironment } from './worker-environment.js';
+
 // Capture-all-or-error classification.
 export { classifyCapture, missingRequiredOutputs } from './classification.js';
 
@@ -54,7 +63,22 @@ export { classifyCapture, missingRequiredOutputs } from './classification.js';
 // integration suites and a provisioned eval host), and the no-toolchain fake.
 export { SandboxToolRunner } from './adapter.js';
 export { RunscSandboxRuntime } from './runtime-runsc.js';
-export { LocalWorkerRuntime, WORKER_SOURCE_ROOT } from './runtime-local-worker.js';
+export {
+  LocalWorkerRuntime,
+  WORKER_ENV_ABSENT_NOTE,
+  WORKER_SOURCE_ROOT,
+  workerSpawnEnvironment,
+} from './runtime-local-worker.js';
+
+// Bounded, content-addressed retention of a run's registered artifact BYTES. The seam
+// itself still carries refs only; this is the resolve-by-ref side of that model for a
+// caller whose verdict IS a report the worker wrote into the workspace.
+export {
+  BoundedArtifactRetention,
+  MAX_RETAINED_ARTIFACT_BYTES,
+  MAX_RETAINED_TOTAL_BYTES,
+} from './artifact-retention.js';
+export type { ArtifactRetentionSink } from './artifact-retention.js';
 export { FakeSandboxRuntime } from './fake-runtime.js';
 export type { FakeCaptureScript } from './fake-runtime.js';
 

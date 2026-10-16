@@ -12,3 +12,4 @@ export * from './payloads.js';
 export * from './web-content.js';
 export * from './secrets.js';
 export * from './capture-state.js';
+export * from './timing-contract.js';

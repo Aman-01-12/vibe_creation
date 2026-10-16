@@ -10,6 +10,7 @@ import { domainError, type DomainError } from './domain-error.js';
 import type { AcceptanceMethod, PortDirection } from './enums.js';
 import type { Ulid } from './identifier.js';
 import { err, ok, type Result } from './result.js';
+import type { TimingContract } from './timing-contract.js';
 
 /** A single declared port on the module interface. */
 export interface Port {
@@ -43,6 +44,15 @@ export interface ModuleInterface {
   readonly moduleName: string;
   readonly ports: readonly Port[];
   readonly clocking: ClockingContract;
+  /**
+   * The declared Validity_Output, or `null` when the interface declares none.
+   *
+   * Required (not optional) so a caller cannot spell "none" two ways; mirrors
+   * `clockName: string | null` on `ClockingContract` above. Enforced by the
+   * validating `makeModuleInterface` constructor in `./module-interface.js`,
+   * which is the sole supported way to build a `ModuleInterface`.
+   */
+  readonly validityOutputName: string | null;
 }
 
 /** One testable acceptance criterion in the Spec. */
@@ -61,6 +71,8 @@ export interface Spec {
   readonly goal: string;
   readonly constraints: readonly string[];
   readonly moduleInterface: ModuleInterface;
+  /** Total over `moduleInterface`'s output ports; see `./timing-contract.js`. */
+  readonly timingContract: TimingContract;
   readonly acceptanceCriteria: readonly AcceptanceCriterion[];
   /** Block-level architecture description. */
   readonly architecture: string;
