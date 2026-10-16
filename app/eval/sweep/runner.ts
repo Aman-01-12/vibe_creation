@@ -30,13 +30,24 @@
 //
 // COST IS RECORDED, NEVER A LIMITER (see `./kill-switch.ts`).
 
-import { MODEL_TASKS, repairDeclineReasonOf } from '@app/agent';
+import {
+  designGroupOf,
+  MODEL_TASKS,
+  repairDeclineReasonOf,
+  routeCheckingApproach,
+  TESTBENCH_PROMPT_VERSION,
+  type DesignGroup,
+  type PropertySetSource,
+  type StrategyArm,
+} from '@app/agent';
+import { SIMULATION_HARNESS_VERSION } from '@app/tools';
 
 import type { EvalArtifactSink } from '../artifact-sink.js';
 import { createEvalHarness } from '../harness.js';
 import type { GoldenJudge } from '../golden-judge.js';
 import type { InstrumentControl } from '../instrument-control.js';
 import { recordedMutationCounts, type MutationSampleCounts } from '../mutation-control.js';
+import type { PropertySetGate } from '../property-set-admission.js';
 import type { EvalLoopRunner } from '../loop-runner.js';
 import { noVerdictCauseOf } from '../no-verdict-cause.js';
 import type { EvalProblem } from '../problem.js';
@@ -44,12 +55,14 @@ import type { SampleOutcomeStatus, SampleResult } from '../report.js';
 import {
   armCostIsKnown,
   modelSignatureOf,
+  type ScoreboardCampaignConfig,
   type SweepArmConfig,
   type SweepConfig,
 } from './config.js';
 import type { SweepKillSwitch, SweepStopReason } from './kill-switch.js';
 import {
   encodeSampleRecord,
+  recordedFormalRun,
   RESULTS_SCHEMA_VERSION,
   type CompletedSampleIndex,
   type ResultsLogPort,
@@ -84,6 +97,23 @@ const NO_VERDICT_STATUSES: readonly SampleOutcomeStatus[] = [
   'setup-failed',
   'runner-error',
 ];
+
+/**
+ * The EVAL-side Formal_Gate, whose two halves are only ever supplied together.
+ *
+ * They are bundled for the reason `FormalGate` in `../verification-loop-runner.ts` is bundled:
+ * a gate holding no Property_Author has nothing to score, so the harness would spend the gate
+ * and still record `not-gated`. One optional field makes that half-wired state unrepresentable
+ * here rather than merely discouraged.
+ *
+ * `sourceFor` is keyed by ARM because the author is a model call: a bake-off that authored every
+ * arm's properties with one fixed model would be holding the wrong thing constant.
+ */
+export interface SweepPropertySetGate {
+  readonly gate: PropertySetGate;
+  /** The arm's per-problem Property_Author, built once per arm like `loopRunnerFor`. */
+  readonly sourceFor: (arm: SweepArmConfig) => (problem: EvalProblem) => PropertySetSource;
+}
 
 /** One planned unit of work. */
 interface SampleUnit {
@@ -134,6 +164,18 @@ export interface SweepRunnerDeps {
    * belongs to - the harness is not told.
    */
   readonly artifactSinkFor?: (arm: SweepArmConfig) => EvalArtifactSink;
+  /**
+   * The EVAL-side Formal_Gate on the PROPERTY SET, or ABSENT when the config leaves it off.
+   *
+   * Composed in `./cli.ts#prepare` rather than here, because that is already the composition
+   * root for the retention store the gate's oracle reads its own reports through and for both
+   * instrument controls, and it builds the shared stack once so no arm re-composes it. The gate
+   * is part of the held-constant stack a bake-off permutes models against.
+   *
+   * Absent means the harness receives no gate and no Property_Author, so every sample records
+   * `'not-gated'` and behaves exactly as it did before this seam existed.
+   */
+  readonly propertySetGate?: SweepPropertySetGate;
   /** The independent golden judge, shared by every arm; null when none is available. */
   readonly goldenJudge: GoldenJudge | null;
   /**
@@ -173,30 +215,111 @@ export interface SweepRunnerDeps {
   readonly now: () => number;
   /** Sanitized progress sink: the CLI prints these, a test collects them. */
   readonly onProgress: (line: string) => void;
+  /** Persists the run manifest; awaited before the first dispatch (Req 10.2). */
+  readonly writeManifest: () => Promise<void>;
 }
 
-/** Build the full matrix in arm-major, problem-major, index-minor order. */
+/** The first Campaign problem whose recorded Design_Group differs from its interface's, or null. */
+export function designGroupMismatch(
+  problems: readonly EvalProblem[],
+  designGroups: Readonly<Record<string, DesignGroup>>,
+): string | null {
+  const wrong = problems.find(
+    (problem) => designGroups[problem.id] !== designGroupOf(problem.spec.moduleInterface),
+  );
+  return wrong?.id ?? null;
+}
+
+/**
+ * The Streaming_Supplement rule (Req 8.8): every scored design outside the baseline ids that
+ * routes In_Order_Scoreboard under Treatment, in corpus order.
+ */
+export function streamingSupplementOf(
+  scoredCorpus: readonly EvalProblem[],
+  baselineIds: ReadonlySet<string>,
+): readonly string[] {
+  return scoredCorpus
+    .filter((problem) => !baselineIds.has(problem.id))
+    .filter(
+      (problem) =>
+        routeCheckingApproach(problem.spec.moduleInterface, 'treatment') === 'in-order-scoreboard',
+    )
+    .map((problem) => problem.id);
+}
+
+/**
+ * Why a Campaign may not start (Req 8.4, 8.8), or null when its hand-written lists match what
+ * the imported Specs say. Baseline ids are the Campaign's ids outside its supplement.
+ */
+export function campaignStartRefusal(
+  campaign: ScoreboardCampaignConfig,
+  selected: readonly EvalProblem[],
+  scoredCorpus: readonly EvalProblem[],
+): string | null {
+  const mismatch = designGroupMismatch(selected, campaign.designGroups);
+  if (mismatch !== null) {
+    return `the recorded Design_Group of ${mismatch} differs from its imported interface`;
+  }
+  const declared = new Set(campaign.streamingSupplement);
+  const baselineIds = new Set(
+    selected.map((problem) => problem.id).filter((id) => !declared.has(id)),
+  );
+  const derived = streamingSupplementOf(scoredCorpus, baselineIds);
+  const differs = derived.length !== declared.size || derived.some((id) => !declared.has(id));
+  return differs
+    ? `streamingSupplement must be exactly [${derived.join(', ')}], the designs the rule selects`
+    : null;
+}
+
+/**
+ * Group arms by their models in order of first appearance. Strategy-free arms are never
+ * paired, so a config without strategies keeps today's arm-major order exactly.
+ */
+function armsByModels(arms: readonly SweepArmConfig[]): readonly (readonly SweepArmConfig[])[] {
+  const groups = new Map<string, SweepArmConfig[]>();
+  for (const [index, arm] of arms.entries()) {
+    const models = MODEL_TASKS.map((task) => arm.roleModels[task]);
+    const key = JSON.stringify(arm.strategy === undefined ? [index] : models);
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, [arm]);
+    } else {
+      group.push(arm);
+    }
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Build the full matrix pair-major (Req 7.10): per model group, problem, and sample index,
+ * every arm of the group in config order, so a Control slot is followed by its Treatment slot.
+ */
 function planUnits(deps: SweepRunnerDeps): readonly SampleUnit[] {
   const { config } = deps;
   const units: SampleUnit[] = [];
-  for (const arm of config.arms) {
-    const shared = {
+  for (const group of armsByModels(config.arms)) {
+    const shared = group.map((arm) => ({
       arm,
       armName: arm.name,
       modelSignature: modelSignatureOf(arm, MODEL_TASKS),
       costKnown: armCostIsKnown(arm, MODEL_TASKS, config.prices),
-    };
+    }));
     for (const problem of deps.problems) {
       for (
         let sampleIndex = 0;
         sampleIndex < config.reproducibility.sampleCount;
         sampleIndex += 1
       ) {
-        units.push({ ...shared, problem, sampleIndex });
+        units.push(...shared.map((arm) => ({ ...arm, problem, sampleIndex })));
       }
     }
   }
   return units;
+}
+
+/** The Strategy_Arm a unit runs under; an arm without one is the Control_Arm. */
+function strategyOf(unit: SampleUnit): StrategyArm {
+  return unit.arm.strategy ?? 'control';
 }
 
 /** Build the record for a sample the harness measured. */
@@ -210,6 +333,14 @@ function recordFor(
     schemaVersion: RESULTS_SCHEMA_VERSION,
     configHash,
     armName: unit.armName,
+    strategyArm: strategyOf(unit),
+    checkingApproach: sample.checkingApproach,
+    designGroup: sample.designGroup,
+    testbenchParseRefusal: sample.testbenchParseRefusal,
+    positiveControlRun: sample.positiveControlRun,
+    valuelessFailureReports: sample.valuelessFailureReports,
+    testbenchPromptVersion: TESTBENCH_PROMPT_VERSION,
+    simulationHarnessVersion: SIMULATION_HARNESS_VERSION,
     modelSignature: unit.modelSignature,
     problemId: unit.problem.id,
     sampleIndex: unit.sampleIndex,
@@ -236,6 +367,30 @@ function recordFor(
     repairAccepted: sample.repairProvenance.accepted,
     repairDeclineReason: repairDeclineReasonOf(sample.repairProvenance),
     checkNameVisibilitySignal: sample.checkNameVisibilitySignal,
+    // Req 12.11: the roll-up lives in `./results-log.ts` beside the shape it builds, so the
+    // precedence `refuted` > `could-not-verify` > `proved` is stated once.
+    formal: recordedFormalRun(sample.formal),
+    // Req 7.9: copied verbatim from the loop's closed-shape field, and FLAT rather than inside
+    // `formal` above, because a run whose oracle port threw records a fallback reason with no
+    // submitted property at all.
+    formalFallbackReason: sample.formal.fallbackReason,
+    // Req 7.21: the route, beside the reason it is the iff of - copied from the same closed
+    // field the loop decided, so the record says WHY on every route and not only the one a
+    // Could_Not_Verify_Cause drove.
+    formalFallbackRoute: sample.formal.fallbackRoute,
+    // Req 12.21: the contract the gate emission is a function of. `null` and `{derived:false}`
+    // are different facts - never read, never derived here - so both are passed through.
+    formalResetContract: sample.formal.resetContract,
+    formalAssertionGateEmitted: sample.formal.assertionGateEmitted,
+    formalClockPolarity: sample.formal.clockPolarity,
+    // Req 10.8: the EVAL-side gate's own measurement, which the harness holds, not the copy
+    // the loop received on `sample.formal.propertySetAdmitted`.
+    propertySetAdmitted: sample.propertySetAdmitted,
+    propertySetAuthoredUpFront: sample.propertySetAuthoredUpFront,
+    propertySetSurvivorCount: sample.propertySetSurvivorCount,
+    // Req 9.4, 9.6, 9.9: threaded from the same gate run, never re-derived. `null` is "no gate
+    // ran", which the summary renders as NOT MEASURED rather than as a zero kill rate.
+    formalMutationCounts: sample.formalMutationCounts,
     durationMs: timing.durationMs,
     completedAtMs: timing.completedAtMs,
     // The harness derived this from the loop's own sanitized outcome; it is the only
@@ -261,6 +416,16 @@ function failureRecordFor(
     schemaVersion: RESULTS_SCHEMA_VERSION,
     configHash,
     armName: unit.armName,
+    strategyArm: strategyOf(unit),
+    // No sample came back, so the approach is derived with the agent's own pure router.
+    checkingApproach: routeCheckingApproach(unit.problem.spec.moduleInterface, strategyOf(unit)),
+    designGroup: designGroupOf(unit.problem.spec.moduleInterface),
+    testbenchPromptVersion: TESTBENCH_PROMPT_VERSION,
+    simulationHarnessVersion: SIMULATION_HARNESS_VERSION,
+    testbenchParseRefusal: null,
+    positiveControlRun: null,
+    // No sample came back, so no testbench was measured: `null`, never `0`.
+    valuelessFailureReports: null,
     modelSignature: unit.modelSignature,
     problemId: unit.problem.id,
     sampleIndex: unit.sampleIndex,
@@ -302,6 +467,26 @@ function failureRecordFor(
     // The runner crashed before any testbench was normalized or controlled, so there is no
     // visibility signal to report.
     checkNameVisibilitySignal: false,
+    // The runner crashed before the sample reached a candidate, so no Formal_Property was ever
+    // submitted and no pre-pass was ever read - the same "nothing was measured" reason
+    // `instrumentValidity: 'unchecked'` above is hardcoded for this path. `null` rather than an
+    // empty run, and `'not-gated'` rather than `'no-gate-set'`, because no gate ran at all.
+    formal: null,
+    formalFallbackReason: null,
+    // Nothing fell back, because nothing ran: `'not-applicable'` and NOT
+    // `'no-property-expressed'`, which would claim a Property_Author was asked and answered
+    // with nothing.
+    formalFallbackRoute: 'not-applicable',
+    formalResetContract: null,
+    formalAssertionGateEmitted: false,
+    formalClockPolarity: null,
+    propertySetAdmitted: 'not-gated',
+    propertySetAuthoredUpFront: false,
+    // No SampleResult came back, so nothing was authored for it.
+    propertySetSurvivorCount: 0,
+    // No gate ran, so there is no population to tally - `null` rather than an all-zero tally,
+    // which would read as a gate that calibrated mutants and scored none of them.
+    formalMutationCounts: null,
     durationMs: timing.durationMs,
     completedAtMs: timing.completedAtMs,
     failureNote: note,
@@ -407,6 +592,7 @@ export class SweepRunner {
   readonly #deps: SweepRunnerDeps;
   readonly #runnerByArm = new Map<string, EvalLoopRunner>();
   readonly #artifactSinkByArm = new Map<string, EvalArtifactSink>();
+  readonly #propertyAuthorByArm = new Map<string, (problem: EvalProblem) => PropertySetSource>();
 
   constructor(deps: SweepRunnerDeps) {
     this.#deps = deps;
@@ -421,6 +607,7 @@ export class SweepRunner {
    */
   async run(): Promise<SweepRunResult> {
     this.#prepareArms();
+    await this.#deps.writeManifest();
     const planned = planUnits(this.#deps);
     const outstanding = planned.filter(
       (unit) => !this.#deps.completed.isComplete(unit.armName, unit.problem.id, unit.sampleIndex),
@@ -601,6 +788,8 @@ export class SweepRunner {
     // measures every slot of the problem, and a DECLINED slot must leave no evidence behind
     // claiming it failed setup.
     const artifactSink = armSink === undefined ? undefined : captureOneSample(armSink, slot);
+    const formalGate = this.#deps.propertySetGate;
+    const propertySetSourceFor = this.#propertyAuthorByArm.get(unit.arm.name);
     const built = createEvalHarness({
       loopRunner: scheduleOneSample(this.#armRunner(unit.arm), slot),
       caps: config.caps,
@@ -608,11 +797,21 @@ export class SweepRunner {
       config: config.reproducibility,
       costEnvelopeCents: config.costEnvelopeCents,
       ks: config.ks,
+      strategyArm: strategyOf(unit),
       ...(this.#deps.goldenJudge === null ? {} : { goldenJudge: this.#deps.goldenJudge }),
       ...(this.#deps.instrumentControl === null
         ? {}
         : { instrumentControl: this.#deps.instrumentControl }),
       ...(artifactSink === undefined ? {} : { artifactSink }),
+      // Both halves or neither: the harness authors up front ONLY where a gate is also wired,
+      // so handing it one without the other spends a gate that has no Property_Set to score.
+      // ponytail: neither seam carries the sample index, so unlike the loop runner and the
+      // artifact sink these are NOT scoped to the scheduled slot - the harness authors and
+      // gates every slot of the problem, so sampleCount n pays n times per dispatched sample.
+      // Closing it needs a `sampleIndex` on `propertySetSourceFor` and `PropertySetGateRequest`.
+      ...(formalGate === undefined || propertySetSourceFor === undefined
+        ? {}
+        : { propertySetGate: formalGate.gate, propertySetSourceFor }),
     });
     if (!built.ok) {
       // Unreachable in a validated run: the CLI builds a probe harness before dispatching
@@ -624,13 +823,17 @@ export class SweepRunner {
     return problem?.samples.find((sample) => sample.sampleIndex === unit.sampleIndex) ?? null;
   }
 
-  /** Build every arm's loop runner and artifact sink up front, so a wiring mistake costs nothing. */
+  /** Build every arm's collaborators up front, so a wiring mistake costs nothing. */
   #prepareArms(): void {
     const artifactSinkFor = this.#deps.artifactSinkFor;
+    const propertySetGate = this.#deps.propertySetGate;
     for (const arm of this.#deps.config.arms) {
       this.#runnerByArm.set(arm.name, this.#deps.loopRunnerFor(arm));
       if (artifactSinkFor !== undefined) {
         this.#artifactSinkByArm.set(arm.name, artifactSinkFor(arm));
+      }
+      if (propertySetGate !== undefined) {
+        this.#propertyAuthorByArm.set(arm.name, propertySetGate.sourceFor(arm));
       }
     }
   }

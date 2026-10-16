@@ -1,8 +1,10 @@
 // An environment-backed `SecretManagerPort` (Req 12.6-12.9).
 //
-// This is the ONE module in the agent layer permitted to read the ambient process
-// environment. Every other module receives its configuration by injection, so the
-// blast radius of "where can a credential come from" is exactly this file.
+// This is the ONE module in the agent layer that reads the ambient process
+// environment; every other module receives its configuration by injection. It is no
+// longer the only place a credential can come from: the sweep's credential arrives
+// from the Credential_File through `RefreshingSecretManager`, which consults that file
+// alone. Each manager has exactly one source, and neither falls back to the other.
 //
 // It resolves a non-secret credential ref (`providerCredentialRef`) to the value of
 // the environment variable that holds that provider's credential. Rules it keeps:
@@ -21,7 +23,7 @@
 
 import { err, ok, type Result } from '@app/core';
 
-import { providerCredentialRef } from './secret-manager.js';
+import { providerCredentialRef, usableCredentialValue } from './secret-manager.js';
 import type { SecretManagerPort, SecretResolutionError } from './secret-manager.js';
 
 /**
@@ -99,12 +101,8 @@ export class EnvSecretManager implements SecretManagerPort {
     if (envKey === undefined) {
       return Promise.resolve(notFound(ref));
     }
-    const raw = this.#env[envKey];
-    if (typeof raw !== 'string') {
-      return Promise.resolve(notFound(ref));
-    }
-    const value = raw.trim();
-    if (value.length === 0) {
+    const value = usableCredentialValue(this.#env[envKey]);
+    if (value === null) {
       return Promise.resolve(notFound(ref));
     }
     return Promise.resolve(ok(value));

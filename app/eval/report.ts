@@ -9,13 +9,21 @@
 // temperature, and sample count produced these numbers.
 
 import type { BudgetStopReason } from '@app/core';
-import type { RepairProvenance } from '@app/agent';
+import type {
+  CheckingApproach,
+  DesignGroup,
+  FormalProvenance,
+  PropertySetAdmissionOutcome,
+  RepairProvenance,
+  TestbenchParseRefusal,
+} from '@app/agent';
 
 import type { AgreementReport, RecordedGoldenVerdict } from './golden-judge.js';
 import type { InstrumentControlReport, RecordedInstrumentVerdict } from './instrument-control.js';
 import type { MutationControlReport, MutationProbeReport } from './mutation-control.js';
 import type { NoVerdictCause } from './no-verdict-cause.js';
 import type { EvalProblemSource } from './problem.js';
+import type { FormalMutationCounts } from './property-set-admission.js';
 import type { ReproducibilityConfig } from './reproducibility.js';
 
 /** The per-session outcome status the harness records for one sample. */
@@ -36,6 +44,15 @@ export type SampleOutcomeStatus =
   | 'runner-error';
 
 /** The result of one sample (one student session) of one problem. */
+/** The Positive_Control run facts a record carries: four booleans, no tool-written name. */
+export interface PositiveControlRunSummary {
+  readonly passed: boolean;
+  readonly watchdogStopped: boolean;
+  readonly waveformMissing: boolean;
+  /** Every failing Required_Check was a Known_Answer_Check, so no Spec criterion failed. */
+  readonly knownAnswerOnlyFailure: boolean;
+}
+
 export interface SampleResult {
   readonly sampleIndex: number;
   /** The deterministic seed this sample was drawn with (Req 15.10). */
@@ -143,6 +160,60 @@ export interface SampleResult {
    */
   readonly mutationProbe: MutationProbeReport | null;
   /**
+   * What the PROPERTY-SET gate made of the Property_Set this sample's formal verdict would
+   * have rested on (Req 10.8).
+   *
+   * `instrumentVerdict` above is a verdict on the TESTBENCH; this is the same kind of
+   * statement about the other instrument. One member of the loop's own closed four-member
+   * vocabulary, so a reader can tell four different facts apart without interpreting a
+   * boolean: the gate admitted the set, the gate ran and had NOTHING to hold it to
+   * (`'no-gate-set'`), the gate REFUSED it, or no gate ran at all (`'not-gated'`).
+   *
+   * Never nullable, for the reason `instrumentVerdict` is never `null`: a sample nothing
+   * could be gated for is `'not-gated'`, which is a statement, where an absent field would
+   * silently read as gated-and-passed.
+   *
+   * EVIDENCE ABOUT THE PROPERTY SET AND NEVER ABOUT THE CANDIDATE (Req 10.10). A refusal
+   * says the instrument is blunt; it says nothing about whether the design is correct, and
+   * `passed` above is still the simulation oracle's own verdict in that case (Req 10.3).
+   */
+  readonly propertySetAdmitted: PropertySetAdmissionOutcome;
+
+  /**
+   * Whether the harness authored this sample's Property_Set BEFORE it called the runner.
+   *
+   * IT CANNOT BE DERIVED FROM `propertySetAdmitted`, which is the whole reason it exists. A gate
+   * that finds no reference design, or that throws, records `'not-gated'` AFTER the set was
+   * already authored and paid for - so `'not-gated'` covers both "nothing was authored" and
+   * "something was authored and then nothing could be gated", and those two samples have
+   * different `costCents`.
+   *
+   * FL-18 option (a) charges the up-front authoring to the sample, so a gated record is
+   * comparable only with another gated one, and this field is how a reader tells them apart.
+   */
+  readonly propertySetAuthoredUpFront: boolean;
+  /**
+   * How many reference-design mutants survived this sample's Property_Set (Req 10.8).
+   *
+   * Zero for every outcome other than `'refused'`, and genuinely zero rather than defaulted:
+   * an admitted set refuted every mutant in a non-empty gate set, and the other two outcomes
+   * had no gate set for a mutant to survive. The survivor IDENTITIES stay in the eval layer's
+   * own refusal, because a count is all a record needs to say how blunt the instrument was.
+   */
+  readonly propertySetSurvivorCount: number;
+  /**
+   * What the Property_Set gate's own calibrated mutant population measured, or `null` where
+   * no gate ran (Req 9.4, 9.6, 9.9).
+   *
+   * Taken from the SAME gate run `propertySetAdmitted` above comes from, in the one place the
+   * population is in hand. `admitPropertySet` reduces that population to an outcome and a
+   * survivor list, so without this field the mutants the Formal_Oracle could not reason about
+   * at all - counted and EXCLUDED from the formal denominator - were dropped before any record
+   * could carry them. `null` is "not measured", not zero, and is what every sample carries
+   * until a production `PropertySetGate` is wired.
+   */
+  readonly formalMutationCounts: FormalMutationCounts | null;
+  /**
    * Whether a Testbench_Repair was attempted/accepted for this sample at the
    * Testbench_Precheck trigger point (`VerificationLoop#repairPrecheckFailure`,
    * inside `app/agent`), which is now the only trigger point: the Positive_Control
@@ -156,6 +227,24 @@ export interface SampleResult {
    */
   readonly repairProvenance: RepairProvenance;
   /**
+   * What the Formal_Oracle established for this sample, and the contract it was taken under
+   * (Req 7.9, 12.11, 12.21).
+   *
+   * COPIED VERBATIM from the loop's own `VerificationOutcome.formal`, never re-derived: the
+   * loop decided the sample from these values, so a second derivation here could disagree with
+   * the verdict it is supposed to explain. `NO_FORMAL_RUN` for an outcome that never reached a
+   * candidate, which is the fact rather than a placeholder for it - see that constant.
+   *
+   * The whole `FormalProvenance` and not a flattened projection of it, so the eval layer adds
+   * no translation of its own: `./sweep/results-log.ts` owns the projection onto persisted
+   * fields, including the per-sample verdict roll-up, and owns it in one place.
+   *
+   * `propertySetAdmitted` below is NOT read from here. The authoritative admission measurement
+   * is the eval-side gate's own, which the harness holds; this field carries the copy the loop
+   * received. Two sources for one fact would be free to disagree.
+   */
+  readonly formal: FormalProvenance;
+  /**
    * Council B's early-warning signal (Req 5.8): the Dialect_Normalizer changed this
    * sample's Testbench source, the changed Testbench then passed the Positive_Control, and
    * at least one check name the PRE-normalization source emitted is absent from the names
@@ -167,6 +256,32 @@ export interface SampleResult {
    * See `checkNameVisibilitySignalOf` in `./harness.ts` for the full derivation.
    */
   readonly checkNameVisibilitySignal: boolean;
+  /**
+   * Why the Testbench_Parser refused this sample's model reply, or `null` when it did not
+   * (testbench-spec-grounding Req 7.10).
+   *
+   * A closed code and never model text, so the per-arm refusal counts can be tallied without
+   * reading a provider's prose into a report.
+   */
+  readonly testbenchParseRefusal: TestbenchParseRefusal | null;
+  /**
+   * Valueless_Failure_Reports in the testbench this sample measured (Req 5.4): `0` is a
+   * measured testbench with no valueless report, `null` is no measured testbench at all.
+   */
+  readonly valuelessFailureReports: number | null;
+  /**
+   * What this sample's Positive_Control simulation itself showed, or `null` when none ran
+   * (Req 5.11, 11.3, 11.4).
+   *
+   * Four booleans rather than the control's own `failingCheckNames`: the names are untrusted
+   * tool output, so the harness reduces them to one membership answer here and they never
+   * reach a record. See `knownAnswerOnlyFailureOf` in `./harness.ts`.
+   */
+  readonly positiveControlRun: PositiveControlRunSummary | null;
+  /** How this sample's testbench decided when to compare (Req 1.8). */
+  readonly checkingApproach: CheckingApproach;
+  /** Which half of the Campaign this design reports in (Req 7.4). */
+  readonly designGroup: DesignGroup;
 }
 
 /** The aggregated result for one problem across all its samples. */

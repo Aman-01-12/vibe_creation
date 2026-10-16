@@ -51,6 +51,12 @@ import type { SampleOutcomeStatus } from './report.js';
 export type NoVerdictCause =
   /** No provider answered: the router exhausted its chain, or the breaker refused the call. */
   | 'provider-unreachable'
+  /**
+   * A provider ANSWERED and refused the credential. Deliberately not `provider-unreachable`:
+   * the pilot's first run spent six slots on an expired key and recorded them as a network
+   * failure, so a dead credential read as an outage. The remedy differs too, which is the test.
+   */
+  | 'provider-refused-credential'
   /** The sweep's own machinery failed: the loop runner threw, or returned no sample. */
   | 'harness-error'
   /** A configured Session_Budget cap stopped the session. The caps ARE the experiment. */
@@ -85,6 +91,9 @@ export type NoVerdictCause =
  */
 const DEFERRABLE_BY_CAUSE: Readonly<Record<NoVerdictCause, boolean>> = Object.freeze({
   'provider-unreachable': true,
+  // Deferrable: a refreshed credential makes the slot retakeable, and the per-request provider
+  // means the next attempt reads the new value without a restart.
+  'provider-refused-credential': true,
   'harness-error': true,
   'budget-exhausted': false,
   'model-output-unusable': false,
@@ -103,6 +112,8 @@ const DEFERRABLE_BY_CAUSE: Readonly<Record<NoVerdictCause, boolean>> = Object.fr
  */
 const DESCRIPTION_BY_CAUSE: Readonly<Record<NoVerdictCause, string>> = Object.freeze({
   'provider-unreachable': 'no provider answered, so nothing about the model was observed',
+  'provider-refused-credential':
+    'a provider answered and refused the configured credential, so nothing about the model was observed',
   'harness-error': 'our own sweep machinery failed before the oracle could speak',
   'budget-exhausted':
     'a configured Session_Budget cap stopped the session - the caps ARE the experiment',

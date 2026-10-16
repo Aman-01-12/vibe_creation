@@ -32,6 +32,7 @@
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { ArtifactRetentionSink } from './artifact-retention.js';
 import type {
   ArtifactBlobRef,
   ContainerSpec,
@@ -41,6 +42,7 @@ import type {
   SandboxJob,
   SandboxRuntime,
 } from './contract.js';
+import { projectWorkerEnvironment } from './worker-environment.js';
 import {
   createWorkspaceRoot,
   reapStaleWorkspaceRoots,
@@ -77,11 +79,49 @@ function packageRoot(): string {
  * A fact about this package's own layout, so it is owned here and exported for the
  * callers that must put it on `PYTHONPATH` themselves - notably a capability probe
  * that checks whether an interpreter can import the worker before selecting it.
+ *
+ * Resolved against the AUTHORED tree from both layouts. This module is authored at
+ * `sandbox/` and compiles to `dist/sandbox/`, and `tsc` copies no `.py` file, so from the
+ * build output the worker sits two levels further out. The parent directory name decides it
+ * on evidence - `tools` versus `dist` - the same way `corpus/fetch-node.ts` resolves its own
+ * root. Without it every CLI that runs from `dist/` sets a `PYTHONPATH` holding no worker,
+ * and the only symptom is a capability probe reporting no interpreter can import it.
  */
 export const WORKER_SOURCE_ROOT = resolve(packageRoot(), 'sandbox/worker/src');
 
 /** The module invoked to run one job: `python -m tool_runner_worker`. */
 const WORKER_MODULE = 'tool_runner_worker';
+
+/** Prefix of the absence note; the missing names follow it, and no value ever does. */
+export const WORKER_ENV_ABSENT_NOTE = 'tool-runner worker started without allowlisted variables:';
+
+/** The environment one worker child is spawned with, and the allowlisted names the host lacked. */
+export interface WorkerSpawnEnvironment {
+  /** The complete child environment: the projected allowlist plus the two set here. */
+  readonly env: NodeJS.ProcessEnv;
+  /** Allowlisted names the host did not hold. Names only, so no diagnostic can emit a value. */
+  readonly absent: readonly string[];
+}
+
+/**
+ * Build the worker child's whole environment: the host projected onto the allowlist, then the two
+ * variables this runtime owns, set last so widening the allowlist cannot shadow them. Returned
+ * rather than assembled at the spawn so the exact argument is assertable without spawning.
+ */
+export function workerSpawnEnvironment(
+  hostEnv: Readonly<Record<string, string | undefined>>,
+  workspaceRoot: string,
+): WorkerSpawnEnvironment {
+  const projected = projectWorkerEnvironment(hostEnv);
+  return {
+    env: {
+      ...projected.env,
+      PYTHONPATH: WORKER_SOURCE_ROOT,
+      [TOOL_RUNNER_WORKSPACE_ENV]: workspaceRoot,
+    },
+    absent: projected.absent,
+  };
+}
 
 /** Zeroed usage for a run that could not report its own consumption. */
 const ZERO_USAGE: ResourceUsage = { wallMs: 0, maxMemMb: 0, cpuMs: 0 };
@@ -262,14 +302,16 @@ interface RunAccumulator {
   workerStdout: string;
   timedOut: boolean;
   spawnFailed: boolean;
+  /** The worker's stdin failed before the whole job was written, so it never ran our job. */
+  jobUndelivered: boolean;
 }
 
-/** Resolve the accumulated run into a capture (timeout and spawn failure win). */
+/** Resolve the accumulated run into a capture (timeout, spawn failure, undelivered job win). */
 function resolveCapture(acc: RunAccumulator): RawRunCapture {
   if (acc.timedOut) {
     return infraCapture(true);
   }
-  if (acc.spawnFailed) {
+  if (acc.spawnFailed || acc.jobUndelivered) {
     return infraCapture(false);
   }
   return captureFromWorkerReport(acc.workerStdout);
@@ -285,25 +327,35 @@ function resolveCapture(acc: RunAccumulator): RawRunCapture {
 export class LocalWorkerRuntime implements SandboxRuntime {
   readonly #pythonBin: string;
   readonly #noteSink: WorkspaceNoteSink;
+  readonly #retention: ArtifactRetentionSink | null;
   /** The one reap pass this instance performs, started lazily and shared. */
   #reap: Promise<void> | null = null;
 
   /**
    * @param pythonBin Interpreter that can import the worker package. Injected: the
    *   caller owns interpreter discovery, so this class never probes the host.
-   * @param noteSink Receives sanitized workspace notes (currently only a cleanup
-   *   failure). Injected rather than logged, because this layer has no logger and a
+   * @param noteSink Receives sanitized notes: a cleanup failure, or an allowlisted
+   *   variable the host lacked. Injected rather than logged, because this layer has no logger and a
    *   note must never become a thrown error on a run whose verdict was measured.
    *   Defaults to discarding, which costs diagnosability and never correctness.
+   * @param retention Receives the bytes of the artifacts each run REGISTERED, before
+   *   the workspace is removed, for a caller that needs an artifact's text rather
+   *   than its ref (see `./artifact-retention.ts`). Optional and defaulted to none,
+   *   so the runtime costs nothing extra for the callers that only need verdicts,
+   *   and so no bytes are held by a runtime nobody asked to hold them. Absent
+   *   retention is indistinguishable from a refused artifact: the reader answers
+   *   `null`, which is the fail-safe answer everywhere it flows.
    */
   constructor(
     pythonBin: string,
     noteSink: WorkspaceNoteSink = () => {
       /* notes are discarded unless a caller asks for them */
     },
+    retention: ArtifactRetentionSink | null = null,
   ) {
     this.#pythonBin = pythonBin;
     this.#noteSink = noteSink;
+    this.#retention = retention;
   }
 
   /**
@@ -314,12 +366,23 @@ export class LocalWorkerRuntime implements SandboxRuntime {
    * wall-clock SIGKILL. A `finally` on this side runs after a normal exit, after a
    * throw, and after a kill; the worker's context-manager cleanup cannot run after a
    * signal it is not allowed to catch.
+   *
+   * RETENTION SITS BETWEEN THOSE TWO FACTS, and that is the only place it can sit:
+   * after the worker has finished writing and registering its artifacts, and before
+   * the `finally` removes the directory they are in. It reads ONLY what the run
+   * registered, it cannot fail the run (`retain` never throws), and it does not
+   * change what this method returns - a `RawRunCapture` still carries refs and no
+   * bytes, so `SandboxResult`'s shape is untouched.
    */
   async launch(spec: ContainerSpec, job: SandboxJob): Promise<RawRunCapture> {
     await this.#reapOnce();
     const workspaceRoot = await createWorkspaceRoot();
     try {
-      return await this.#runWorker(workspaceRoot, spec, job);
+      const capture = await this.#runWorker(workspaceRoot, spec, job);
+      if (this.#retention !== null) {
+        await this.#retention.retain(workspaceRoot, capture.artifacts);
+      }
+      return capture;
     } finally {
       const note = await removeWorkspaceRoot(workspaceRoot);
       if (note !== null) {
@@ -331,16 +394,28 @@ export class LocalWorkerRuntime implements SandboxRuntime {
   /** Spawn the worker for one job and resolve its raw capture. */
   #runWorker(workspaceRoot: string, spec: ContainerSpec, job: SandboxJob): Promise<RawRunCapture> {
     return new Promise<RawRunCapture>((resolvePromise) => {
-      const acc: RunAccumulator = { workerStdout: '', timedOut: false, spawnFailed: false };
+      const acc: RunAccumulator = {
+        workerStdout: '',
+        timedOut: false,
+        spawnFailed: false,
+        jobUndelivered: false,
+      };
+
+      // Node replaces the child environment wholesale when `env` is supplied, so handing it the
+      // projection is what keeps a credential out of the EDA tools the worker spawns.
+      const { env, absent } = workerSpawnEnvironment(process.env, workspaceRoot);
+      if (absent.length > 0) {
+        this.#noteSink(`${WORKER_ENV_ABSENT_NOTE} ${absent.join(', ')}`);
+      }
 
       // No shell and array args prevent command injection from job contents; the
       // worker package is made importable via PYTHONPATH without an install step,
       // and the workspace root is handed over rather than chosen by the worker.
-      const { child, killTree } = spawnInOwnProcessGroup(this.#pythonBin, ['-m', WORKER_MODULE], {
-        ...process.env,
-        PYTHONPATH: WORKER_SOURCE_ROOT,
-        [TOOL_RUNNER_WORKSPACE_ENV]: workspaceRoot,
-      });
+      const { child, killTree } = spawnInOwnProcessGroup(
+        this.#pythonBin,
+        ['-m', WORKER_MODULE],
+        env,
+      );
 
       const killTimer = setTimeout(() => {
         acc.timedOut = true;
@@ -356,11 +431,24 @@ export class LocalWorkerRuntime implements SandboxRuntime {
       child.on('error', () => {
         acc.spawnFailed = true;
       });
-      child.on('close', () => {
-        clearTimeout(killTimer);
-        resolvePromise(resolveCapture(acc));
-      });
+      // Resolve once BOTH the child and its stdin have closed: a stdin 'error' (the job was never
+      // delivered) can arrive after the child's 'close' and must still decide the capture.
+      let pendingCloses = child.stdin === null ? 1 : 2;
+      const settle = (): void => {
+        pendingCloses -= 1;
+        if (pendingCloses === 0) {
+          clearTimeout(killTimer);
+          resolvePromise(resolveCapture(acc));
+        }
+      };
+      child.on('close', settle);
 
+      // A worker that exits before reading closes the pipe under this write (EPIPE). Unhandled,
+      // that 'error' event is an uncaught exception that ends the whole parent process.
+      child.stdin?.on('error', () => {
+        acc.jobUndelivered = true;
+      });
+      child.stdin?.on('close', settle);
       child.stdin?.end(JSON.stringify(job));
     });
   }

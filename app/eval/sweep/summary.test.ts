@@ -22,15 +22,26 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
+import { SIMULATION_HARNESS_VERSION } from '@app/tools';
+
+import {
+  FORMAL_VERDICTS,
+  type CouldNotVerifyCause,
+  type FormalVerdict,
+  type ProofConditions,
+} from '@app/tools';
+
 import { countsInPassAtK } from '../instrument-control.js';
 import type { InstrumentDefectCode, InstrumentUncheckedReason } from '../instrument-control.js';
 import type { MutationOperatorId, MutationSampleCounts } from '../mutation-control.js';
 import type { NoVerdictCause } from '../no-verdict-cause.js';
+import type { FormalMutationCounts } from '../property-set-admission.js';
 
-import { renderSummary, summarizeRecords, type SweepSummary } from './summary.js';
+import { CROSS_RUN_TAG, renderSummary, summarizeRecords, type SweepSummary } from './summary.js';
 import {
   instrumentVerdictOf,
   RESULTS_SCHEMA_VERSION,
+  type RecordedFormalRun,
   type SweepSampleRecord,
 } from './results-log.js';
 
@@ -54,6 +65,15 @@ function summarize(
 function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
   return {
     schemaVersion: RESULTS_SCHEMA_VERSION,
+    strategyArm: 'control',
+    checkingApproach: 'cycle-timed',
+    designGroup: 'cycle-exact',
+    testbenchPromptVersion: 4,
+    simulationHarnessVersion: SIMULATION_HARNESS_VERSION,
+    testbenchParseRefusal: null,
+    positiveControlRun: null,
+    // The default testbench was measured and gave every failure report a value.
+    valuelessFailureReports: 0,
     configHash: 'cfg1',
     armName: 'glm-5',
     modelSignature: 'zai.glm-5',
@@ -106,6 +126,23 @@ function record(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
     // The default sample's testbench was unchanged by normalization, so there is no
     // visibility gap to report.
     checkNameVisibilitySignal: false,
+    // No formal gate was wired for the default sample, which is the pre-formal shape every
+    // existing assertion in this file was written against: no property was submitted, no
+    // pre-pass was read, and no admission gate ran. The formal numbers are task 12.5's
+    // subject, and a test about them sets these explicitly.
+    formal: null,
+    formalFallbackReason: null,
+    // Nothing fell back, because no formal gate ran at all.
+    formalFallbackRoute: 'not-applicable',
+    formalResetContract: null,
+    formalAssertionGateEmitted: false,
+    formalClockPolarity: null,
+    propertySetAdmitted: 'not-gated',
+    propertySetAuthoredUpFront: false,
+    propertySetSurvivorCount: 0,
+    // No gate ran for the default record, so there is no mutant tally - "not measured". A
+    // test about the formal counts sets a real tally explicitly.
+    formalMutationCounts: null,
     durationMs: 1_000,
     completedAtMs: 1_000,
     failureNote: null,
@@ -810,6 +847,82 @@ describe('summarizeRecords - a deferred slot is announced, never counted as a me
   });
 });
 
+describe('summarizeRecords - a re-dispatched file states what it aggregated', () => {
+  /** A no-verdict record, defaulting to a FINDING cause so nothing about it is deferrable. */
+  function noVerdictRecord(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
+    return record({
+      outcomeStatus: 'blocked',
+      goldenVerdict: null,
+      instrumentValidity: 'unchecked',
+      instrumentUncheckedReason: 'control-absent',
+      mutation: null,
+      noVerdictCause: 'gate-refused',
+      ...overrides,
+    });
+  }
+
+  it('given two dispatches of one config, when summarized, then both counts cover the file', () => {
+    const summary = summarize(
+      [
+        pass({ problemId: 'p1', sampleIndex: 0 }),
+        noVerdictRecord({ problemId: 'p2', sampleIndex: 0 }),
+        pass({ problemId: 'p1', sampleIndex: 1 }),
+        noVerdictRecord({ problemId: 'p2', sampleIndex: 1 }),
+        // A second experiment's records, in the file and outside both counts.
+        record({ configHash: 'cfg2', armName: 'other', outcomeStatus: 'runner-error' }),
+      ],
+      [1],
+      'cfg1',
+    );
+
+    expect(summary.totalSamples).toBe(4);
+    expect(summary.noVerdictSamples).toBe(2);
+  });
+
+  it('given findings rather than outages, when rendered, then the stated count exceeds DEFERRED', () => {
+    const lines = renderSummary(
+      summarize(
+        [
+          pass({ problemId: 'p1', sampleIndex: 0 }),
+          noVerdictRecord({ problemId: 'p2', sampleIndex: 0 }),
+          noVerdictRecord({
+            problemId: 'p3',
+            sampleIndex: 0,
+            outcomeStatus: 'setup-failed',
+            noVerdictCause: 'provider-unreachable',
+          }),
+        ],
+        [1],
+        'cfg1',
+      ),
+    );
+
+    // The banner counts only the deferrable half, so it can never stand in for this count.
+    expect(lines).toContain('DEFERRED: 1 slot(s) were ATTEMPTED and NEVER MEASURED');
+    expect(lines).toContain('no oracle verdict: 2 of those 3 record(s)');
+  });
+
+  it('given every record judged, when rendered, then the count reads 0 and not NOT MEASURED', () => {
+    // The opposite case to the refused-Property_Set row: this count is taken whenever
+    // anything was aggregated, so there is no population it cannot be read over.
+    const lines = renderSummary(
+      summarize([pass({ sampleIndex: 0 }), record({ sampleIndex: 1 })], [1], 'cfg1'),
+    );
+
+    expect(lines).toContain('no oracle verdict: 0 of those 2 record(s)');
+    expect(lines.join('\n')).not.toContain('no oracle verdict: NOT MEASURED');
+  });
+
+  it('given the report, then the count sits in the header above every arm block', () => {
+    const lines = renderSummary(summarize([pass({ sampleIndex: 0 })], [1], 'cfg1'));
+
+    // A report-level claim about the whole file, so no arm block may own it.
+    expect(lines.findIndex((line) => line.startsWith('no oracle verdict:'))).toBeLessThan(
+      lines.findIndex((line) => line.startsWith('arm ')),
+    );
+  });
+});
+
 describe('summarizeRecords - the pass@k denominator invariant', () => {
   /** A record whose instrument the control proved BROKEN. */
   function instrumentInvalid(overrides: Partial<SweepSampleRecord> = {}): SweepSampleRecord {
@@ -1487,5 +1600,369 @@ describe('summarizeArm - the reconciliation invariants (unchecked-reason and den
       }),
       { numRuns: 200 },
     );
+  });
+});
+
+// formal-property-oracle task 12.5: the FORMAL numbers, each read off the record's own typed
+// field (Requirements 7.10, 8.7, 10.9, 10.11, 10.12, 12.17).
+//
+// One population exercises every field a count is read from, including the two records whose
+// counts DIVERGE from their verdict: a Property_Set source that threw falls back with no
+// property submitted, and a refused Property_Set falls back with no Fallback_Reason at all.
+// Every expected number is a literal rather than a re-derivation, so an assertion cannot pass
+// by reading the same wrong tally twice.
+describe("summarizeRecords - the formal numbers are each the population's own tally", () => {
+  /** The five conditions at their admitting values; the summary reads none of them. */
+  const ADMITTING_CONDITIONS: ProofConditions = {
+    assertionCount: 2,
+    presat: 'satisfiable',
+    cover: { reached: true, step: 1 },
+    base: 'passed',
+    induction: 'successful',
+  };
+
+  /** One sample's rolled-up formal run; a cause only where the verdict carries one. */
+  function formalRun(
+    verdict: FormalVerdict,
+    cause: CouldNotVerifyCause | null = null,
+  ): RecordedFormalRun {
+    return { verdict, cause, conditions: ADMITTING_CONDITIONS, depth: 20, elapsedMs: 3_350 };
+  }
+
+  /** A `could-not-verify` sample, which the loop sends to the fallback under that same cause. */
+  function couldNotVerify(cause: CouldNotVerifyCause, problemId: string): SweepSampleRecord {
+    return record({
+      problemId,
+      formal: formalRun('could-not-verify', cause),
+      formalFallbackReason: cause,
+      // A Fallback_Reason sits beside the route `cause` and beside no other member (Req 7.19).
+      formalFallbackRoute: 'cause',
+    });
+  }
+
+  const population: readonly SweepSampleRecord[] = [
+    pass({ problemId: 'p1', formal: formalRun('proved') }),
+    record({ problemId: 'p2', formal: formalRun('refuted') }),
+    couldNotVerify('frontend-rejected', 'p3'),
+    couldNotVerify('frontend-rejected', 'p4'),
+    couldNotVerify('proof-timeout', 'p5'),
+    // The Property_Set source THREW: a fallback with no property submitted at all.
+    record({
+      problemId: 'p6',
+      formalFallbackReason: 'toolchain-unavailable',
+      formalFallbackRoute: 'cause',
+    }),
+    // A REFUSED Property_Set reaches the loop empty, so it falls back with no Fallback_Reason:
+    // its own ROUTE records why, because no Could_Not_Verify_Cause caused it (Req 10.3).
+    record({
+      problemId: 'p7',
+      propertySetAdmitted: 'refused',
+      propertySetAuthoredUpFront: false,
+      propertySetSurvivorCount: 2,
+      formalFallbackRoute: 'property-set-refused',
+    }),
+    // A gate that ran with nothing to hold the set to: NOT a refusal.
+    record({ problemId: 'p8', propertySetAdmitted: 'no-gate-set' }),
+  ];
+
+  it('given a mixed population, when summarized, then every formal count is its own tally', () => {
+    const formal = summarize(population, [1], 'cfg1').arms[0]?.formal;
+
+    expect(formal).toEqual({
+      verdictCounts: { proved: 1, refuted: 1, 'could-not-verify': 3 },
+      noneSubmittedSamples: 3,
+      causeCounts: [
+        { cause: 'frontend-rejected', count: 2 },
+        { cause: 'proof-timeout', count: 1 },
+      ],
+      fallbackSamples: 4,
+      fallbackReasonCounts: [
+        { cause: 'frontend-rejected', count: 2 },
+        { cause: 'proof-timeout', count: 1 },
+        { cause: 'toolchain-unavailable', count: 1 },
+      ],
+      frontendRejectedSamples: 2,
+      propertySetRefusedSamples: 1,
+      // Most frequent first, and `no-property-expressed` holds nothing so it gets NO entry -
+      // the rule the cause rows already follow (Req 7.22).
+      routeCounts: [
+        { route: 'cause', count: 4 },
+        { route: 'not-applicable', count: 3 },
+        { route: 'property-set-refused', count: 1 },
+      ],
+      // No Property_Set_Admission ran for any of these samples, so there is no mutant tally at
+      // all: NOT MEASURED rather than an all-zero one (Req 9.12).
+      mutationCounts: null,
+      mutationKillRate: null,
+    });
+  });
+
+  it('given every route taken, when summarized, then the route counts partition the arm', () => {
+    const formal = summarize(population, [1], 'cfg1').arms[0]?.formal;
+    const counted = (formal?.routeCounts ?? []).reduce((sum, entry) => sum + entry.count, 0);
+
+    expect(counted).toBe(population.length);
+  });
+
+  it('given four routes and one unused, when rendered, then the unused route gets no row', () => {
+    const lines = renderSummary(summarize(population, [1], 'cfg1'));
+    const first = lines.indexOf('  fallback route:  cause x4');
+
+    expect(lines.slice(first, first + 3)).toEqual([
+      '  fallback route:  cause x4',
+      '                   not-applicable x3',
+      '                   property-set-refused x1',
+    ]);
+    expect(lines.join('\n')).not.toContain('no-property-expressed');
+  });
+
+  it('given a mixed population, when summarized, then the verdict buckets partition the arm', () => {
+    const formal = summarize(population, [1], 'cfg1').arms[0]?.formal;
+    // Iterated over the vocabulary's owner rather than `Object.values`, so a bucket the summary
+    // failed to fill counts as zero here and fails the sum instead of vanishing from it.
+    const submitted = FORMAL_VERDICTS.reduce(
+      (sum, verdict) => sum + (formal?.verdictCounts[verdict] ?? 0),
+      0,
+    );
+
+    expect(submitted + (formal?.noneSubmittedSamples ?? 0)).toBe(population.length);
+  });
+
+  it('given causes that fired and one that did not, when rendered, then only the fired get a row', () => {
+    const lines = renderSummary(summarize(population, [1], 'cfg1'));
+    const first = lines.indexOf('  formal why:      frontend-rejected x2');
+
+    // `toolchain-unavailable` holds a Fallback_Reason row but no could-not-verify sample, so the
+    // cause block ends after the two causes that fired instead of printing it at zero.
+    expect(lines.slice(first, first + 2)).toEqual([
+      '  formal why:      frontend-rejected x2',
+      '                   proof-timeout x1',
+    ]);
+    expect(lines[first + 2]).toMatch(/^ {2}fallback: /);
+  });
+
+  it('given an arm no formal property reached, when rendered, then every verdict prints under the caveat', () => {
+    const lines = renderSummary(summarize([record()], [1], 'cfg1'));
+    const verdictLine = lines.findIndex((line) => line.startsWith('  formal verdict:'));
+    // Joined line by line, so a claim the renderer wraps across two lines is still read whole.
+    const prose = lines.map((line) => line.trim()).join(' ');
+
+    expect(lines[verdictLine]).toBe(
+      '  formal verdict:  proved 0  refuted 0  could-not-verify 0  none-submitted 1  ' +
+        '(of 1 recorded sample(s))',
+    );
+    expect(lines[verdictLine + 1]).toContain('<== NOT A CORRECTNESS CLAIM.');
+    expect(prose).toContain(
+      'A formal proof of a STATED property does not establish correctness on its own',
+    );
+    expect(prose).toContain('Property_Set_Admission does not close the correlated-failure risk');
+    expect(prose).toContain("that is layer 3's work");
+  });
+
+  // formal-gate-first-light task 11.10 (Req 9.5, 9.6): the refused count is NOT MEASURED where no
+  // sample was gated and a number where some were. A `0` for both would report a gate that ran
+  // and refused nothing for an arm no gate ran for at all.
+  it('given an arm no gate ran for, when rendered, then the refused count is NOT MEASURED', () => {
+    const summary = summarize([record(), record({ problemId: 'p2' })], [1], 'cfg1');
+    const lines = renderSummary(summary);
+    const refusedLine = lines.findIndex((line) => line.startsWith('  property-set-refused:'));
+
+    expect(summary.arms[0]?.formal.propertySetRefusedSamples).toBeNull();
+    expect(lines[refusedLine]).toBe(
+      '  property-set-refused: NOT MEASURED - no sample in this arm was gated, so there is no',
+    );
+    expect(lines[refusedLine + 1]).toContain('NOT a gate that refused nothing');
+    // The row keeps its place below `frontend-rejected:` and above the Fallback_Route rows.
+    expect(lines[refusedLine - 1]).toMatch(/^ {2}frontend-rejected: /);
+    expect(lines.slice(refusedLine, refusedLine + 2).join('\n')).not.toMatch(/ x\d+$/m);
+  });
+
+  it('given a gate that ran and refused nothing, when rendered, then the refused count is 0', () => {
+    const gated = [
+      record({ propertySetAdmitted: 'admitted' }),
+      // A gate that RAN with nothing to hold the set to: gated, and still not a refusal.
+      record({ problemId: 'p2', propertySetAdmitted: 'no-gate-set' }),
+    ];
+    const summary = summarize(gated, [1], 'cfg1');
+
+    expect(summary.arms[0]?.formal.propertySetRefusedSamples).toBe(0);
+    expect(renderSummary(summary)).toContain(
+      '  property-set-refused: 0 sample(s), of the samples this arm gated, whose Property_Set ' +
+        'was refused as inadmissible',
+    );
+  });
+});
+
+// formal-property-oracle task 19.5: the FORMAL mutant tally and its own kill rate (Requirements
+// 9.4, 9.6, 9.11, 9.12).
+//
+// The EXCLUDED count is the subject. A mutant the Formal_Oracle could not reason about is out of
+// the kill-rate denominator and still counted, so a rate of 2/3 and a rate of 2/3-with-a-mutant
+// nobody saw are no longer indistinguishable. The two no-rate cases are pinned separately,
+// because the defect they prevent is a rendered `0` reading as a gate that killed nothing.
+describe('summarizeRecords - the formal mutant counts and the formal kill rate', () => {
+  /** One sample's Formal_Mutation_Counts, keeping the partition the gate itself keeps. */
+  function counts(
+    killedCount: number,
+    survivedCount: number,
+    couldNotVerifyCount: number,
+  ): FormalMutationCounts {
+    return {
+      totalCount: killedCount + survivedCount + couldNotVerifyCount,
+      denominator: killedCount + survivedCount,
+      killedCount,
+      survivedCount,
+      couldNotVerifyCount,
+    };
+  }
+
+  it('given gated samples, when summarized, then each count is summed over the carrying ones', () => {
+    const formal = summarize(
+      [
+        record({ problemId: 'p1', formalMutationCounts: counts(2, 1, 1) }),
+        record({ problemId: 'p2', formalMutationCounts: counts(1, 0, 2) }),
+        // Carries no tally, so it contributes nothing rather than an implicit all-zero row.
+        record({ problemId: 'p3' }),
+      ],
+      [1],
+      'cfg1',
+    ).arms[0]?.formal;
+
+    expect(formal?.mutationCounts).toEqual({
+      totalCount: 7,
+      denominator: 4,
+      killedCount: 3,
+      survivedCount: 1,
+      couldNotVerifyCount: 3,
+    });
+    // 3 of the 4 SCORED mutants, never 3 of the 7 calibrated ones: the three excluded mutants
+    // change the total and must not change the rate (Req 9.6).
+    expect(formal?.mutationKillRate).toBeCloseTo(0.75, 10);
+  });
+
+  it('given every mutant excluded, when rendered, then there is NO rate and it reads not measured', () => {
+    const summary = summarize([record({ formalMutationCounts: counts(0, 0, 3) })], [1], 'cfg1');
+    const lines = renderSummary(summary);
+
+    // Null, never 0: a 0 would read as a gate that killed nothing (Req 9.11).
+    expect(summary.arms[0]?.formal.mutationKillRate).toBeNull();
+    expect(lines).toContain(
+      '  formal mutants:  killed 0/0 scored  survived 0  excluded 3  of 3 calibrated mutant(s)',
+    );
+    expect(lines).toContain('  formal kill rate: NOT MEASURED');
+    expect(lines.join('\n')).not.toContain('formal kill rate: 0.000');
+  });
+
+  it('given no sample carrying a tally, when rendered, then the counts themselves are not measured', () => {
+    const lines = renderSummary(summarize([record()], [1], 'cfg1'));
+    const prose = lines.map((line) => line.trim()).join(' ');
+
+    expect(lines.some((line) => line.startsWith('  formal mutants:  NOT MEASURED'))).toBe(true);
+    expect(prose).toContain('it is NOT a gate that scored zero');
+    // No rate line at all on this branch, so there is nothing to read as a measured zero.
+    expect(lines.some((line) => line.startsWith('  formal kill rate:'))).toBe(false);
+  });
+});
+
+describe('summarizeRecords - Valueless_Failure_Report reportability', () => {
+  it('reports a null rate over zero sources when no sample had a measured testbench', () => {
+    // Given every record carries a null count (no measured testbench)
+    const records = [0, 1, 2].map((sampleIndex) =>
+      record({ sampleIndex, valuelessFailureReports: null }),
+    );
+
+    // When the arm is summarized
+    const reportability = summarize(records, [1], 'cfg1').arms[0]?.reportability;
+
+    // Then the rate is undefined rather than 0.000, which would claim clean testbenches
+    expect(reportability).toEqual({ withReport: 0, sources: 0, valuelessReportRate: null });
+  });
+
+  it('excludes a null count from both the numerator and the denominator', () => {
+    const records = [0, 2, null, 1].map((valuelessFailureReports, sampleIndex) =>
+      record({ sampleIndex, valuelessFailureReports }),
+    );
+
+    const reportability = summarize(records, [1], 'cfg1').arms[0]?.reportability;
+
+    expect(reportability?.withReport).toBe(2);
+    expect(reportability?.sources).toBe(3);
+    expect(reportability?.valuelessReportRate).toBeCloseTo(2 / 3);
+  });
+
+  it('leaves Instrument_Valid unchanged for a positive count with a passing control and closed gaps', () => {
+    // Given the default record: Positive_Control valid and a probe with no coverage gap (closed)
+    const withReports = summarize([record({ valuelessFailureReports: 4 })], [1], 'cfg1').arms[0];
+    const without = summarize([record({ valuelessFailureReports: 0 })], [1], 'cfg1').arms[0];
+
+    // Then the valueless reports are counted beside the instrument figure, never inside it
+    expect(withReports?.reportability.withReport).toBe(1);
+    expect(withReports?.instrument.validSamples).toBe(1);
+    expect(withReports?.instrument).toEqual(without?.instrument);
+  });
+});
+describe('renderSummary - the reportability block (C10)', () => {
+  const BLOCK_TITLE = 'reportability (Valueless_Report_Rate beside Coverage_Gap_Survivor_Rate';
+  /** The block's lines: its title to the end of the rendered summary. */
+  function blockOf(lines: readonly string[]): readonly string[] {
+    const start = lines.findIndex((line) => line.startsWith(BLOCK_TITLE));
+    expect(start).toBeGreaterThanOrEqual(0);
+    return lines.slice(start);
+  }
+  /** One arm with two measured testbenches (one valueless) and one probe with one gap survivor. */
+  function twoArmLines(): readonly string[] {
+    const probed = record().mutation;
+    expect(probed).not.toBeNull();
+    const gap: MutationSampleCounts | null =
+      probed === null
+        ? null
+        : { ...probed, killedCount: 4, coverageGapOperators: ['CONDITION_NEGATED'] };
+    const records = [
+      record({
+        armName: 'alpha.control',
+        sampleIndex: 0,
+        valuelessFailureReports: 2,
+        mutation: gap,
+      }),
+      record({ armName: 'alpha.control', sampleIndex: 1, valuelessFailureReports: 0 }),
+    ];
+    return renderSummary(summarize(records, [1], 'cfg1'), {
+      declaredArms: ['alpha.control', 'empty.control'],
+      baseline: { withReport: 560, sources: 1015 },
+    });
+  }
+  it('renders both rates beside their own fractions for every declared arm, empty ones included', () => {
+    // Given two declared arms, one of which recorded nothing
+    const block = blockOf(twoArmLines());
+    const rowOf = (label: string): string =>
+      block.find((line) => line.startsWith(`  ${label} `)) ?? '';
+    // Then the recorded arm and the run total carry 1/2 valueless and 1/10 gap survivors
+    expect(rowOf('alpha.control').trim().split(/\s+/).slice(1)).toEqual([
+      '1/2',
+      '0.500',
+      '1/10',
+      '0.100',
+    ]);
+    expect(rowOf('run total').trim().split(/\s+/).slice(2)).toEqual([
+      '1/2',
+      '0.500',
+      '1/10',
+      '0.100',
+    ]);
+    // And the empty arm keeps its row with zero denominators and undefined rates, never 0.000
+    expect(rowOf('empty.control').trim().split(/\s+/).slice(1)).toEqual([
+      '0/0',
+      'undefined',
+      '0/0',
+      'undefined',
+    ]);
+  });
+  it('labels every line holding a Pinned_Baseline or Confirmatory figure as cross-run', () => {
+    const block = blockOf(twoArmLines());
+    const crossRun = block.filter((line) => line.includes('560/1015') || line.includes('171/2249'));
+    expect(crossRun).toHaveLength(2);
+    expect(crossRun.every((line) => line.includes(CROSS_RUN_TAG))).toBe(true);
+    // And no slice row carries the tag, so the label marks exactly the other runs' figures
+    expect(block.filter((line) => line.includes(CROSS_RUN_TAG))).toEqual(crossRun);
   });
 });
