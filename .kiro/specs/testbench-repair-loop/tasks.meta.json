@@ -47,6 +47,16 @@
         "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
         "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
         "timestamp": 1789904824727
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791783537232
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791783620261
       }
     ],
     "4.1 Add `RepairTestbenchRequest` and `RepairTestbenchModelInput`": [
@@ -83,6 +93,16 @@
         "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
         "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
         "timestamp": 1789904824799
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791784099308
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791784148548
       }
     ],
     "6.1 Add `TestbenchPrecheck.runWithDiagnostic`": [
@@ -158,6 +178,16 @@
         "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
         "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
         "timestamp": 1789904824951
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795460090
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795490258
       }
     ],
     "8.1 Add `EvalTestbenchRepair`": [
@@ -175,6 +205,16 @@
         "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
         "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
         "timestamp": 1789915885685
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791794477856
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791794522440
       }
     ],
     "8.2 Add `repairTriggerFor`": [
@@ -192,6 +232,16 @@
         "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
         "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
         "timestamp": 1789915886515
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791794478599
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791794523506
       }
     ],
     "8.3 Add `#repairIfTriggered` and rewire `#runSample`": [
@@ -209,6 +259,16 @@
         "executionId": "861a26d2-8e27-4c30-8f6d-478b0a16d08c",
         "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
         "timestamp": 1789916552038
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791794479441
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791794524014
       }
     ],
     "8.7 Add `RepairTestbenchRequest`-shaped wiring for `EvalSampleArtifacts`": [
@@ -228,6 +288,16 @@
         "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
         "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
         "timestamp": 1789904825069
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795491029
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795506833
       }
     ],
     "10.1 Bump the results schema and add the provenance fields": [
@@ -391,6 +461,11 @@
         "executionId": "1eaa5101-021f-4764-a360-5c1a5b67c6d8",
         "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
         "timestamp": 1789904825316
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795720442
       }
     ],
     "1. The pure repair-hint module (no dependencies)": [
@@ -474,6 +549,173 @@
         "executionId": "2d54dbb8-c122-497c-a4e7-159aafc833e7",
         "chatSessionId": "909b87c5-91c0-45d5-958c-fb81d2b8c22e",
         "timestamp": 1789920311882
+      }
+    ],
+    "10.5 Write the property test for summary reconciliation": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791783488409
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791783508041
+      }
+    ],
+    "4.3 Extend Property 4 (RTL isolation) to cover `repairTestbench`": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791783679521
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791784083089
+      }
+    ],
+    "4.4 Write the unit test for a repaired testbench that under-covers": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791783680100
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791783894608
+      }
+    ],
+    "6.5 Write the property test for the closed trigger set and at-most-once bound (Property 1)": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791784163295
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791784920941
+      }
+    ],
+    "6.6 Write the property test for re-check parity on the precheck path (Property 4, precheck half)": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791784164324
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791785163318
+      }
+    ],
+    "6.7 Write the property test for failed-re-check finalization (Property 5, precheck half)": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791784165084
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791785800265
+      }
+    ],
+    "6.8 Write the unit test for the real measured precheck build failure": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791784165870
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791784524251
+      }
+    ],
+    "10.2 Write the property test for stale-record refusal (Property 10)": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791785850445
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791786138576
+      }
+    ],
+    "10.7 Write the property test for the identity fold-in (Property 9)": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791785851163
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791786362232
+      }
+    ],
+    "8.4 Write the property test for the budget-ordering guarantee (Property 8)": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791786404846
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795163240
+      }
+    ],
+    "8. The `EvalTestbenchRepair` adapter and the harness wiring": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791794524053
+      }
+    ],
+    "8.5 Write the property test for total repair-failure degradation (Property 6)": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795164941
+      }
+    ],
+    "8.6 Write the property test for re-check parity on the positive-control path (Property 4, positive-control half)": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795166444
+      }
+    ],
+    "8.8 Write the unit test for the real end-to-end repair-and-recheck path": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795168381
+      }
+    ],
+    "8.9 Write the unit test for the real end-to-end precheck-repair path": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795175541
+      },
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795434918
+      }
+    ],
+    "12. Re-measure against the stage1-screen slice": [
+      {
+        "executionId": "d54c3fc4-c9b3-4eca-8e9b-1882e269ac9a",
+        "chatSessionId": "sess_80499df4-3abd-4296-8a69-4ce9c1fcee36",
+        "timestamp": 1791795720503
       }
     ]
   }

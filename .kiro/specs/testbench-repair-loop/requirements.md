@@ -116,7 +116,7 @@ constraints rather than open questions:
 - **Recorded_Instrument_Verdict**: the closed discriminated union one sample's instrument verdict is reported, persisted, and rendered as (`app/eval/instrument-control.ts`).
 - **Repair_Provenance**: the first-class, honestly-labeled fact that a sample's accepted testbench is the product of a Testbench_Repair rather than a first draft.
 - **Testbench_Repair_Policy_Version**: the new build constant identifying this spec's repair behaviour, distinct from `INSTRUMENT_POLICY_VERSION` and `TESTBENCH_PROMPT_VERSION`.
-- **Session_Budget**: the single per-sample budget every model call and every simulate call in the loop is charged against (`SessionBudgetHandle`).
+- **Session_Budget**: the single per-sample budget every model call and every iteration's simulate call in the loop is charged against (`SessionBudgetHandle`).
 - **Eval_Harness**: the module that runs the subset, measures each sample, and assembles the report (`app/eval/harness.ts`).
 - **Results_Log**: the persisted sample-record schema, its encoder, and its decoder (`app/eval/sweep/results-log.ts`).
 - **Artifact_Sink**: the per-sample evidence seam and its derivation (`app/eval/artifact-sink.ts`).
