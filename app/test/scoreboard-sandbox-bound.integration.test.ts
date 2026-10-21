@@ -36,7 +36,7 @@ import {
 } from '@app/tools';
 import { describe, expect, it } from 'vitest';
 
-import { PROBE } from './real-oracle-harness.js';
+import { CORPUS_TIMING_STAND_IN, PROBE } from './real-oracle-harness.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(
@@ -104,7 +104,10 @@ const MEASUREMENT_CEILING_NS = 1_000_000_000_000;
 /** The worst-case testbench: the parallel2serial scaffold filled with 512 sends. */
 async function worstCaseTestbench(): Promise<string> {
   const corpus = scoredRtllmCorpus(
-    await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH)),
+    await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      CORPUS_TIMING_STAND_IN,
+    ),
   );
   const problem = corpus.problems.find((p) => p.id === 'rtllm/miscellaneous/parallel2serial');
   if (problem === undefined) {

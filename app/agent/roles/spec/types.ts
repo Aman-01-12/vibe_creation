@@ -11,6 +11,7 @@
 
 import type { Spec, Ulid } from '@app/core';
 
+import type { BehaviourQuestion } from '../../consensus/behaviour-question.js';
 import type { ModelRouterFailure } from '../../model-router/index.js';
 
 /** An untrusted single-port declaration, before width/direction validation. */
@@ -123,6 +124,15 @@ export interface SpecValidationError {
   readonly code: 'SPEC_NOT_APPROVABLE';
   readonly signalIssues: readonly SignalValidationIssue[];
   readonly unmeasurableCriteria: readonly UnmeasurableCriterionFlag[];
+  /**
+   * Declared output ports carrying no Port_Timing statement; empty when every
+   * output port is covered (Req 4.6).
+   *
+   * Separate from `signalIssues` because an absent statement is a question to ask
+   * the student, not a mistake to list: the Spec_Agent turns these port names into
+   * a Behaviour_Question rather than a correction request.
+   */
+  readonly timingUnstated: readonly string[];
 }
 
 /** Why spec production could not yield a draft to validate. */
@@ -165,6 +175,15 @@ export interface AwaitingApproval {
 export interface NeedsRevision {
   readonly status: 'needs-revision';
   readonly issues: SpecValidationError;
+  /**
+   * The Timing_Refusal's question about an output port with no Port_Timing
+   * statement (Req 4.7, 4.8); `null` when every output port is covered, or when
+   * the interface itself was rejected and has no ports to ask about.
+   *
+   * It is a return value rather than a thrown escalation so the student sees it
+   * alongside the issues on the same presentation.
+   */
+  readonly timingQuestion: BehaviourQuestion | null;
   /** The rejected draft, so a student edit can be applied on top of it. */
   readonly draft: SpecDraft;
   readonly context: SpecRevisionContext;

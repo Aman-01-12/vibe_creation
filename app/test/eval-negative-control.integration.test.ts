@@ -94,7 +94,7 @@ import {
   type ResourceLimits,
 } from '@app/tools';
 
-import { PROBE } from './real-oracle-harness.js';
+import { CORPUS_TIMING_STAND_IN, PROBE } from './real-oracle-harness.js';
 
 // -- The design this suite is about -----------------------------------------
 
@@ -293,7 +293,10 @@ async function realControls(): Promise<{
   readonly instrument: RtllmInstrumentControl;
   readonly negative: RtllmMutationNegativeControl;
 }> {
-  const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+  const corpus = await importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    CORPUS_TIMING_STAND_IN,
+  );
   const runtime = new LocalWorkerRuntime(PROBE.pythonBin);
   const negative = new RtllmMutationNegativeControl({
     // OUR testbench emits `CHECK` signalling and a waveform, so it runs on the oracle adapter.
@@ -451,8 +454,12 @@ describe.skipIf(!RUNNABLE)('the multi_pipe_8bit regression, on the real toolchai
         simulator: new IcarusSimulatorAdapter(
           new SandboxToolRunner(new LocalWorkerRuntime(PROBE.pythonBin)),
         ),
-        references: (await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH)))
-          .references,
+        references: (
+          await importRtllmCorpus(
+            new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+            CORPUS_TIMING_STAND_IN,
+          )
+        ).references,
       }).check({
         problemId: PROBLEM_ID,
         testbench: await smokeRunTestbench(),
@@ -568,7 +575,10 @@ const HANGING_MUTANT_ID = 'CONDITION_NEGATED@26:10';
 
 /** A calibrator over the real toolchain at the full budget, with NO cache. */
 async function realCalibrator(): Promise<RtllmMutationCalibrator> {
-  const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+  const corpus = await importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    CORPUS_TIMING_STAND_IN,
+  );
   return new RtllmMutationCalibrator({
     scorer: new SandboxGoldenTestbenchScorer(
       new SandboxToolRunner(new LocalWorkerRuntime(PROBE.pythonBin)),

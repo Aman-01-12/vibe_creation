@@ -37,7 +37,11 @@ export type DomainErrorCode =
   | 'MEASUREMENT_LIMIT_NOT_DECLARED'
   | 'INVALID_VERILOG_IDENTIFIER'
   | 'RESERVED_VERILOG_KEYWORD'
-  | 'DUPLICATE_PORT_NAME';
+  | 'DUPLICATE_PORT_NAME'
+  | 'BEHAVIOUR_QUESTION_FRAME_COUNT_NOT_ONE'
+  | 'BEHAVIOUR_QUESTION_UNADMITTED_TOKEN'
+  | 'CONSENSUS_REGRESSION_RECORD_INVALID'
+  | 'INCOMPLETE_ROLE_DECLARATION';
 
 /** A typed, descriptive failure produced by a validating constructor. */
 export interface DomainError {

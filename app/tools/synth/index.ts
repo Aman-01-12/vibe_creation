@@ -11,6 +11,7 @@ export {
   YosysNetlistSvgAdapter,
   assembleSynthesizeJob,
   interpretSynthResult,
+  synthesisCheckPassed,
   SYNTH_UNAVAILABLE_REASONS,
 } from './adapter.js';
 export type {

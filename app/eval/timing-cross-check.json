@@ -1,0 +1,91 @@
+{
+  "agreeing": 79,
+  "disagreeing": 0,
+  "refusalCovered": 7,
+  "falseRegistered": 0,
+  "falseCombinational": 0,
+  "clockedGroundTruthCombinational": {
+    "agreeing": 3,
+    "total": 3
+  },
+  "clockedGroundTruthRegistered": {
+    "agreeing": 53,
+    "total": 53
+  },
+  "populations": {
+    "sourceUniverse": 50,
+    "derivationPopulation": 48,
+    "derivedContracts": 46,
+    "derivationExclusions": [
+      {
+        "design": "alu",
+        "cause": "undriven-output-port"
+      },
+      {
+        "design": "clkgenerator",
+        "cause": "undriven-output-port"
+      }
+    ],
+    "scoringCohort": 46,
+    "timingAwareScoringCohort": 43
+  },
+  "disagreements": [],
+  "witnesses": [
+    {
+      "design": "radix2_div",
+      "ports": [
+        {
+          "port": "res_valid",
+          "derived": "registered",
+          "groundTruth": "registered"
+        },
+        {
+          "port": "result",
+          "derived": "combinational",
+          "groundTruth": "combinational"
+        }
+      ],
+      "collapsed": false,
+      "unproven": null
+    },
+    {
+      "design": "traffic_light",
+      "ports": [
+        {
+          "port": "clock",
+          "derived": "registered",
+          "groundTruth": "registered"
+        },
+        {
+          "port": "red",
+          "derived": "registered",
+          "groundTruth": "registered"
+        },
+        {
+          "port": "yellow",
+          "derived": "registered",
+          "groundTruth": "registered"
+        },
+        {
+          "port": "green",
+          "derived": "registered",
+          "groundTruth": "registered"
+        }
+      ],
+      "collapsed": false,
+      "unproven": null
+    },
+    {
+      "design": "fsm",
+      "ports": [
+        {
+          "port": "MATCH",
+          "derived": "combinational",
+          "groundTruth": "combinational"
+        }
+      ],
+      "collapsed": false,
+      "unproven": null
+    }
+  ]
+}

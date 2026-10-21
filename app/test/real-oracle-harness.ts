@@ -40,17 +40,19 @@ import { spawnSync } from 'node:child_process';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ToolchainStructuralGate } from '@app/agent';
 import {
   BoundedArtifactRetention,
   IcarusSimulatorAdapter,
   LocalWorkerRuntime,
   SandboxToolRunner,
   WORKER_SOURCE_ROOT,
+  YosysCheckLintAdapter,
   YosysNetlistSvgAdapter,
   YosysSmtBmcFormalOracle,
   type FormalResourceCaps,
 } from '@app/tools';
-import { probeFormalToolchainAvailability } from '@app/eval';
+import { FixedTimingDerivation, probeFormalToolchainAvailability } from '@app/eval';
 
 // -- Locations --------------------------------------------------------------
 
@@ -175,6 +177,48 @@ function probeRealSynth(): OracleProbe {
   };
 }
 
+/**
+ * Probe for the real Structural_Gate toolchain once at module load: `yosys`, `iverilog`, `vvp`,
+ * then the worker Python, in that order, so a skip names the first missing piece.
+ *
+ * The gate's four checks run compile (Icarus) and lint/synthesis (Yosys) over the same worker
+ * seam as `PROBE` and `SYNTH_PROBE`, but it has no Schematic_Request, so `netlistsvg` is not
+ * part of this chain (that is `SYNTH_PROBE`'s own tool, not this gate's).
+ */
+function probeRealStructural(): OracleProbe {
+  if (!binaryPresent('yosys', ['-V'])) {
+    return { available: false, reason: 'yosys is not installed on PATH', pythonBin: '' };
+  }
+  if (!binaryPresent('iverilog', ['-V'])) {
+    return { available: false, reason: 'iverilog is not installed on PATH', pythonBin: '' };
+  }
+  if (!binaryPresent('vvp', ['-V'])) {
+    return { available: false, reason: 'vvp is not installed on PATH', pythonBin: '' };
+  }
+  if (WORKER_PYTHON_BIN === null) {
+    return { available: false, reason: NO_WORKER_PYTHON_REASON, pythonBin: '' };
+  }
+  return {
+    available: true,
+    reason: 'yosys + iverilog + vvp + tool_runner_worker are present',
+    pythonBin: WORKER_PYTHON_BIN,
+  };
+}
+
+/**
+ * Probe for `yosys` alone, with no worker and no Python requirement.
+ *
+ * The Interface_Cross_Check (C7) spawns `yosys` directly rather than through the worker seam -
+ * Requirement 9.2 permits this because it restricts adapters, not tests, and the input is the
+ * trusted golden corpus, not generated RTL - so its own gate is this probe, not `STRUCTURAL_PROBE`.
+ */
+function probeYosysOnly(): OracleProbe {
+  if (!binaryPresent('yosys', ['-V'])) {
+    return { available: false, reason: 'yosys is not installed on PATH', pythonBin: '' };
+  }
+  return { available: true, reason: 'yosys is present', pythonBin: '' };
+}
+
 // -- The formal probe: the SHARED composed-invocation check, plus the worker Python ---
 //
 // The composed-invocation check is NOT defined here, and that is deliberate. Whether this
@@ -222,6 +266,12 @@ export const SYNTH_PROBE: OracleProbe = probeRealSynth();
 /** The module-load-time probe consumers gate their real-FORMAL suites on (task 6.2). */
 export const FORMAL_PROBE: OracleProbe = probeRealFormal();
 
+/** The module-load-time probe consumers gate their real-STRUCTURAL-GATE suites on (task 5.6). */
+export const STRUCTURAL_PROBE: OracleProbe = probeRealStructural();
+
+/** The module-load-time, yosys-alone probe the Interface_Cross_Check (C7) gates on (task 5.6). */
+export const YOSYS_PROBE: OracleProbe = probeYosysOnly();
+
 /**
  * The worker-capable Python interpreter, or null when none is available.
  *
@@ -230,6 +280,24 @@ export const FORMAL_PROBE: OracleProbe = probeRealFormal();
  * but not yosys/netlistsvg, keeping that assertion non-vacuous.
  */
 export const WORKER_PYTHON: string | null = WORKER_PYTHON_BIN;
+
+/**
+ * The Timing_Derivation stand-in for suites that import the corpus but never read
+ * `timingContract`.
+ *
+ * `importRtllmCorpus` requires a derivation port, and these suites want the corpus for its
+ * problem ids, its golden testbenches, or its reference RTL. The real port would run a Yosys
+ * elaboration per design in each of them, and a refusing port would quarantine every design
+ * and leave them asserting over an empty corpus.
+ *
+ * `registered` rather than `combinational` because it is the value the importer used to
+ * fabricate, so threading the port through changes nothing any of these suites measures.
+ * Requirement 8's paired re-measurement is where the derived contract is measured against
+ * it. A suite that READS `spec.timingContract` - feeding the Consensus_Harness, the
+ * Reference_Model prompt, or a re-measurement - builds its own port instead of using this,
+ * because there the fabricated value reaches what the suite measures.
+ */
+export const CORPUS_TIMING_STAND_IN = new FixedTimingDerivation('registered');
 
 // -- Real-tool adapter builders over the rehomed local worker runtime --------
 
@@ -260,6 +328,34 @@ export function realSynthAdapter(pythonBin: string): YosysNetlistSvgAdapter {
   const runtime = new LocalWorkerRuntime(pythonBin);
   const runner = new SandboxToolRunner(runtime);
   return new YosysNetlistSvgAdapter(runner);
+}
+
+/**
+ * Build the real `ToolchainStructuralGate` over the local worker runtime (task 5.6).
+ *
+ * ONE RETENTION STORE, SHARED, the same discipline `realFormalAdapter` follows: the
+ * `LocalWorkerRuntime` fills a `BoundedArtifactRetention` after the worker finishes and before
+ * its workspace goes, and the `YosysCheckLintAdapter` reads the lint report back through that
+ * SAME store, so a ref it was handed never resolves against a different store's bytes. The
+ * `IcarusSimulatorAdapter` and the `YosysCheckLintAdapter` share one `SandboxToolRunner` too,
+ * because both run through the one worker this gate is given.
+ *
+ * Returned directly as the gate, not wrapped the way `realFormalAdapter` wraps its oracle: a
+ * `StructuralGateResult` carries no artifact ref for a caller to resolve later (Req 8.11), so
+ * there is no second half a caller would ever need back.
+ *
+ * Callers MUST gate use on `STRUCTURAL_PROBE.available`; when the toolchain is absent
+ * `STRUCTURAL_PROBE.pythonBin` is empty and the gate cannot run.
+ */
+export function realStructuralGate(pythonBin: string): ToolchainStructuralGate {
+  const retention = new BoundedArtifactRetention();
+  const runtime = new LocalWorkerRuntime(pythonBin, undefined, retention);
+  const toolRunner = new SandboxToolRunner(runtime);
+  return new ToolchainStructuralGate({
+    toolRunner,
+    simulator: new IcarusSimulatorAdapter(toolRunner),
+    lint: new YosysCheckLintAdapter(toolRunner, retention),
+  });
 }
 
 /**

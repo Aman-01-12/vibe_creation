@@ -26,6 +26,7 @@ import {
   YosysNetlistSvgAdapter,
   assembleSynthesizeJob,
   interpretSynthResult,
+  synthesisCheckPassed,
   type SynthUnavailableCause,
 } from './index.js';
 
@@ -34,6 +35,8 @@ const LIMITS = { cpu: 1, memMb: 256, procs: 64, diskMb: 64, wallMs: 5000 } as co
 const RESOURCE_USAGE: ResourceUsage = { wallMs: 20, maxMemMb: 16, cpuMs: 18 };
 
 const RTL: readonly SourceFile[] = [{ path: 'alu.v', contents: 'module alu(); endmodule' }];
+
+const TOP_MODULE = 'alu';
 
 const SVG_ARTIFACT: ArtifactBlobRef = {
   name: 'schematic.svg',
@@ -87,11 +90,11 @@ function synthesizeWith(
   rawCapture: RawRunCapture,
 ): Promise<ReturnType<typeof interpretSynthResult>> {
   const runner = new SandboxToolRunner(new FakeSandboxRuntime(rawCapture));
-  return new YosysNetlistSvgAdapter(runner).netlistSvg(RTL, LIMITS);
+  return new YosysNetlistSvgAdapter(runner).netlistSvg(RTL, TOP_MODULE, LIMITS);
 }
 
 describe('assembleSynthesizeJob (job assembly)', () => {
-  const job = assembleSynthesizeJob(RTL, LIMITS);
+  const job = assembleSynthesizeJob(RTL, TOP_MODULE, LIMITS, true);
 
   it('marks the job as a synthesize run', () => {
     expect(job.kind).toBe('synthesize');
@@ -108,6 +111,15 @@ describe('assembleSynthesizeJob (job assembly)', () => {
 
   it('applies the caller-provided resource limits unchanged', () => {
     expect(job.limits).toEqual(LIMITS);
+  });
+
+  it('carries the top module and schematic request on the synthesize payload', () => {
+    expect(job.synthesize).toEqual({ topModule: TOP_MODULE, schematic: true });
+  });
+
+  it('requests no schematic when the caller passes schematic: false', () => {
+    const noSchematicJob = assembleSynthesizeJob(RTL, TOP_MODULE, LIMITS, false);
+    expect(noSchematicJob.synthesize).toEqual({ topModule: TOP_MODULE, schematic: false });
   });
 });
 
@@ -215,5 +227,34 @@ describe('SYNTH_UNAVAILABLE_REASONS (sanitized reasons)', () => {
       expect(reason).not.toMatch(/https?:/i);
       expect(reason).not.toMatch(/\bat\s+\w+.*:\d+/);
     }
+  });
+});
+
+describe('synthesisCheckPassed (SGT-Q05: reads synthesis, not the schematic)', () => {
+  it('is true on exit 0 with netlistJson present and svg present', () => {
+    expect(synthesisCheckPassed(sandboxResult())).toBe(true);
+  });
+
+  it('is true on exit 0 with netlistJson present and svg absent', () => {
+    const result = sandboxResult({ artifacts: { netlistJson: NETLIST_ARTIFACT } });
+    expect(synthesisCheckPassed(result)).toBe(true);
+  });
+
+  it('is false when the sandbox classified the run error', () => {
+    const result = sandboxResult({
+      verdict: 'error',
+      artifacts: { netlistJson: NETLIST_ARTIFACT },
+    });
+    expect(synthesisCheckPassed(result)).toBe(false);
+  });
+
+  it('is false on a non-zero exit code', () => {
+    const result = sandboxResult({ exitCode: 1 });
+    expect(synthesisCheckPassed(result)).toBe(false);
+  });
+
+  it('is false when netlistJson is absent, even with exit code 0', () => {
+    const result = sandboxResult({ artifacts: { svg: SVG_ARTIFACT } });
+    expect(synthesisCheckPassed(result)).toBe(false);
   });
 });

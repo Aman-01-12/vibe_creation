@@ -1,15 +1,21 @@
-// Deterministic Spec validation: the positive-width interface gate (Req 5.3, 5.9)
-// and the measurable-criterion gate (Req 5.4).
+// Deterministic Spec validation: the positive-width interface gate (Req 5.3, 5.9),
+// the measurable-criterion gate (Req 5.4), and the Port_Timing gate (Req 10.1-10.6).
 //
 // This is the trust boundary for untrusted model output: a `SpecDraft` becomes a
 // core `Spec` core only when every interface signal is a well-formed positive-width
-// port and every acceptance criterion is verifiable by a rigorous method. Width
-// validation is NOT reimplemented here; it is delegated to the core `makePort`
+// port, every acceptance criterion is verifiable by a rigorous method, and every
+// declared output port carries a Port_Timing value from the closed vocabulary.
+// Width validation is NOT reimplemented here; it is delegated to the core `makePort`
 // constructor, and this module only translates its typed `DomainError` into a
-// student-facing issue that names the offending signal.
+// student-facing issue that names the offending signal. The same holds for timing:
+// `makeTimingContract` builds the contract, and validation is its only caller on the
+// production authoring path (it has others - `app/tools/formal/timing.ts` and many
+// test fixtures call it), so no unvalidated model string reaches it while authoring.
 
 import {
+  isPortTiming,
   makePort,
+  makeTimingContract,
   type AcceptanceCriterion,
   type AcceptanceMethod,
   type DomainError,
@@ -17,6 +23,8 @@ import {
   type Port,
   type PortDirection,
   type Result,
+  type TimingContract,
+  type TimingContractEntry,
   type Ulid,
   err,
   ok,
@@ -29,6 +37,7 @@ import type {
   SignalValidationIssue,
   SpecDraft,
   SpecValidationError,
+  TimingContractEntryDraft,
   UnmeasurableCriterionFlag,
 } from './types.js';
 
@@ -56,13 +65,34 @@ const PORT_DIRECTIONS: ReadonlySet<PortDirection> = new Set<PortDirection>([
 const MEASURABLE_REPLACEMENT_REQUEST =
   'Replace with a criterion measurable by simulation, formal verification, or manual inspection.';
 
-/** The core Spec content produced once a draft passes both validation gates. */
+/** The correction asked of a student whose timing value is outside the vocabulary. */
+const TIMING_VOCABULARY_REQUEST =
+  'State the timing of this output port as either registered or combinational.';
+
+/** The core Spec content produced once a draft passes all three validation gates. */
 export interface ValidatedSpecCore {
   readonly goal: string;
   readonly constraints: readonly string[];
   readonly moduleInterface: ModuleInterface;
+  /**
+   * The contract built from the draft's own statements, already past
+   * `makeTimingContract` (Req 10.3).
+   *
+   * Carrying it here is what makes the ordering structural rather than
+   * conventional: a validated core cannot exist without a constructed contract,
+   * so no unvalidated model string can reach the constructor downstream.
+   */
+  readonly timingContract: TimingContract;
   readonly acceptanceCriteria: readonly AcceptanceCriterion[];
   readonly architecture: string;
+}
+
+/** Why a draft's timing statements could not produce a contract. */
+interface TimingRejection {
+  /** Student mistakes to list: a bad value, an unknown port, a second statement. */
+  readonly issues: readonly SignalValidationIssue[];
+  /** Declared output ports with no statement at all - a question, not a mistake. */
+  readonly unstated: readonly string[];
 }
 
 /** Narrow an untrusted string to a core `PortDirection`. */
@@ -209,13 +239,110 @@ export function partitionAcceptanceCriteria(
   return { criteria, flags };
 }
 
+/** The declared output port names of a validated interface. */
+function outputPortNames(moduleInterface: ModuleInterface): ReadonlySet<string> {
+  return new Set(
+    moduleInterface.ports.filter((port) => port.direction === 'output').map((port) => port.name),
+  );
+}
+
+/**
+ * Validate one untrusted timing statement into a core entry, or the issue that
+ * rejects it (Req 10.2, 10.4, 10.5).
+ *
+ * Membership is decided by the core `isPortTiming`, which is `Set.has` over the
+ * closed vocabulary. A `Record<PortTiming, ...>` index would stringify the key and
+ * walk the prototype chain, so `__proto__` and `constructor` would read as real
+ * members even though neither is one (Req 10.6).
+ */
+function validateTimingEntry(
+  entry: TimingContractEntryDraft,
+  outputNames: ReadonlySet<string>,
+  alreadyStated: ReadonlySet<string>,
+): Result<TimingContractEntry, SignalValidationIssue> {
+  if (!outputNames.has(entry.portName)) {
+    return err({
+      signalName: entry.portName,
+      reason: `"${entry.portName}" is not a declared output port`,
+      request: 'State timing only for declared output ports.',
+    });
+  }
+  if (alreadyStated.has(entry.portName)) {
+    return err({
+      signalName: entry.portName,
+      reason: `"${entry.portName}" has more than one timing statement`,
+      request: 'Give this output port exactly one timing statement.',
+    });
+  }
+  if (!isPortTiming(entry.timing)) {
+    return err({
+      signalName: entry.portName,
+      reason: `timing "${entry.timing}" is not registered or combinational`,
+      request: TIMING_VOCABULARY_REQUEST,
+    });
+  }
+  return ok({ portName: entry.portName, timing: entry.timing });
+}
+
+/**
+ * Build the Timing_Contract from the draft's own statements (Req 10.1-10.6, 4.6).
+ *
+ * Every fault is collected before returning, so a student sees all of them at once.
+ * A port whose stated value is inadmissible is reported as an issue and NOT as
+ * unstated: it was stated, just not admissibly, and nothing here coerces or
+ * defaults it. A declared output port with no statement at all is `unstated`, which
+ * is a question to ask rather than a mistake to list.
+ */
+function validateTimingContract(
+  entries: readonly TimingContractEntryDraft[],
+  moduleInterface: ModuleInterface,
+): Result<TimingContract, TimingRejection> {
+  const outputNames = outputPortNames(moduleInterface);
+  const issues: SignalValidationIssue[] = [];
+  const stated: TimingContractEntry[] = [];
+  const statedNames = new Set<string>();
+  for (const entry of entries) {
+    const validated = validateTimingEntry(entry, outputNames, statedNames);
+    if (validated.ok) {
+      stated.push(validated.value);
+    } else {
+      issues.push(validated.error);
+    }
+    // Named by any entry at all counts as stated, so a rejected value stays an
+    // issue to fix and does not also surface as an unanswered question.
+    statedNames.add(entry.portName);
+  }
+  const unstated = [...outputNames].filter((name) => !statedNames.has(name));
+  if (issues.length > 0 || unstated.length > 0) {
+    return err({ issues, unstated });
+  }
+  const built = makeTimingContract(moduleInterface, stated);
+  if (!built.ok) {
+    // The three checks above cover every refusal this constructor has. A residual
+    // one is still returned as an issue rather than thrown: no draft fault may
+    // leave this trust boundary as an exception.
+    return err({
+      issues: [
+        { signalName: '(timing)', reason: built.error.message, request: TIMING_VOCABULARY_REQUEST },
+      ],
+      unstated: [],
+    });
+  }
+  return ok(built.value);
+}
+
 /**
  * Validate a whole `SpecDraft` into core Spec content, or the aggregate reasons it
  * cannot be approved (Req 5.3, 5.4, 5.9).
  *
- * Both gates run so a student sees every problem at once: a draft is approvable
- * only when there are no signal issues AND no unmeasurable criteria. This is the
- * single deterministic path the presentation, edit, and approval flows share.
+ * Every gate runs so a student sees every problem at once: a draft is approvable
+ * only when there are no signal issues, no unmeasurable criteria, and a contract
+ * can be built from its own timing statements. This is the single deterministic
+ * path the presentation, edit, and approval flows share.
+ *
+ * The timing gate runs third because it compares statements against the VALIDATED
+ * output ports; when the interface itself is rejected there is no port list to
+ * state timing about, so its issues are what the student must fix first.
  */
 export function validateSpecDraft(
   draft: SpecDraft,
@@ -223,14 +350,28 @@ export function validateSpecDraft(
 ): Result<ValidatedSpecCore, SpecValidationError> {
   const interfaceResult = validateInterface(draft.moduleInterface);
   const { criteria, flags } = partitionAcceptanceCriteria(draft.acceptanceCriteria, newId);
-  if (!interfaceResult.ok || flags.length > 0) {
-    const signalIssues = interfaceResult.ok ? [] : interfaceResult.error;
-    return err({ code: 'SPEC_NOT_APPROVABLE', signalIssues, unmeasurableCriteria: flags });
+  if (!interfaceResult.ok) {
+    return err({
+      code: 'SPEC_NOT_APPROVABLE',
+      signalIssues: interfaceResult.error,
+      unmeasurableCriteria: flags,
+      timingUnstated: [],
+    });
+  }
+  const timing = validateTimingContract(draft.timingContractEntries, interfaceResult.value);
+  if (!timing.ok || flags.length > 0) {
+    return err({
+      code: 'SPEC_NOT_APPROVABLE',
+      signalIssues: timing.ok ? [] : timing.error.issues,
+      unmeasurableCriteria: flags,
+      timingUnstated: timing.ok ? [] : timing.error.unstated,
+    });
   }
   return ok({
     goal: draft.goal,
     constraints: draft.constraints,
     moduleInterface: interfaceResult.value,
+    timingContract: timing.value,
     acceptanceCriteria: criteria,
     architecture: draft.architecture,
   });

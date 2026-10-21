@@ -104,6 +104,19 @@ export interface ArtifactRetentionSink {
   ): Promise<void>;
 }
 
+/**
+ * Where a caller resolves one registered artifact ref to its text, or `null` if it cannot.
+ *
+ * A PORT, hoisted here from `../formal/adapter.ts` (which keeps `FormalArtifactReader` as a type
+ * alias of this) because the Lint_Adapter needs the exact same shape to read a Lint_Job's
+ * `lintReport` artifact, and a second structurally-identical interface would let the two drift.
+ * `BoundedArtifactRetention.readText` already satisfies this shape; it declares `implements
+ * ArtifactTextReader` below to make that relationship explicit rather than merely structural.
+ */
+export interface ArtifactTextReader {
+  readText(artifact: ArtifactBlobRef): Promise<string | null>;
+}
+
 /** One retained blob: its decoded text, and the byte count it is charged against the total. */
 interface RetainedBlob {
   readonly text: string;
@@ -167,7 +180,7 @@ function sha256Of(bytes: Buffer): string {
  * total cap the only thing standing between the process and a permanent megabyte. A composition
  * root that wants retention creates one and holds it exactly as long as it holds the runtime.
  */
-export class BoundedArtifactRetention implements ArtifactRetentionSink {
+export class BoundedArtifactRetention implements ArtifactRetentionSink, ArtifactTextReader {
   /** SHA-256 to blob, in insertion order - which is the eviction order `#insert` uses. */
   readonly #blobs = new Map<string, RetainedBlob>();
 

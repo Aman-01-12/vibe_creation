@@ -90,6 +90,7 @@ import { MAX_RETAINED_ARTIFACT_BYTES } from '../sandbox/artifact-retention.js';
 import { validateSandboxJob } from '../sandbox/validation.js';
 import type {
   ArtifactBlobRef,
+  ArtifactTextReader,
   RequiredOutput,
   ResourceLimits,
   SandboxJob,
@@ -317,10 +318,14 @@ export interface FormalOraclePort {
  * `null` is a first-class answer and the fail-safe one: it flows into `report === null` and
  * `readFormalPrepassReport('')`, both of which already mean "we have no evidence" and both of which
  * yield `could-not-verify`. No implementation of this port can produce a `proved` by failing.
+ *
+ * A TYPE ALIAS OF `ArtifactTextReader` (`../sandbox/artifact-retention.ts`), hoisted there because
+ * the Lint_Adapter (structural-gate-toolchain, C6) needs this exact shape to read a Lint_Job's
+ * `lintReport` artifact, and a second interface of the same shape would let the two drift apart.
+ * Kept as a named alias, not deleted, so every existing call site, test, and doc comment that
+ * imports `FormalArtifactReader` keeps working unedited.
  */
-export interface FormalArtifactReader {
-  readText(artifact: ArtifactBlobRef): Promise<string | null>;
-}
+export type FormalArtifactReader = ArtifactTextReader;
 
 /**
  * The four resource caps every formal invocation carries (Req 11.3).

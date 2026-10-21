@@ -99,11 +99,12 @@ export const sandboxContractSchema: SchemaObject = {
     },
     RequiredOutput: {
       type: 'string',
-      // `formalPrepassReport` is a member because a pre-pass that produced no report
-      // produced nothing at all - there is no success case in which it is legitimately
-      // absent. The `formal` job's counterexample trace is deliberately NOT a member, by
-      // the same rule read the other way: a successful proof writes no trace, so requiring
-      // one would classify every proof as `error`. See `RequiredOutput` in `contract.ts`.
+      // `formalPrepassReport` and `lintReport` are members because a pre-pass or lint run
+      // that produced no report produced nothing at all - there is no success case in
+      // which either report is legitimately absent. The `formal` job's counterexample
+      // trace is deliberately NOT a member, by the same rule read the other way: a
+      // successful proof writes no trace, so requiring one would classify every proof as
+      // `error`. See `RequiredOutput` in `contract.ts`.
       enum: [
         'stdout',
         'stderr',
@@ -112,6 +113,7 @@ export const sandboxContractSchema: SchemaObject = {
         'netlistJson',
         'formalReport',
         'formalPrepassReport',
+        'lintReport',
       ],
     },
     FormalJobRequest: {
@@ -157,12 +159,38 @@ export const sandboxContractSchema: SchemaObject = {
         defaultTimescale: { type: 'string', enum: ['1ns/1ps'] },
       },
     },
+    SynthesizeJobRequest: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['topModule', 'schematic'],
+      properties: {
+        // Interpolated into `synth -top <topModule>` inside the sandbox; same bounded
+        // plain-identifier form and ceiling as the formal payloads' `topModule`.
+        topModule: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_$]*$', maxLength: 128 },
+        // Required, not optional: an absent flag would be a second spelling of "no
+        // schematic" alongside `false`, and the worker would have to treat both.
+        schematic: { type: 'boolean' },
+      },
+    },
+    LintJobRequest: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['topModule'],
+      properties: {
+        // Interpolated into `synth -top <topModule>` ahead of the Lint_Engine's
+        // `check -assert`; same bounded plain-identifier form and ceiling.
+        topModule: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_$]*$', maxLength: 128 },
+      },
+    },
     SandboxJob: {
       type: 'object',
       additionalProperties: false,
       required: ['kind', 'workspaceFiles', 'limits', 'requiredOutputs'],
       properties: {
-        kind: { type: 'string', enum: ['simulate', 'synthesize', 'formal', 'formalPrepass'] },
+        kind: {
+          type: 'string',
+          enum: ['simulate', 'synthesize', 'formal', 'formalPrepass', 'lint'],
+        },
         workspaceFiles: {
           type: 'array',
           items: { $ref: '#/definitions/SourceFile' },
@@ -176,17 +204,22 @@ export const sandboxContractSchema: SchemaObject = {
         formal: { $ref: '#/definitions/FormalJobRequest' },
         formalPrepass: { $ref: '#/definitions/FormalPrepassJobRequest' },
         simulate: { $ref: '#/definitions/SimulateJobRequest' },
+        synthesize: { $ref: '#/definitions/SynthesizeJobRequest' },
+        lint: { $ref: '#/definitions/LintJobRequest' },
       },
-      // TWO independent biconditionals - `formal` under `'formal'`, `formalPrepass` under
-      // `'formalPrepass'` - carried as `allOf` members because draft-07 permits only one
-      // `if`/`then`/`else` per schema object. Independent rather than one combined rule, so a
-      // job carrying BOTH payloads is refused by both branches at once and a third kind-specific
-      // payload joins as a third member rather than as a rewrite. See `payloadBiconditional` for
-      // why each branch redeclares its field as a boolean schema.
+      // FOUR independent biconditionals - `formal` under `'formal'`, `formalPrepass` under
+      // `'formalPrepass'`, `synthesize` under `'synthesize'`, `lint` under `'lint'` - carried as
+      // `allOf` members because draft-07 permits only one `if`/`then`/`else` per schema object.
+      // Independent rather than one combined rule, so a job carrying multiple payloads is
+      // refused by every applicable branch at once and a further kind-specific payload joins as
+      // another member rather than as a rewrite. See `payloadBiconditional` for why each branch
+      // redeclares its field as a boolean schema.
       allOf: [
         payloadBiconditional('formal', 'formal'),
         payloadBiconditional('formalPrepass', 'formalPrepass'),
         payloadOnlyUnder('simulate', 'simulate'),
+        payloadBiconditional('synthesize', 'synthesize'),
+        payloadBiconditional('lint', 'lint'),
       ],
     },
     ArtifactBlobRef: {

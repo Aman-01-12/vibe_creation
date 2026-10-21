@@ -14,10 +14,22 @@
 // plus one `SandboxResult` into one `PropertyResult`. `interpret.ts` CALLS `admitProved` rather
 // than re-deriving the rule, so the gate keeps exactly one owner.
 //
+// `timing.ts` is the Timing_Classifier: the pure five-clause ordered rule that reads the pre-pass's
+// per-port cone facts plus a `ModuleInterface` and returns a Timing_Contract or one named
+// Timing_Refusal. It takes those two arguments and nothing else, which is how
+// timing-contract-inference Req 1.11 - no description, no RTL, no `reg`/`wire` qualifier - is
+// enforced by a signature rather than by a convention.
+//
 // `adapter.ts` is the only impure module here and it decides nothing: it calls the pre-pass over
 // the design alone, reads the reset and clock contracts off it through `prepass.ts`, renders the
 // wrapper, climbs the deterministic depth ladder inside the Property_Time_Budget, and classifies
 // through `interpretFormalReport`. Two jobs, a render between them, a ladder, and a budget.
+//
+// `adjacency-timing.ts` is a SEARCH TOOL, not a production classifier: a second, independent
+// reading of the same pre-pass facts by Sequential_Element-output adjacency rather than by
+// Combinational_Path reachability, used only by the timing-contract-inference task 13.2 search
+// over the Derivation_Population (Req 6.13). Nothing in the Corpus_Importer or the Spec_Agent
+// reads it.
 //
 // This folder may import `@app/core` and its own package only - never `@app/agent` and never
 // `@app/eval`.
@@ -79,7 +91,10 @@ export {
   type FormalPrepassRefusal,
   type FormalPrepassRejection,
   type FormalPrepassReport,
+  type PortTimingFacts,
   type PrepassResetFinding,
+  type PrepassTimingFinding,
+  type PrepassTimingRefusalCause,
   type ResetContract,
   type ResetEnable,
 } from './prepass.js';
@@ -95,3 +110,7 @@ export {
   type FormalReport,
   type FormalReportRejection,
 } from './report.js';
+
+export { classifyPortTiming, type TimingRefusal, type TimingRefusalCause } from './timing.js';
+
+export { classifyPortTimingByAdjacency } from './adjacency-timing.js';

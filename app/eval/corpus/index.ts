@@ -77,6 +77,15 @@ export type {
   RtllmCorpus,
 } from './corpus-types.js';
 
+// The Timing_Derivation the importer requires: the seam, the real host composition, and the
+// doubles the suites that never read `timingContract` stand in with.
+export {
+  FormalPrepassTimingDerivation,
+  type TimingDerivationPort,
+} from './timing-derivation-port.js';
+export { localTimingDerivation, TIMING_DERIVATION_LIMITS } from './timing-derivation-node.js';
+export { FixedTimingDerivation, RefusingTimingDerivation } from './timing-derivation-double.js';
+
 // The independent judge: banner parsing, the scorer, and the harness-facing adapter.
 export {
   extractGoldenBanners,
@@ -151,3 +160,45 @@ export {
   STAGE0_QUARANTINED_PROBLEM_IDS,
   type Stage0QuarantineEntry,
 } from './stage0-quarantine.js';
+export { RTLLM_VALIDITY_OUTPUTS, validityOutputFor } from './validity-outputs.js';
+
+// The five named populations of the timing derivation, every size computed from
+// membership so no count can double-subtract an already-excluded design.
+export {
+  DERIVABLE_SCORING_COHORT_SIZE,
+  DERIVATION_POPULATION_SIZE,
+  inDerivableScoringCohort,
+  inDerivationPopulation,
+  inScoringCohort,
+  SCORING_COHORT_SIZE,
+  SOURCE_UNIVERSE_SIZE,
+  summarizeTimingPopulations,
+  YOSYS_FRONTEND_REJECTED_PROBLEM_IDS,
+  type DerivationExclusion,
+  type DesignDerivationOutcome,
+  type TimingPopulationSummary,
+} from './timing-populations.js';
+// The importer's inference count, which never travels without the population it is over.
+export {
+  derivationOutcomesOf,
+  timingInferenceCountReport,
+  type ReportedPopulation,
+  type TimingInferenceCountReport,
+} from './timing-count-report.js';
+
+// The both-direction ratchet: derived Port_Timing against the reviewed manifest, where a
+// newly disagreeing port and a port that starts agreeing where the manifest records a
+// refusal both fail. Plus the published six-figure report C11 assembles over it (task 12.1).
+export {
+  assembleCrossCheckReport,
+  compareDerivedTiming,
+  isTimingRatchetFailure,
+  type CrossCheckClockedFigure,
+  type CrossCheckReport,
+  type DerivedPortResult,
+  type TimingComparisonOutcome,
+  type TimingDisagreement,
+  type TimingPortComparison,
+  type TimingRatchetResult,
+  type TimingWitnessRow,
+} from './timing-cross-check.js';

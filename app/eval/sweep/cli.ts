@@ -88,6 +88,7 @@ import {
 import {
   FileSystemCorpusCheckout,
   importRtllmCorpus,
+  localTimingDerivation,
   mutationConfigHash,
   NodeCheckoutProbePort,
   RTLLM_CHECKOUT_PATH,
@@ -951,7 +952,10 @@ async function prepare(
   secretManager: SecretManagerPort,
 ): Promise<PreparedRun | PreflightFailure> {
   const corpus = scoredRtllmCorpus(
-    await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH)),
+    await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      localTimingDerivation(),
+    ),
   );
   const selected = selectProblems(corpus.problems, config.problems);
   if (!selected.ok) {

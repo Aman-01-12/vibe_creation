@@ -10,7 +10,12 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CREDENTIAL_FILE } from '@app/agent';
 import { describe, expect, it } from 'vitest';
 
-import { FileSystemCorpusCheckout, importRtllmCorpus, scoredRtllmCorpus } from '../corpus/index.js';
+import {
+  FileSystemCorpusCheckout,
+  FixedTimingDerivation,
+  importRtllmCorpus,
+  scoredRtllmCorpus,
+} from '../corpus/index.js';
 import { RTLLM_CHECKOUT_PATH } from '../corpus/fetch-node.js';
 import { scoreboardCampaignLists } from '../scripts/scoreboard-supplement.js';
 import { parseSweepConfig } from './config-parse.js';
@@ -91,7 +96,12 @@ describe('sweep.config.scoreboard-ab-v1.json', () => {
     'equals what the supplement script computes from the pinned corpus right now',
     async () => {
       const corpus = scoredRtllmCorpus(
-        await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH)),
+        // This suite compares problem id LISTS and never reads `timingContract`, so a fixed
+        // double stands in rather than paying a real netlist derivation per design.
+        await importRtllmCorpus(
+          new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+          new FixedTimingDerivation('combinational'),
+        ),
       );
       const baselineIds = (
         (await json('sweep.config.stage1-screen-dialect-v1.json')).problems as {

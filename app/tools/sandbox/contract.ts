@@ -19,8 +19,12 @@ import type { Verdict } from '@app/core';
  * is its own kind rather than a step inside `formal` because it must complete BEFORE the
  * Property_Wrapper exists - a `formal` job's `-top` IS that wrapper, and the wrapper is
  * what needs the pre-pass's answers (Req 14.11).
+ *
+ * `lint` is its own kind rather than a flag on `synthesize`, so a job that wants only the
+ * Lint_Engine's `check -assert` pass does not also pay for (and require a result from) the
+ * Netlist_Stage a Synthesize_Job runs (SGT-Q03).
  */
-export type SandboxJobKind = 'simulate' | 'synthesize' | 'formal' | 'formalPrepass';
+export type SandboxJobKind = 'simulate' | 'synthesize' | 'formal' | 'formalPrepass' | 'lint';
 
 /**
  * An output the invocation is required to produce.
@@ -38,9 +42,20 @@ export type SandboxJobKind = 'simulate' | 'synthesize' | 'formal' | 'formalPrepa
  *     union at all. It is registered opportunistically, because a SUCCESSFUL PROOF writes
  *     no trace, so naming it here would make `missingRequiredOutputs` classify every
  *     proof as `error` (Req 12.18, 12.19).
+ *   - `lintReport` IS required, for the same reason as `formalPrepassReport`: the Lint_Job's
+ *     entire output is the report, so a Lint_Job that produced no report produced nothing
+ *     a Lint_Adapter can read, and the Tool_Runner must say so by `error` rather than let a
+ *     missing report pass through as an empty result (Req 4.4).
  */
 export type RequiredOutput =
-  'stdout' | 'stderr' | 'exitCode' | 'vcd' | 'netlistJson' | 'formalReport' | 'formalPrepassReport';
+  | 'stdout'
+  | 'stderr'
+  | 'exitCode'
+  | 'vcd'
+  | 'netlistJson'
+  | 'formalReport'
+  | 'formalPrepassReport'
+  | 'lintReport';
 
 /**
  * One file written into the sandbox workspace before the run.
@@ -134,6 +149,35 @@ export interface FormalPrepassJobRequest {
   readonly topModule: string;
 }
 
+/**
+ * Kind-specific parameters for a `synthesize` job; required when `kind` is `'synthesize'`
+ * (SGT-Q04, SGT-Q05).
+ *
+ * `topModule` reaches a command line inside the sandbox (`synth -top <topModule>`), so it
+ * carries the same bounded plain-identifier constraint as `FormalJobRequest.topModule`.
+ *
+ * `schematic` is a REQUIRED boolean rather than an optional one, because an optional flag
+ * has two spellings of "no schematic" (absent, and present-but-false) and the worker would
+ * have to treat both; a required field has exactly one spelling of each state.
+ */
+export interface SynthesizeJobRequest {
+  /** The Top_Module name, used as `synth -top`. */
+  readonly topModule: string;
+  /** Whether the Schematic_Stage (netlistsvg) runs after a successful Netlist_Stage. */
+  readonly schematic: boolean;
+}
+
+/**
+ * Kind-specific parameters for a `lint` job; required when `kind` is `'lint'` (SGT-Q04).
+ *
+ * One field, the Top_Module name the Lint_Engine synthesizes before running `check -assert`,
+ * under the same bounded plain-identifier constraint every other `topModule` payload carries.
+ */
+export interface LintJobRequest {
+  /** The Top_Module name, used as `synth -top` ahead of the Lint_Engine's `check -assert`. */
+  readonly topModule: string;
+}
+
 /** The complete description of one sandbox invocation (the stdin side of the seam). */
 /** The one default timescale a job may request; a closed vocabulary, re-checked by the worker. */
 export type DefaultTimescale = '1ns/1ps';
@@ -170,6 +214,16 @@ export interface SandboxJob {
   readonly formalPrepass?: FormalPrepassJobRequest;
   /** Optional, and allowed only when `kind` is `'simulate'`; absent on every Golden_Judge job. */
   readonly simulate?: SimulateJobRequest;
+  /**
+   * The `synthesize` kind's parameters; present IF AND ONLY IF `kind` is `'synthesize'`,
+   * by the same conditional rule the `formal` and `formalPrepass` payloads carry.
+   */
+  readonly synthesize?: SynthesizeJobRequest;
+  /**
+   * The `lint` kind's parameters; present IF AND ONLY IF `kind` is `'lint'`, by the same
+   * conditional rule.
+   */
+  readonly lint?: LintJobRequest;
 }
 
 /** A reference to one captured artifact blob (for example the VCD waveform). */

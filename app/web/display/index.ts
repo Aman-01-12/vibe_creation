@@ -18,3 +18,9 @@ export {
   type DiscrepancyReason,
   type ProvenanceDiscrepancy,
 } from './discrepancy.js';
+export {
+  renderFaultEvidence,
+  type FaultEvidenceAttributionStatus,
+  type FaultEvidenceInput,
+  type FaultEvidencePeers,
+} from './fault-evidence.js';

@@ -32,7 +32,11 @@ import {
 
 import { makeSessionBudget, newUlid } from '@app/core';
 
-import { FileSystemCorpusCheckout, importRtllmCorpus } from '../corpus/index.js';
+import {
+  FileSystemCorpusCheckout,
+  importRtllmCorpus,
+  localTimingDerivation,
+} from '../corpus/index.js';
 import { RTLLM_CHECKOUT_PATH } from '../corpus/fetch-node.js';
 import type { EvalProblem } from '../problem.js';
 import { evalRoutingPolicy, type EvalRoleModels } from '../routing-policy.js';
@@ -246,7 +250,10 @@ export async function parseSavedReplies(directory: string): Promise<ProbeTally> 
 /** `--send`: 12 real calls, no Campaign slot and no Results_Log record. */
 async function sendProbe(directory: string): Promise<void> {
   const config = await readProbeConfig();
-  const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+  const corpus = await importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    localTimingDerivation(),
+  );
   const designs = probeDesigns(corpus.problems, config.problemIds);
   await mkdir(directory, { recursive: true });
   for (const model of config.modelArms) {

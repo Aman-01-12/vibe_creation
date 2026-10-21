@@ -25,12 +25,16 @@ Tool invocation goes through the injected :class:`CommandRunner`, so this glue i
 exercised in unit tests with a fake runner even where ``iverilog``/``vvp``/Yosys
 are not installed.
 
-NOTE ON ``synthesize``, so nobody infers a fix that did not happen: the
-``synthesize`` job kind is STILL undispatched
-(``chipAgent/_inbox/gotcha-worker-synthesize-kind-unimplemented.md``).
-``worker.py._run_kind`` continues to return its honest unsupported-kind capture
-for it. :func:`formal` implements a THIRD kind and :func:`formal_prepass` a FOURTH;
-neither changes anything about the second.
+:func:`synthesize` is the Netlist_Stage (and, where requested, the Schematic_Stage) of a
+Synthesize_Job: it runs Yosys ``synth`` once, decides nothing, and reports the same raw
+shape as every routine above. ``worker.py._run_kind`` now dispatches it, closing the gap
+``chipAgent/_inbox/gotcha-worker-synthesize-kind-unimplemented.md`` recorded.
+
+:func:`lint` is the Lint_Engine's one Yosys invocation for a Lint_Job: ``synth -top`` followed
+by ``check -assert`` under a ``tee -q -o`` log, so the worker can tell "the check never ran"
+from "the check ran and found N problems" - a distinction the Yosys exit code alone collapses.
+It decides nothing either; ``_lint_report`` only reads the log and the TypeScript side
+classifies.
 """
 
 from __future__ import annotations
@@ -51,7 +55,9 @@ from .contract import (
     TOP_MODULE_RE,
     FormalPrepassRequest,
     FormalRequest,
+    LintRequest,
     SimulateRequest,
+    SynthesizeRequest,
 )
 from .report import ArtifactRef, JsonValue
 
@@ -303,6 +309,96 @@ _ENABLE_GATED_RESET_CELLS: Final[frozenset[str]] = frozenset({"$sdffce"})
 #: ``CLK_POLARITY`` casts no clock vote, which is how a design with no clocked state comes
 #: out as ``none`` rather than as a refusal (Requirement 14.34, 15 of 50 references).
 _CLK_POLARITY_PARAMETER = "CLK_POLARITY"
+
+#: The cell types that RETAIN STATE, and so END a backward cone walk (Requirement 1.4).
+#:
+#: Reaching one of these means the port's value is held across a clock edge rather than
+#: computed from this cycle's inputs, which is the Sequential_Element boundary the Port_Timing
+#: question turns on.
+#:
+#: NAMED rather than inferred, exactly as :data:`_ENABLE_GATED_RESET_CELLS` is named, because
+#: an unlisted type would otherwise be CROSSED as combinational logic here, and that is the
+#: false-``combinational`` direction. Measured over the corpus: these eleven, and no clocked
+#: cell outside them. ``$aldff`` (bare async-load, no enable) joined this set after the task
+#: 11.1 pass-sequence equivalence measurement found it missing: under ``prep`` alone,
+#: ``multi_booth_8bit``'s async-load reset elaborates to a bare ``$aldff`` rather than the
+#: enabled ``$aldffe`` the existing ``opt_dff -sat`` pass happens to fold it into, so without
+#: this entry the port refused as ``unrecognized-clocked-cell`` under the un-enriched sequence
+#: instead of deriving ``registered`` as the committed Ground_Truth_Manifest records. The guard
+#: that turns an unlisted clocked cell into a REFUSAL rather than a crossing is
+#: :func:`_cell_timing_refusal`'s ``unrecognized-clocked-cell``.
+_RETAINED_STATE_CELLS: Final[frozenset[str]] = frozenset(
+    {
+        "$adff",
+        "$adffe",
+        "$aldff",
+        "$aldffe",
+        "$dff",
+        "$dffe",
+        "$dlatch",
+        "$mem_v2",
+        "$sdff",
+        "$sdffce",
+        "$sdffe",
+    }
+)
+
+#: The memory cell type, which is a retained-state boundary on every pin EXCEPT an
+#: ASYNCHRONOUS ``RD_DATA`` bit (Requirement 1.12).
+#:
+#: It stays a member of :data:`_RETAINED_STATE_CELLS` and is tested BEFORE that set, because a
+#: memory still carries ``RD_CLK`` and ``WR_CLK`` and so must keep its place among the NAMED
+#: clocked types the ``unrecognized-clocked-cell`` guard is defined against. Removing it there
+#: to special-case it here would make a memory look like a type nobody named.
+_MEMORY_CELL = "$mem_v2"
+
+#: The memory parameters the asynchronous-read rule reads: the per-read-port clock-enable MASK,
+#: and the data WIDTH that turns an ``RD_DATA`` bit position into a read-port index.
+_READ_CLOCK_ENABLE_PARAMETER = "RD_CLK_ENABLE"
+_MEMORY_WIDTH_PARAMETER = "WIDTH"
+
+#: The memory's only OUTPUT pin, and so the only pin the cone walk can arrive at.
+_READ_DATA_PIN = "RD_DATA"
+
+#: What an ASYNCHRONOUS read exposes combinationally, paired with the parameter giving ONE read
+#: port's share of that pin: the address it is reading (``ABITS`` bits per port) and the enable
+#: qualifying the read (one bit per port, hence ``None``).
+#:
+#: Every pin on a ``$mem_v2`` is the read ports' slices CONCATENATED, so each is sliced per port
+#: rather than traversed whole. Traversing it whole would report one read port as depending on
+#: ANOTHER port's address input, which is a source that does not reach it.
+#:
+#: ``RD_CLK`` is absent because an asynchronous read port ties its clock to ``x`` (measured on
+#: both corpus memories), and ``WR_DATA`` is absent because a value written on a previous edge
+#: arrives through retained state - which is the ``reaches_state`` this rule sets, not a
+#: combinational source.
+_ASYNC_READ_INPUT_PINS: Final[tuple[tuple[str, str | None], ...]] = (
+    ("RD_ADDR", "ABITS"),
+    ("RD_EN", None),
+)
+
+#: The cell type that carries NO output pin, and so drives nothing in the cone walk.
+#:
+#: A fact about this cell type rather than a lenience: ``$scopeinfo`` records which source
+#: module a flattened cell came from and its ``port_directions`` is legitimately EMPTY -
+#: measured on ``adder_8bit``, which carries eight of them, one per flattened ``full_adder``.
+#: Named so it stays out of the ``cell-shape-unreadable`` refusal, which must fire on a shape
+#: that could not be READ and not on one that genuinely has no output.
+_SCOPE_INFO_CELL = "$scopeinfo"
+
+#: The pin that makes a cell CLOCKED, and so a boundary the cone walk has to recognise BY NAME.
+_CLOCK_PIN = "CLK"
+
+#: The CLOSED set of causes a design-level timing refusal may carry (Requirement 2.5).
+#:
+#: A cause is a bare TOKEN and carries nothing with it. No path, no design source text, no tool
+#: diagnostic, and in particular no cell NAME: a Yosys cell name embeds the source file and
+#: line it came from (``$auto$opt_dff.cc:275:combine_resets$116``,
+#: ``$and$radix2_div.v:58$21_Y``), so naming the offending cell would leak a host path through
+#: the one field that exists to say we could not read the design.
+_MODULE_INSTANCE_CAUSE = "module-instance"
+_UNRECOGNIZED_CLOCKED_CELL_CAUSE = "unrecognized-clocked-cell"
+_CELL_SHAPE_UNREADABLE_CAUSE = "cell-shape-unreadable"
 
 #: Largest pre-pass netlist this worker will parse, in bytes.
 #:
@@ -1194,6 +1290,34 @@ class _ResetEntry:
     enable_polarity: int | None
 
 
+def _binary_parameter(raw: object) -> int | None:
+    """One Yosys cell parameter as an INTEGER, or ``None`` where it is not readable.
+
+    THE ONLY place a parameter is turned into a number, so that every rule reading one agrees
+    on what a value means. The width restriction belongs to the CALLER: :func:`_polarity_bit`
+    admits only 0 or 1 because a polarity wider than a bit is not a polarity, while a per-port
+    mask like ``RD_CLK_ENABLE`` is legitimately many bits wide and is indexed instead.
+
+    Read over the WHOLE string, so an unparseable value (``"x"``, ``"xxxx"``, an ``INIT``
+    carrying don't-cares) reads as UNREADABLE rather than as zero. That direction is
+    load-bearing: a caller that read an unreadable value as zero would call a clocked memory
+    read asynchronous.
+
+    BINARY DIGITS ONLY, rather than ``int(v, 2)`` on whatever arrived, because ``int`` is
+    LENIENT in a way this netlist is not: it accepts a ``0b`` prefix, ``_`` separators, and
+    surrounding whitespace, so ``"0b0"`` would read as zero. Yosys writes none of those, and
+    the netlist is a tool's output over untrusted input, so a spelling the writer cannot
+    produce is unreadable by definition.
+    """
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, int):
+        return raw
+    if not isinstance(raw, str) or not raw or set(raw) - {"0", "1"}:
+        return None
+    return int(raw, 2)
+
+
 def _polarity_bit(raw: object) -> int | None:
     """One polarity parameter as a BINARY INTEGER, or ``None`` where it is not readable.
 
@@ -1218,16 +1342,7 @@ def _polarity_bit(raw: object) -> int | None:
     as UNREADABLE rather than coerced: the caller turns an unreadable polarity into a refusal,
     never into a guess.
     """
-    if isinstance(raw, bool):
-        return int(raw)
-    if isinstance(raw, int):
-        return raw if raw in (0, 1) else None
-    if not isinstance(raw, str):
-        return None
-    try:
-        value = int(raw, 2)
-    except ValueError:
-        return None
+    value = _binary_parameter(raw)
     return value if value in (0, 1) else None
 
 
@@ -1446,6 +1561,386 @@ def _derived_clock_polarity(polarities: list[int | None]) -> str | None:
     return "mixed"
 
 
+@dataclass(frozen=True, slots=True)
+class _PortTimingFacts:
+    """One declared output port's cone, as read off the elaborated netlist.
+
+    FOUR FIELDS AND NO PER-PORT REFUSAL FIELD. A structural refusal has ONE representation,
+    the design-level arm of the report, so a port this walk could not read is reported by that
+    arm and not by a fifth field here that the wire schema does not carry.
+
+    The classification itself is NOT here: these are the facts, and
+    ``app/tools/formal/timing.ts`` owns the rule that turns them into a Port_Timing value, the
+    same split the reset facts and :func:`_derived_reset` already follow.
+    """
+
+    #: The top-level output port name.
+    port: str
+    #: Top-level INPUT ports the cone reached without crossing a retained-state boundary,
+    #: INCLUDING the clock and reset ports - the TypeScript side subtracts those, because it is
+    #: the side that already knows which port is the clock and which is the reset.
+    sources: list[str]
+    #: Whether the cone reached a cell in :data:`_RETAINED_STATE_CELLS`.
+    reaches_state: bool
+    #: Whether a bit in the cone had no driver at all.
+    undriven: bool
+
+
+def _memory_shape_unreadable(cell: dict[str, Any]) -> bool:
+    """Whether a ``$mem_v2``'s own shape parameters cannot be read.
+
+    A shape we could not read is not evidence, so this is a refusal rather than a boundary:
+    ``WIDTH`` is what places an ``RD_DATA`` bit on a read port and ``RD_CLK_ENABLE`` is what
+    says whether that port is clocked, so without both there is no reading of this memory at
+    all - not a clocked one and not an asynchronous one.
+
+    The per-port widths are taken FROM :data:`_ASYNC_READ_INPUT_PINS` rather than respelled
+    here, so what this guard covers is exactly what :func:`_async_read_bits` reads.
+
+    ``RD_CLK_ENABLE`` is checked for READABILITY only and never against a value, because zero
+    and one are both answers.
+    """
+    parameters = cell.get("parameters")
+    if not isinstance(parameters, dict):
+        return True
+    if _binary_parameter(parameters.get(_READ_CLOCK_ENABLE_PARAMETER)) is None:
+        return True
+    widths = (_MEMORY_WIDTH_PARAMETER, *(name for _, name in _ASYNC_READ_INPUT_PINS if name))
+    return any(
+        (width := _binary_parameter(parameters.get(name))) is None or width <= 0 for name in widths
+    )
+
+
+def _cell_shape_unreadable(cell: dict[str, Any], cell_type: str) -> bool:
+    """Whether this cell's SHAPE could not be read, which is evidence for nothing.
+
+    ``port_directions`` and ``connections`` are the two things the cone walk reads a cell
+    THROUGH - the first says which pins are outputs and the second says which bits they carry -
+    so a cell missing either cannot be placed in any cone at all. A memory additionally has to
+    parse its own shape parameters.
+
+    "Not a dict" rather than "empty", because an EMPTY ``port_directions`` is exactly what
+    :data:`_SCOPE_INFO_CELL` legitimately carries.
+    """
+    if not isinstance(cell.get("port_directions"), dict):
+        return True
+    if not isinstance(cell.get("connections"), dict):
+        return True
+    return cell_type == _MEMORY_CELL and _memory_shape_unreadable(cell)
+
+
+def _cell_is_clocked(cell: dict[str, Any]) -> bool:
+    """Whether this cell carries a :data:`_CLOCK_PIN`, read from BOTH places one can appear.
+
+    The declared shape and the connections are both consulted because the guard this serves
+    fails SAFE in only one direction: a cell wrongly called clocked is refused, while a clocked
+    cell missed here is CROSSED as combinational logic.
+    """
+    return any(_CLOCK_PIN in cell.get(key, {}) for key in ("port_directions", "connections"))
+
+
+def _cell_timing_refusal(cell: dict[str, Any]) -> str | None:
+    """The structural cause by which this ONE cell refuses the design's timing finding.
+
+    THREE CAUSES, ALL FAILING IN THE SAME DIRECTION. Each names a cell the cone walk would
+    otherwise CROSS as ordinary combinational logic, and crossing something that is really a
+    boundary is what reports a false ``combinational`` - the one error direction this feature
+    exists to avoid.
+
+    ``module-instance``
+        A type not beginning with ``$`` is an unflattened submodule, so its internals were
+        never elaborated and whatever state it holds is invisible here.
+    ``unrecognized-clocked-cell``
+        A cell carrying a :data:`_CLOCK_PIN` that :data:`_RETAINED_STATE_CELLS` does not name
+        is a boundary we failed to recognise. Measured as EMPTY over the corpus - the eleven
+        named types are every clocked cell it produces - so this is a GUARD against a future Yosys
+        version or an unseen design rather than a live branch, in the same spirit as
+        :data:`_ENABLE_GATED_RESET_CELLS` documenting its own direction.
+    ``cell-shape-unreadable``
+        A shape we could not read is not evidence: an unreadable type, ``port_directions``, or
+        ``connections``, or a memory whose shape parameters do not parse.
+
+    ``$scopeinfo`` is skipped FIRST: it is a metadata cell carrying no pins, the one cell type
+    whose empty shape is a fact rather than a gap (eight of them on ``adder_8bit``).
+
+    The TYPE is read before the shape, so an unflattened instance is reported as the submodule
+    it is rather than as a shape we could not read - its type IS readable, and it is the
+    decisive fact about it.
+    """
+    cell_type = cell.get("type")
+    if cell_type == _SCOPE_INFO_CELL:
+        return None
+    if not isinstance(cell_type, str):
+        return _CELL_SHAPE_UNREADABLE_CAUSE
+    if not cell_type.startswith("$"):
+        return _MODULE_INSTANCE_CAUSE
+    if _cell_shape_unreadable(cell, cell_type):
+        return _CELL_SHAPE_UNREADABLE_CAUSE
+    if cell_type not in _RETAINED_STATE_CELLS and _cell_is_clocked(cell):
+        return _UNRECOGNIZED_CLOCKED_CELL_CAUSE
+    return None
+
+
+def _structural_timing_refusal(cells: dict[str, Any]) -> str | None:
+    """The ONE cause that refuses this design's whole timing finding, or ``None`` to derive.
+
+    WHOLE-DESIGN rather than per-port: a cell the walk cannot cross honestly sits in some
+    cone, and which cones it sits in is exactly what an unreadable shape leaves undecidable.
+
+    The FIRST cause in the netlist's own cell order, because one cause is enough to refuse and
+    the finding carries one. A netlist listing two defective cells is refused by whichever it
+    lists first, which is stable for a given netlist.
+
+    An entry of the ``cells`` map that is not a cell OBJECT at all is handled here rather than
+    per cell: at that point there is no cell to ask about, only a document we could not read.
+    """
+    for cell in cells.values():
+        if not isinstance(cell, dict):
+            return _CELL_SHAPE_UNREADABLE_CAUSE
+        cause = _cell_timing_refusal(cell)
+        if cause is not None:
+            return cause
+    return None
+
+
+def _cell_bit_drivers(cells: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    """Every net bit to the cell driving it, resolved from each cell's OUTPUT pins.
+
+    STRUCTURAL rather than a pin-name table: ``port_directions`` is present on internal Yosys
+    cells after ``prep -flatten`` - measured on ``$add``, ``$mux``, ``$pmux``, and ``$mem_v2`` -
+    so the output pins are read off the cell itself and no list of pin names has to be kept up
+    to date per cell type.
+
+    Reached only for a netlist :func:`_structural_timing_refusal` has already accepted, so the
+    two shapes this function cannot represent honestly - a cell whose ``port_directions`` could
+    not be read, and a non-``$`` module instance - are REFUSED by name before the walk runs.
+    The ``isinstance`` guards below therefore skip nothing a real netlist reaches here; they
+    stay because this function must be correct about the shape it reads either way.
+    """
+    drivers: dict[int, dict[str, Any]] = {}
+    for cell in cells.values():
+        if not isinstance(cell, dict) or cell.get("type") == _SCOPE_INFO_CELL:
+            continue
+        directions = cell.get("port_directions")
+        connections = cell.get("connections")
+        if not isinstance(directions, dict) or not isinstance(connections, dict):
+            continue
+        for pin, direction in directions.items():
+            if direction != "output":
+                continue
+            for bit in _connection_bits(connections, pin):
+                if isinstance(bit, int):
+                    drivers[bit] = cell
+    return drivers
+
+
+def _connection_bits(connections: dict[str, Any], pin: str) -> list[Any]:
+    """The bit list on one cell pin, or an empty list where it is not a list at all.
+
+    Bits are left UNTYPED here because ``write_json`` spells a constant bit as a STRING
+    (``"0"``, ``"1"``, ``"x"``, ``"z"``) and an integer bit as an integer, and the walk needs
+    to see both: a constant stops the walk, which is a different outcome from a bit it never
+    visited.
+    """
+    bits = connections.get(pin)
+    return bits if isinstance(bits, list) else []
+
+
+def _cell_input_bits(cell: dict[str, Any]) -> list[Any]:
+    """Every bit on every INPUT pin of ``cell``: what joins the frontier when it is crossed."""
+    directions = cell.get("port_directions")
+    connections = cell.get("connections")
+    if not isinstance(directions, dict) or not isinstance(connections, dict):
+        return []
+    bits: list[Any] = []
+    for pin, direction in directions.items():
+        if direction == "input":
+            bits.extend(_connection_bits(connections, pin))
+    return bits
+
+
+def _read_port_index(
+    parameters: dict[str, Any], connections: dict[str, Any], bit: int
+) -> int | None:
+    """Which READ PORT of a memory owns ``bit`` of its ``RD_DATA``, else ``None``.
+
+    DERIVED FROM THE BIT'S POSITION, because position is the only thing the walk holds. A
+    ``$mem_v2``'s ``RD_DATA`` is ``RD_PORTS * WIDTH`` bits wide and read port ``p`` owns the
+    contiguous slice ``[p * WIDTH, (p + 1) * WIDTH)``, so the port is the bit's index in that
+    list floor-divided by the memory's ``WIDTH``.
+
+    This is what makes the per-port parameter read land on the RIGHT port: on a two-read-port
+    memory, reading bit 0 of the mask for every ``RD_DATA`` bit would clock the second port by
+    the first one's rule, and that error is silent.
+    """
+    width = _binary_parameter(parameters.get(_MEMORY_WIDTH_PARAMETER))
+    if width is None or width <= 0:
+        return None
+    data_bits = _connection_bits(connections, _READ_DATA_PIN)
+    if bit not in data_bits:
+        return None
+    return data_bits.index(bit) // width
+
+
+def _async_read_bits(cell: dict[str, Any], bit: int) -> list[Any] | None:
+    """The bits an ASYNCHRONOUS memory read exposes at ``bit``, or ``None`` for a boundary.
+
+    ``None`` means "treat this memory as the plain boundary it otherwise is", which is now a
+    FACT about the read port rather than a mix of facts and gaps: a memory whose shape could
+    not be read is refused as ``cell-shape-unreadable`` by :func:`_memory_shape_unreadable`
+    before the walk starts, so the only ways past the asynchronous branch here are a genuinely
+    CLOCKED read port and a bit that is not an ``RD_DATA`` bit at all.
+
+    The guards below are kept rather than dropped on the strength of that: the structural pass
+    reads the cell's own parameters and this one reads a per-bit slice of them, and a boundary
+    is the right answer for a bit this rule cannot place either way.
+
+    The mask is indexed by SHIFT rather than by character, so read port ``p``'s bit is the
+    ``p``-th least significant one - the rightmost character of the string Yosys writes.
+    """
+    parameters = cell.get("parameters")
+    connections = cell.get("connections")
+    if not isinstance(parameters, dict) or not isinstance(connections, dict):
+        return None
+    read_port = _read_port_index(parameters, connections, bit)
+    if read_port is None:
+        return None
+    clock_enables = _binary_parameter(parameters.get(_READ_CLOCK_ENABLE_PARAMETER))
+    if clock_enables is None or (clock_enables >> read_port) & 1:
+        return None
+    exposed: list[Any] = []
+    for pin, width_parameter in _ASYNC_READ_INPUT_PINS:
+        per_port = (
+            1 if width_parameter is None else _binary_parameter(parameters.get(width_parameter))
+        )
+        if per_port is None or per_port <= 0:
+            return None
+        start = read_port * per_port
+        exposed.extend(_connection_bits(connections, pin)[start : start + per_port])
+    return exposed
+
+
+def _port_cone_facts(
+    port: str,
+    bits: list[Any],
+    input_bits: dict[int, str],
+    drivers: dict[int, dict[str, Any]],
+) -> _PortTimingFacts:
+    """One declared output port's cone facts, by backward breadth-first walk over net BITS.
+
+    FOUR TERMINATIONS, and each one is a different fact rather than a shared "stop":
+    a bit belonging to a top-level INPUT port records that port and stops; a CONSTANT bit
+    (a string in ``write_json``) stops carrying nothing; a bit with NO DRIVER sets ``undriven``
+    and stops; and a retained-state cell sets ``reaches_state`` and stops. Any other cell is
+    CROSSED, putting every input pin's bits on the frontier.
+
+    ONE EXCEPTION, and it is the only place a boundary is both set AND crossed: an
+    ASYNCHRONOUS memory read sets ``reaches_state`` and still continues through the address
+    and enable reaching it, which is the measured ``ROM`` case (Requirement 1.12).
+
+    The visited set is over BITS and not over cells, because a cell with a wide output is
+    reached once per bit and the question is per bit - which is also what bounds the walk: the
+    frontier can only ever hold bits of this module.
+
+    ``sources`` is sorted so one netlist derives one report, since the walk order of a frontier
+    is not a fact about the design.
+    """
+    frontier = list(bits)
+    visited: set[int] = set()
+    sources: set[str] = set()
+    reaches_state = False
+    undriven = False
+    while frontier:
+        bit = frontier.pop()
+        if not isinstance(bit, int) or bit in visited:
+            continue
+        visited.add(bit)
+        if bit in input_bits:
+            sources.add(input_bits[bit])
+            continue
+        cell = drivers.get(bit)
+        if cell is None:
+            undriven = True
+            continue
+        # A memory is checked BEFORE the retained-state set it belongs to, because an
+        # asynchronous read is the one way past that boundary: the value still comes out of
+        # memory, so `reaches_state` holds either way, but the address and enable reaching it
+        # combinationally are real sources and a plain boundary would hide them.
+        if cell.get("type") == _MEMORY_CELL:
+            reaches_state = True
+            exposed = _async_read_bits(cell, bit)
+            if exposed is not None:
+                frontier.extend(exposed)
+            continue
+        if cell.get("type") in _RETAINED_STATE_CELLS:
+            reaches_state = True
+            continue
+        frontier.extend(_cell_input_bits(cell))
+    return _PortTimingFacts(
+        port=port,
+        sources=sorted(sources),
+        reaches_state=reaches_state,
+        undriven=undriven,
+    )
+
+
+def _port_timing_facts(module: dict[str, Any], input_bits: dict[int, str]) -> list[JsonValue]:
+    """The cone facts of every declared OUTPUT port, as the report carries them.
+
+    Runs over the SAME ``cells`` map as :func:`_flip_flop_facts`, in the same call, and shares
+    nothing with it: that walk reads cell PARAMETERS and this one reads CONNECTIVITY.
+
+    Returned as the wire's own ``list[JsonValue]`` rather than as a list of the dataclass, so
+    the report carries it directly and no second shape exists between here and the seam.
+
+    A port whose declared ``bits`` are not a readable list contributes NO entry, which is the
+    same fail-safe direction as the rest of this module - a reader that finds a declared port
+    missing from this list has no derived value for it and must not invent one.
+    """
+    ports = module.get("ports")
+    cells = module.get("cells")
+    if not isinstance(ports, dict):
+        return []
+    drivers = _cell_bit_drivers(cells if isinstance(cells, dict) else {})
+    facts: list[JsonValue] = []
+    for name, port in ports.items():
+        if not isinstance(port, dict) or port.get("direction") != "output":
+            continue
+        bits = port.get("bits")
+        if not isinstance(bits, list):
+            continue
+        cone = _port_cone_facts(str(name), bits, input_bits, drivers)
+        facts.append(
+            {
+                "port": cone.port,
+                "sources": list(cone.sources),
+                "reachesState": cone.reaches_state,
+                "undriven": cone.undriven,
+            }
+        )
+    return facts
+
+
+def _timing_finding(module: dict[str, Any], input_bits: dict[int, str]) -> dict[str, JsonValue]:
+    """The design's timing finding: every declared output port's cone facts, or ONE refusal.
+
+    TWO ARMS AND NOTHING BETWEEN THEM. ``derived`` true carries ``ports``; ``derived`` false
+    carries ``cause`` and NO ``ports``, because a refusal means the walk's answers are not
+    evidence and half a finding would be read as a finding. That is also why there is no
+    per-port refusal field on :class:`_PortTimingFacts`: one refusal, one representation.
+
+    The structural pass runs BEFORE the walk rather than during it, so a defective cell refuses
+    the design even when it sits in no declared output port's cone. A cell the walk never
+    reached is still a cell we could not read, and whether it is reachable is precisely the
+    question an unreadable shape leaves open.
+    """
+    cells = module.get("cells")
+    cause = _structural_timing_refusal(cells if isinstance(cells, dict) else {})
+    if cause is not None:
+        return {"derived": False, "cause": cause}
+    return {"derived": True, "ports": _port_timing_facts(module, input_bits)}
+
+
 def _predicate_body(fragment: str, remaining: Iterable[str]) -> str | None:
     """The parenthesis-balanced body of the ``define-fun`` ``fragment`` opens, else ``None``.
 
@@ -1555,7 +2050,8 @@ def _prepass_report(
     module = _prepass_netlist_module(workspace_root, request.top_module)
     if module is None:
         return None
-    resets, clocks = _flip_flop_facts(module, _top_level_input_bits(module))
+    input_bits = _top_level_input_bits(module)
+    resets, clocks = _flip_flop_facts(module, input_bits)
     clock_polarity = _derived_clock_polarity(clocks)
     if clock_polarity is None:
         return None
@@ -1565,6 +2061,10 @@ def _prepass_report(
         "initialStatePredicate": _initial_state_predicate(
             workspace_root / _PREPASS_SMT2_FILENAME, request.top_module
         ),
+        # A REFUSED timing finding is a first-class outcome carried IN the report, exactly as
+        # a refused reset is: the pre-pass looked and could not read the design's structure,
+        # which is a different fact from no report at all.
+        "timing": _timing_finding(module, input_bits),
     }
 
 
@@ -1588,32 +2088,43 @@ def _write_prepass_report(
     return {_PREPASS_REPORT_ARTIFACT_KEY: _hash_artifact(path, workspace_root)}
 
 
-def _prepass_refusal(source_relpaths: list[str], request: FormalPrepassRequest) -> str | None:
-    """The reason this job must not become a Yosys invocation, or ``None`` to proceed.
+def _yosys_script_refusal(source_relpaths: list[str], top_module: str, job_kind: str) -> str | None:
+    """The reason ``job_kind`` must not become a Yosys invocation, or ``None`` to proceed.
 
-    The same two interpolation rules :func:`_formal_refusal` applies, through the SAME two
-    owners - :data:`contract.TOP_MODULE_RE` and :data:`_SCRIPT_SAFE_RELPATH_RE` - and no depth
-    rule, because the pre-pass runs no solver. There is no third rule and no relaxed one: the
-    pre-pass's script is ONE ``-p`` argument holding a semicolon-separated command list exactly
-    as the lowering's is, and Yosys splits it on ``;`` ITSELF.
+    THE ONE SHARED DEFINITION Requirement 3.5 asks for. ``formalPrepass``, ``synthesize``, and
+    ``lint`` all assemble their Yosys ``-p`` script the same way - ONE argument holding a
+    semicolon-separated command list Yosys splits on ``;`` ITSELF - so all three share the same
+    three checks: the empty source list, the Top_Module identifier rule, and the Script_Safe
+    source-path whitelist. ``formal`` keeps its own copy, :func:`_formal_refusal`, because it
+    adds a FOURTH rule - the proof-depth ceiling - that none of the other three ever carries.
 
     THE ``;`` INJECTION MITIGATION IS APPLIED HERE, at the last point before any source name
-    reaches a Yosys command line, because the pre-pass ASSEMBLES ITS SCRIPT THE SAME WAY and so
-    inherits the same channel. MEASURED on Yosys 0.66 in this workspace: a source file named
+    reaches a Yosys command line. MEASURED on Yosys 0.66 in this workspace: a source file named
     ``design.v; write_verilog INJECTED.v`` makes Yosys run that second command. Path confinement
     (:mod:`tool_runner_worker.paths`) bounds WHERE a job may write, not what its filename may
     SAY, so the script grammar needs its own whitelist rather than inheriting that one
     (``chipAgent/_inbox/gotcha-path-confinement-accepts-a-filename-carrying-a-semicolon.md``).
 
-    Each message names the RULE and never echoes the value.
+    Each message names the RULE and never echoes the value. ``job_kind`` names only WHICH job
+    is refusing - never a submitted value - so the one caller-identifying word in the
+    Top_Module message stays honest about which job kind produced it.
     """
     if not source_relpaths:
         return "no Verilog source files to elaborate"
-    if TOP_MODULE_RE.fullmatch(request.top_module) is None:
-        return "formalPrepass topModule is not a plain Verilog identifier"
+    if TOP_MODULE_RE.fullmatch(top_module) is None:
+        return f"{job_kind} topModule is not a plain Verilog identifier"
     if any(_SCRIPT_SAFE_RELPATH_RE.fullmatch(path) is None for path in source_relpaths):
         return "a source path holds a character the Yosys script grammar would reinterpret"
     return None
+
+
+def _prepass_refusal(source_relpaths: list[str], request: FormalPrepassRequest) -> str | None:
+    """The reason this job must not become a Yosys invocation, or ``None`` to proceed.
+
+    A thin wrapper over :func:`_yosys_script_refusal`'s three shared checks: the pre-pass runs
+    no solver, so it adds no rule of its own beyond naming itself in the Top_Module message.
+    """
+    return _yosys_script_refusal(source_relpaths, request.top_module, "formalPrepass")
 
 
 def formal_prepass(  # noqa: PLR0913 - six is what the seam needs; see :func:`formal`
@@ -1666,4 +2177,276 @@ def formal_prepass(  # noqa: PLR0913 - six is what the seam needs; see :func:`fo
         stderr_truncated=run.stderr_truncated,
         disk_limit_exceeded=run.disk_limit_exceeded,
         artifacts={} if report is None else _write_prepass_report(workspace_root, report),
+    )
+
+
+# --- The Synthesize_Job (Requirements 1, 2, 3) -----------------------------------------------
+#
+# The Netlist_Stage: ONE Yosys invocation that reads the workspace sources, synthesizes the
+# Top_Module, and writes the netlist JSON. Where the job's Schematic_Request is set and the
+# Netlist_Stage exited 0, a SECOND invocation - netlistsvg - renders that netlist as an SVG.
+#
+# NO VERDICT IS DECIDED HERE, matching every routine above: the Synthesis_Check that reads
+# ``netlistJson`` lives on the TypeScript side (C5).
+
+#: Name of the netlist the Netlist_Stage ``write_json`` produces, and the file the
+#: Schematic_Stage reads back.
+_SYNTH_NETLIST_FILENAME = "netlist.json"
+
+#: Name of the SVG the Schematic_Stage ``netlistsvg`` writes.
+_SYNTH_SVG_FILENAME = "schematic.svg"
+
+#: Artifact map key for the netlist, matching the seam's ``RequiredOutput`` name so the
+#: TypeScript adapter's Synthesis_Check finds it (Requirement 1.3).
+_NETLIST_ARTIFACT_KEY = "netlistJson"
+
+#: Artifact map key for the schematic SVG, matching the seam's ``RequiredOutput`` name
+#: (Requirement 2.2).
+_SVG_ARTIFACT_KEY = "svg"
+
+#: THE COMPLETE NETLIST_STAGE SCRIPT, as one constant, mirroring :data:`YOSYS_FORMAL_SCRIPT`
+#: and :data:`YOSYS_PREPASS_SCRIPT`: only the source list and the Top_Module are substituted,
+#: so no code path here can assemble a synthesis script with a pass missing.
+#:
+#: ``read_verilog -sv`` carries no ``-formal``, the same frontend call the pre-pass makes and
+#: for the same reason: this stage never writes SMT2, so admitting the design's own SVA would
+#: buy nothing and ``synth`` does not need it either.
+YOSYS_SYNTH_SCRIPT = (
+    "read_verilog -sv {sources}; synth -top {top}; write_json " + _SYNTH_NETLIST_FILENAME
+)
+
+
+def _non_empty_file(path: Path) -> bool:
+    """Whether ``path`` exists and holds at least one byte.
+
+    AN EMPTY FILE IS NOT A PRODUCED ARTIFACT (Requirement 1.3, 2.2): a stage that
+    exited 0 but left a zero-byte file produced nothing a caller could read as a
+    netlist or a schematic, and registering it would hand on an artifact reference
+    to data that is not there.
+    """
+    try:
+        return path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _netlistsvg_argv(netlist_relpath: str, svg_relpath: str) -> list[str]:
+    """Build the Schematic_Stage argv: an explicit vector, no shell (Requirement 2.5).
+
+    Both arguments are module constants at the one call site, so no job-controlled value
+    reaches this argv - the same discipline :func:`_smtbmc_argv` and :func:`_trace_relpath`
+    already carry.
+    """
+    return ["netlistsvg", netlist_relpath, "-o", svg_relpath]
+
+
+def synthesize(  # noqa: PLR0913 - six is what the seam needs; see :func:`formal`
+    workspace_root: Path,
+    source_relpaths: list[str],
+    request: SynthesizeRequest,
+    runner: CommandRunner,
+    timeout_s: float,
+    disk_limit_bytes: int,
+) -> EdaCapture:
+    """Run the Netlist_Stage and, where requested, the Schematic_Stage.
+
+    The parameters mirror :func:`formal_prepass` - workspace, sources, injected runner, and the
+    two resource bounds - plus the job's validated ``synthesize`` payload.
+
+    THE REPORTED EXIT CODE IS ALWAYS THE NETLIST_STAGE'S OWN (Requirement 2.3): the Schematic_
+    Stage runs only after a passing Netlist_Stage and its result is read only for whether it
+    wrote a non-empty SVG, never folded into the returned ``exit_code``. A netlistsvg that is
+    absent (exit 127), that fails, or that writes no file therefore leaves the job looking
+    exactly like a synthesis that passed with no schematic - which is correct, because synthesis
+    DID pass; the schematic is a separate, opportunistic fact.
+
+    ``disk_limit_exceeded`` is the OR across whichever stages actually ran, the same pattern
+    :func:`simulate`'s compile-then-run OR uses: both stages, when both run, share the one
+    workspace disk cap.
+    """
+    refusal = _yosys_script_refusal(source_relpaths, request.top_module, "synthesize")
+    if refusal is not None:
+        # Refused before any command is built, so no artifact and an honest non-zero
+        # exit: a missing `netlistJson` is classified `error`, never a synthesis.
+        return EdaCapture(
+            _REFUSED_EXIT,
+            "",
+            refusal,
+            stdout_truncated=False,
+            stderr_truncated=False,
+            disk_limit_exceeded=False,
+        )
+
+    script = YOSYS_SYNTH_SCRIPT.format(sources=" ".join(source_relpaths), top=request.top_module)
+    netlist_run = runner.run(["yosys", "-p", script], workspace_root, timeout_s, disk_limit_bytes)
+    netlist_path = workspace_root / _SYNTH_NETLIST_FILENAME
+    netlist_written = netlist_run.exit_code == 0 and _non_empty_file(netlist_path)
+    artifacts: dict[str, ArtifactRef] = (
+        {_NETLIST_ARTIFACT_KEY: _hash_artifact(netlist_path, workspace_root)}
+        if netlist_written
+        else {}
+    )
+
+    disk_limit_exceeded = netlist_run.disk_limit_exceeded
+    if netlist_written and request.schematic:
+        svg_path = workspace_root / _SYNTH_SVG_FILENAME
+        svg_run = runner.run(
+            _netlistsvg_argv(_SYNTH_NETLIST_FILENAME, _SYNTH_SVG_FILENAME),
+            workspace_root,
+            timeout_s,
+            disk_limit_bytes,
+        )
+        if svg_run.exit_code == 0 and _non_empty_file(svg_path):
+            artifacts[_SVG_ARTIFACT_KEY] = _hash_artifact(svg_path, workspace_root)
+        # The Netlist_Stage's own exit code is reported whatever netlistsvg does
+        # (Requirement 2.3); only the shared disk cap can carry forward from this stage.
+        disk_limit_exceeded = disk_limit_exceeded or svg_run.disk_limit_exceeded
+
+    return EdaCapture(
+        exit_code=netlist_run.exit_code,
+        stdout=netlist_run.stdout,
+        stderr=netlist_run.stderr,
+        stdout_truncated=netlist_run.stdout_truncated,
+        stderr_truncated=netlist_run.stderr_truncated,
+        disk_limit_exceeded=disk_limit_exceeded,
+        artifacts=artifacts,
+    )
+
+
+# --- The Lint_Job (Requirements 3, 4) --------------------------------------------------------
+#
+# The Lint_Engine is Yosys itself: ``synth -top`` followed by ``check -assert`` under a
+# ``tee -q -o`` log, in ONE invocation. The log is what separates "the check never ran" from
+# "the check ran and found N problems" (design D-08) - the Yosys exit code alone cannot, because
+# a `synth` failure and a `check -assert` failure both exit 1.
+#
+# NO VERDICT IS DECIDED HERE, matching every routine above: ``clean``/``findings``/
+# ``could-not-run`` is the Lint_Adapter's reading of this report, on the TypeScript side.
+
+#: Name of the ``tee -q -o`` log the Lint_Engine's ``check -assert`` writes.
+_LINT_LOG_FILENAME = "lint-check.log"
+
+#: Artifact map key for the lint report, matching the seam's ``RequiredOutput`` name so the
+#: TypeScript adapter finds it when ``lintReport`` is required (Requirement 4.4).
+_LINT_REPORT_ARTIFACT_KEY = "lintReport"
+
+#: Name of the lint report written into the workspace and registered under that key.
+_LINT_REPORT_FILENAME = "lint-report.json"
+
+#: THE COMPLETE LINT_ENGINE SCRIPT, as one constant, mirroring :data:`YOSYS_SYNTH_SCRIPT`:
+#: only the source list and the Top_Module are substituted, so no code path here can assemble
+#: a lint script with ``check -assert`` or its log missing.
+#:
+#: NO ``-nolatches`` (D-02, SGT-Q02): MEASURED to refuse the golden ``fsm`` and ``booth4_mul``
+#: references, which makes it miscalibrated for an admission gate rather than a real defect
+#: signal. ``tee -q -o`` writes the log the ``-q`` would otherwise have sent only to Yosys's own
+#: stdout, so the count survives independently of how much of stdout this worker retains.
+YOSYS_LINT_SCRIPT = (
+    "read_verilog -sv {sources}; synth -top {top}; "
+    "tee -q -o " + _LINT_LOG_FILENAME + " check -assert"
+)
+
+#: Largest lint log this worker will read, in bytes.
+#:
+#: ponytail: a log over this bound reads as not reached, so a design with thousands of
+#: problems is could-not-run rather than findings; both refuse, so the gate's answer is the
+#: same either way. Matches the discipline :data:`MAX_STDERR_TAIL_CHARS` and
+#: :data:`MAX_PREPASS_NETLIST_BYTES` already carry in this file: a field the TypeScript side
+#: must hold must not be unbounded, and ``check -assert`` can emit one diagnostic line per net.
+MAX_LINT_LOG_BYTES = 1024 * 1024
+
+#: The line ``check -assert`` always prints last when it completed, carrying the problem count.
+_LINT_PROBLEM_COUNT_RE = re.compile(r"Found and reported (\d+) problems\.")
+
+
+def _lint_report(workspace_root: Path) -> dict[str, JsonValue]:
+    """Read the Lint_Engine's log and report whether ``check -assert`` reached its count.
+
+    ``{"reachedCheck": false, "problemCount": None}`` covers every way the log can fail to
+    answer: absent (``synth`` itself failed, so ``tee`` never ran), over
+    :data:`MAX_LINT_LOG_BYTES` (refused rather than read, the same direction every bounded
+    read in this module takes), or present with no matching line. The LAST matching line is
+    read rather than the first, because a log is a stream of whatever Yosys printed before the
+    count and taking the final occurrence is the one reading that cannot be fooled by an
+    unrelated earlier line sharing the same words.
+    """
+    path = workspace_root / _LINT_LOG_FILENAME
+    try:
+        if path.stat().st_size > MAX_LINT_LOG_BYTES:
+            return {"reachedCheck": False, "problemCount": None}
+        log_text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"reachedCheck": False, "problemCount": None}
+    matches = _LINT_PROBLEM_COUNT_RE.findall(log_text)
+    if not matches:
+        return {"reachedCheck": False, "problemCount": None}
+    return {"reachedCheck": True, "problemCount": int(matches[-1])}
+
+
+def _write_lint_report(
+    workspace_root: Path, payload: dict[str, JsonValue]
+) -> dict[str, ArtifactRef]:
+    """Write ``lint-report.json`` and register it, or register nothing on a failed write.
+
+    Same rule :func:`_write_prepass_report` and :func:`_write_formal_report` follow: a failed
+    write (the workspace disk cap being the realistic way) registers NO artifact, so a Lint_Job
+    without a readable `lintReport` classifies ``error`` rather than carrying a report nobody
+    can read back.
+    """
+    path = workspace_root / _LINT_REPORT_FILENAME
+    try:
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        return {}
+    return {_LINT_REPORT_ARTIFACT_KEY: _hash_artifact(path, workspace_root)}
+
+
+def lint(  # noqa: PLR0913 - six is what the seam needs; see :func:`formal`
+    workspace_root: Path,
+    source_relpaths: list[str],
+    request: LintRequest,
+    runner: CommandRunner,
+    timeout_s: float,
+    disk_limit_bytes: int,
+) -> EdaCapture:
+    """Run the Lint_Engine once and always report whether its check was reached.
+
+    The parameters mirror :func:`synthesize` - workspace, sources, injected runner, and the two
+    resource bounds - plus the job's validated ``lint`` payload.
+
+    THE REPORT IS ALWAYS WRITTEN for a job that reaches dispatch (Requirement 4.3), unlike the
+    netlist and schematic artifacts above that only ever appear on success: a Lint_Job's whole
+    purpose is to say whether the check ran, so even a Yosys invocation that failed outright
+    gets a ``{"reachedCheck": false, ...}`` report rather than no report at all. Only a REFUSED
+    job - caught before any command is built - carries no report, matching the refusal pattern
+    every other routine in this module follows.
+
+    EXACTLY ONE ENGINE RUNS (Requirement 4.6): there is no fallback invocation, so a missing
+    ``yosys`` surfaces as the single run's own ``COMMAND_NOT_FOUND_EXIT`` with ``reachedCheck``
+    false, never as a second attempt.
+    """
+    refusal = _yosys_script_refusal(source_relpaths, request.top_module, "lint")
+    if refusal is not None:
+        # Refused before any command is built, so no artifact and an honest non-zero
+        # exit: a missing `lintReport` is classified `error`, never a lint result.
+        return EdaCapture(
+            _REFUSED_EXIT,
+            "",
+            refusal,
+            stdout_truncated=False,
+            stderr_truncated=False,
+            disk_limit_exceeded=False,
+        )
+
+    script = YOSYS_LINT_SCRIPT.format(sources=" ".join(source_relpaths), top=request.top_module)
+    run = runner.run(["yosys", "-p", script], workspace_root, timeout_s, disk_limit_bytes)
+    report = _lint_report(workspace_root)
+    return EdaCapture(
+        exit_code=run.exit_code,
+        stdout=run.stdout,
+        stderr=run.stderr,
+        stdout_truncated=run.stdout_truncated,
+        stderr_truncated=run.stderr_truncated,
+        disk_limit_exceeded=run.disk_limit_exceeded,
+        artifacts=_write_lint_report(workspace_root, report),
     )

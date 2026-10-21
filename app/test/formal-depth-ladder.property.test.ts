@@ -222,6 +222,7 @@ const DERIVED_PREPASS_TEXT = JSON.stringify({
   reset: { derived: true, resetName: 'rst_n', resetActiveLow: true, resetKind: 'async' },
   clockPolarity: 'posedge',
   initialStatePredicate: 'true',
+  timing: { derived: true, ports: [] },
 });
 
 const PREPASS_REPORT: ArtifactBlobRef = {

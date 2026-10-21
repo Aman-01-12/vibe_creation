@@ -61,6 +61,9 @@ function renderHarnessOrThrow(
     nonce,
     watchdogBudgetNs: 2_000_000,
     sampleBudget,
+    roles: moduleInterface.ports
+      .filter((port) => port.direction === 'input')
+      .map((port) => ({ portName: port.name, role: 'data' as const })),
   };
   const rendered = renderConsensusHarness(request);
   if (!rendered.ok) {
@@ -126,8 +129,8 @@ function counterReferenceModel(forgedDisplay = ''): SourceFile {
   return {
     path: 'refmodel.v',
     contents: [
-      'function automatic [0:0] ece_stimulus(input [31:0] step);',
-      "  ece_stimulus = 1'b1;",
+      'function automatic [127:0] ece_reset_state(input dummy);',
+      "  ece_reset_state = 128'd0;",
       'endfunction',
       'function automatic [127:0] ece_next_state(input [127:0] s, input [0:0] in);',
       "  ece_next_state = s + {127'd0, in};",
@@ -170,8 +173,8 @@ const ADDER_INTERFACE: ModuleInterface = {
 const ADDER_REFERENCE_MODEL: SourceFile = {
   path: 'refmodel.v',
   contents: [
-    'function automatic [7:0] ece_stimulus(input [31:0] step);',
-    '  ece_stimulus = {step[3:0], step[3:0]};',
+    'function automatic [127:0] ece_reset_state(input dummy);',
+    "  ece_reset_state = 128'd0;",
     'endfunction',
     'function automatic [127:0] ece_next_state(input [127:0] s, input [7:0] in);',
     '  ece_next_state = s;',
@@ -220,8 +223,8 @@ const MIXED_INTERFACE: ModuleInterface = {
 const MIXED_REFERENCE_MODEL: SourceFile = {
   path: 'refmodel.v',
   contents: [
-    'function automatic [3:0] ece_stimulus(input [31:0] step);',
-    '  ece_stimulus = step[3:0];',
+    'function automatic [127:0] ece_reset_state(input dummy);',
+    "  ece_reset_state = 128'd0;",
     'endfunction',
     'function automatic [127:0] ece_next_state(input [127:0] s, input [3:0] in);',
     "  ece_next_state = {124'd0, in};",
@@ -296,6 +299,11 @@ describe.skipIf(!PROBE.available)(
           REAL_LIMITS,
         );
         expect(verdict.failureCause).toBe('none');
+        // The harness now renders the stimulus itself from the Role_Declaration (hash-mixed,
+        // not a literal step), so exact input values are no longer predictable here; the
+        // Reference_Model agreeing with the real adder on whatever the harness drove IS the
+        // "correctly mirrors a+b" claim, carried by the harness's own CHECK PASS/FAIL.
+        expect(verdict.verdict).toBe('pass');
 
         const samples = sampleLineShapes(verdict.stdout, nonce);
         expect(samples.map((sample) => sample.step)).toEqual([0, 1, 2, 3]);
@@ -304,8 +312,6 @@ describe.skipIf(!PROBE.available)(
 
         const signature = reduceSignature(verdict.stdout, nonce, ADDER_INTERFACE);
         expect(signature).not.toBeNull();
-        // step k drives a=b=k, so sum = 2k: 0, 2, 4, 6.
-        expect(signature?.trace.map((record) => record.values[0])).toEqual(['0', '2', '4', '6']);
       },
       RUN_TIMEOUT,
     );
@@ -329,6 +335,11 @@ describe.skipIf(!PROBE.available)(
           REAL_LIMITS,
         );
         expect(verdict.failureCause).toBe('none');
+        // The harness now renders the stimulus itself from the Role_Declaration (hash-mixed,
+        // not a literal step), so the exact `a` sequence is no longer predictable here; the
+        // Reference_Model agreeing with the real DUT on whatever the harness drove IS the "q
+        // registers a, passthrough tracks a" claim, carried by the harness's own CHECK PASS/FAIL.
+        expect(verdict.verdict).toBe('pass');
 
         const samples = sampleLineShapes(verdict.stdout, nonce);
         expect(samples.map((sample) => sample.step)).toEqual([0, 1, 2, 3]);
@@ -338,16 +349,6 @@ describe.skipIf(!PROBE.available)(
 
         const signature = reduceSignature(verdict.stdout, nonce, MIXED_INTERFACE);
         expect(signature).not.toBeNull();
-        // passthrough (combinational) tracks `a` immediately: step k drives a=k, so passthrough=k.
-        const passthroughIndex = MIXED_INTERFACE.ports
-          .filter((port) => port.direction === 'output')
-          .findIndex((port) => port.name === 'passthrough');
-        expect(signature?.trace.map((record) => record.values[passthroughIndex])).toEqual([
-          '0',
-          '1',
-          '2',
-          '3',
-        ]);
       },
       RUN_TIMEOUT,
     );

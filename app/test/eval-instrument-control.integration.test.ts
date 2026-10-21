@@ -58,7 +58,7 @@ import {
   type ResourceLimits,
 } from '@app/tools';
 
-import { PROBE } from './real-oracle-harness.js';
+import { CORPUS_TIMING_STAND_IN, PROBE } from './real-oracle-harness.js';
 
 // -- The design this suite is about -----------------------------------------
 
@@ -189,7 +189,10 @@ async function realControl(): Promise<{
   readonly control: RtllmInstrumentControl;
   readonly reference: ReferenceDesign;
 }> {
-  const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+  const corpus = await importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    CORPUS_TIMING_STAND_IN,
+  );
   const reference = corpus.references.get(PROBLEM_ID);
   if (reference === undefined) {
     throw new Error(`the pinned corpus has no reference design for ${PROBLEM_ID}`);

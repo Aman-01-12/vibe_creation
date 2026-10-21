@@ -35,11 +35,20 @@ export {
   CLOCK_PERIOD_NS,
   CONSENSUS_HARNESS_PATH,
   CONSENSUS_HARNESS_VERSION,
+  ECE_STATE_W,
+  INPUT_ROLES,
   SAMPLE_BUDGET,
   SAMPLE_END_PREFIX,
   SAMPLE_LINE_PREFIX,
   SAMPLE_SKEW_NS,
+  packedPortSlices,
+  referenceModelFunctionHeaders,
   renderConsensusHarness,
   sizedSampleBudget,
 } from './consensus-harness.js';
-export type { ConsensusHarnessRequest } from './consensus-harness.js';
+export type {
+  ConsensusHarnessRequest,
+  InputRole,
+  PortRole,
+  RoleDeclaration,
+} from './consensus-harness.js';

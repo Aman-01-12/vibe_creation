@@ -60,6 +60,9 @@ const REAL_LIMITS: ResourceLimits = { cpu: 1, memMb: 512, procs: 128, diskMb: 12
 /** The representative synthesizable module, written as the sole workspace source. */
 const SCHEMATIC_SOURCE: SourceFile = { path: 'gate_demo.v', contents: SCHEMATIC_RTL };
 
+/** The top module name declared in `SCHEMATIC_RTL` (`real-oracle-harness.ts`). */
+const TOP_MODULE = 'gate_demo';
+
 /** Per-run timeout for a single real synthesize-and-render (ms). */
 const RUN_TIMEOUT = 60_000;
 
@@ -110,7 +113,7 @@ function capture(overrides: Partial<RawRunCapture> = {}): RawRunCapture {
 /** Drive the Synth adapter over a real `SandboxToolRunner` backed by a scripted fake. */
 function synthesizeWith(rawCapture: RawRunCapture): Promise<SvgArtifact | UnavailableStatus> {
   const runner = new SandboxToolRunner(new FakeSandboxRuntime(rawCapture));
-  return new YosysNetlistSvgAdapter(runner).netlistSvg([SCHEMATIC_SOURCE], REAL_LIMITS);
+  return new YosysNetlistSvgAdapter(runner).netlistSvg([SCHEMATIC_SOURCE], TOP_MODULE, REAL_LIMITS);
 }
 
 /** Narrow an outcome to `UnavailableStatus`, failing the test if it is available. */
@@ -141,6 +144,7 @@ describe.skipIf(!SYNTH_PROBE.available)(
       async () => {
         const outcome = await realSynthAdapter(SYNTH_PROBE.pythonBin).netlistSvg(
           [SCHEMATIC_SOURCE],
+          TOP_MODULE,
           REAL_LIMITS,
         );
 

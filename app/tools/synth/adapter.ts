@@ -87,7 +87,7 @@ export type SynthUnavailableCause = 'synthesis-error' | 'synthesis-failed' | 'no
 export const SYNTH_UNAVAILABLE_REASONS: Readonly<Record<SynthUnavailableCause, string>> = {
   'synthesis-error': 'The schematic tool did not complete (it failed or timed out).',
   'synthesis-failed': 'The schematic tool could not synthesize this design.',
-  'no-schematic': 'The schematic tool produced no drawable diagram for this design.',
+  'no-schematic': 'The schematic tool did not produce a diagram for this design.',
 };
 
 /**
@@ -130,25 +130,48 @@ export interface UnavailableStatus {
 export interface SynthAdapter {
   netlistSvg(
     rtl: readonly SourceFile[],
+    topModule: string,
     limits: ResourceLimits,
   ): Promise<SvgArtifact | UnavailableStatus>;
 }
 
 /**
  * Assemble the `SandboxJob` for a synthesize run: the RTL sources as workspace
- * files, the fixed synthesize required-output set, and the caller's resource
- * limits. Pure and exported so job assembly is unit-testable in isolation.
+ * files, the fixed synthesize required-output set, the caller's resource limits,
+ * and the `synthesize` payload (Top_Module and Schematic_Request) the widened
+ * seam now requires. Pure and exported so job assembly is unit-testable in
+ * isolation.
  */
 export function assembleSynthesizeJob(
   rtl: readonly SourceFile[],
+  topModule: string,
   limits: ResourceLimits,
+  schematic: boolean,
 ): SandboxJob {
   return {
     kind: 'synthesize',
     workspaceFiles: [...rtl],
     limits,
     requiredOutputs: SYNTHESIZE_REQUIRED_OUTPUTS,
+    synthesize: { topModule, schematic },
   };
+}
+
+/**
+ * The Synthesis_Check (SGT-Q05): did Yosys synthesize the design, independent of
+ * whether a schematic was drawn? True iff the sandbox did not classify the run
+ * `error`, the process exited 0, and `netlistJson` was captured.
+ *
+ * Reads `netlistJson` only, never `svg`: netlistsvg can decline to draw, or be
+ * absent, while synthesis itself still succeeded, and the Structural_Gate's own
+ * synthesis-only check (built in a later task) must not fail on that account.
+ */
+export function synthesisCheckPassed(result: SandboxResult): boolean {
+  return (
+    result.verdict !== 'error' &&
+    result.exitCode === 0 &&
+    Object.prototype.hasOwnProperty.call(result.artifacts, NETLIST_JSON_ARTIFACT_KEY)
+  );
 }
 
 /** Build an `UnavailableStatus` for a cause, pairing it with its sanitized reason. */
@@ -208,9 +231,13 @@ export class YosysNetlistSvgAdapter implements SynthAdapter {
 
   async netlistSvg(
     rtl: readonly SourceFile[],
+    topModule: string,
     limits: ResourceLimits,
   ): Promise<SvgArtifact | UnavailableStatus> {
-    const job = assembleSynthesizeJob(rtl, limits);
+    // This adapter's whole purpose is rendering a schematic, so it always
+    // requests one; the Structural_Gate's synthesis-only check is a separate,
+    // lower-level job built directly by the Structural_Gate_Adapter (SGT-Q05).
+    const job = assembleSynthesizeJob(rtl, topModule, limits, true);
     const result = await this.toolRunner.run(job);
     return interpretSynthResult(result);
   }

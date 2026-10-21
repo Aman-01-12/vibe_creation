@@ -159,7 +159,10 @@ function specArbitrary(projectId: Ulid, approved?: boolean): fc.Arbitrary<Spec> 
       constraints: fc.array(fc.string({ maxLength: 20 }), { maxLength: 3 }),
       moduleInterface: fc.record({
         moduleName: identifierArbitrary(),
-        ports: fc.array(portArbitrary(), { maxLength: 4 }),
+        // Unique by name: a real Declared_Interface cannot repeat a port name, and
+        // timingContractFor's own build (below) rejects a duplicate output-port timing
+        // entry, which two same-named output ports would otherwise trigger intermittently.
+        ports: fc.uniqueArray(portArbitrary(), { selector: (port) => port.name, maxLength: 4 }),
         clocking: clockingArbitrary(),
         validityOutputName: fc.constant(null),
       }),

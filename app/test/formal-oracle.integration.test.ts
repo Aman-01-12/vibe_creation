@@ -240,6 +240,7 @@ import {
 
 import { clockedProperty, combinationalProperty, guardedProperty } from './formal-fixtures.js';
 import {
+  CORPUS_TIMING_STAND_IN,
   FORMAL_CAPS,
   FORMAL_PROBE,
   realFormalAdapter,
@@ -306,7 +307,10 @@ let corpusOnce: Promise<RtllmCorpus> | null = null;
 
 /** The pinned corpus, read through the same read-only port `probeCorpus` used. */
 function pinnedCorpus(): Promise<RtllmCorpus> {
-  corpusOnce ??= importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+  corpusOnce ??= importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    CORPUS_TIMING_STAND_IN,
+  );
   return corpusOnce;
 }
 
@@ -4183,6 +4187,21 @@ const DIVIDER_RESET_FINDING = {
   resetKind: 'async',
 };
 
+/**
+ * One wire document minus its timing finding, for the whole-document equality below.
+ *
+ * Field by field rather than by rest-destructuring, and the `Omit` return type is what keeps it
+ * honest: a FIFTH wire field fails to compile here rather than silently dropping out of an equality
+ * that reads as if it covered the whole document.
+ */
+function withoutTiming(document: FormalPrepassDocument): Omit<FormalPrepassDocument, 'timing'> {
+  return {
+    reset: document.reset,
+    clockPolarity: document.clockPolarity,
+    initialStatePredicate: document.initialStatePredicate,
+  };
+}
+
 /** One parsed document's `clockPolarity`, or `''` where the document could not be read at all. */
 function clockPolarityOf(document: Result<FormalPrepassDocument, FormalPrepassRejection>): string {
   return document.ok ? document.value.clockPolarity : '';
@@ -4280,13 +4299,15 @@ describe.skipIf(!RUNNABLE)(
       // async - and its initial-state predicate is the FREE one, so neither of the other two
       // refusals applies and `mixed` is the only reason `readFormalPrepassReport` refuses it. The
       // task 6.11 header records that reset as prose; this is the assertion.
-      expect(divbyoddDocument).toEqual({
-        ok: true,
-        value: {
-          reset: DIVIDER_RESET_FINDING,
-          clockPolarity: MIXED_CLOCK_POLARITY,
-          initialStatePredicate: FREE_INITIAL_STATE_PREDICATE,
-        },
+      //
+      // The document's fourth field is OMITTED from the equality rather than pinned: what this
+      // design's cone walk derives is a claim the Ground_Truth cross-check owns
+      // (timing-contract-inference Req 6.12), and a value spelled here that nobody read off the
+      // reference source would be a second, unmeasured owner of it.
+      expect(divbyoddDocument.ok && withoutTiming(divbyoddDocument.value)).toEqual({
+        reset: DIVIDER_RESET_FINDING,
+        clockPolarity: MIXED_CLOCK_POLARITY,
+        initialStatePredicate: FREE_INITIAL_STATE_PREDICATE,
       });
     });
 

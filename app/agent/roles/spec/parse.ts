@@ -17,6 +17,7 @@ import type {
   ModuleInterfaceDraft,
   PortDraft,
   SpecDraft,
+  TimingContractEntryDraft,
 } from './types.js';
 
 /** Whether a value is a non-null plain object we can read keys from. */
@@ -198,6 +199,55 @@ function parseCriteria(value: unknown): Result<AcceptanceCriterionDraft[], strin
 }
 
 /**
+ * Parse one untrusted Timing_Contract entry, checking shape only.
+ *
+ * `timing` stays an arbitrary non-empty string on purpose: it is validated against
+ * the closed `PortTiming` set in `validateSpecDraft`, which is the component that
+ * reports student-facing issues. Narrowing it here would turn a reportable issue
+ * into a silent parse failure, so do not add a vocabulary check.
+ */
+function parseTimingContractEntry(value: unknown): Result<TimingContractEntryDraft, string> {
+  if (!isRecord(value)) {
+    return err('each timing contract entry must be an object');
+  }
+  const portName = readNonEmptyString(value, 'portName');
+  if (!portName.ok) {
+    return err(`timing contract entry ${portName.error}`);
+  }
+  const timing = readNonEmptyString(value, 'timing');
+  if (!timing.ok) {
+    return err(`timing contract entry ${timing.error}`);
+  }
+  return ok({ portName: portName.value, timing: timing.value });
+}
+
+/**
+ * Parse the untrusted timing-contract entries array.
+ *
+ * An absent field yields `[]`: a model that omitted it has stated nothing rather
+ * than something malformed, and stating nothing is what reaches the Req 4.6
+ * refusal and its clarifying question. A duplicate `portName` is carried through
+ * unresolved; `makeTimingContract` refuses it and validation reports it.
+ */
+function parseTimingContractEntries(value: unknown): Result<TimingContractEntryDraft[], string> {
+  if (value === undefined) {
+    return ok([]);
+  }
+  if (!Array.isArray(value)) {
+    return err('field "timingContractEntries" must be an array');
+  }
+  const entries: TimingContractEntryDraft[] = [];
+  for (const element of value) {
+    const entry = parseTimingContractEntry(element);
+    if (!entry.ok) {
+      return err(entry.error);
+    }
+    entries.push(entry.value);
+  }
+  return ok(entries);
+}
+
+/**
  * Parse untrusted model output text into a structurally valid `SpecDraft`.
  *
  * Returns a single non-sensitive reason string on any malformed shape or type, so
@@ -232,6 +282,10 @@ export function parseSpecDraft(outputText: string): Result<SpecDraft, string> {
   if (!moduleInterface.ok) {
     return err(moduleInterface.error);
   }
+  const timingContractEntries = parseTimingContractEntries(root['timingContractEntries']);
+  if (!timingContractEntries.ok) {
+    return err(timingContractEntries.error);
+  }
   const acceptanceCriteria = parseCriteria(root['acceptanceCriteria']);
   if (!acceptanceCriteria.ok) {
     return err(acceptanceCriteria.error);
@@ -240,9 +294,7 @@ export function parseSpecDraft(outputText: string): Result<SpecDraft, string> {
     goal: goal.value,
     constraints: constraints.value,
     moduleInterface: moduleInterface.value,
-    // No Spec_Agent prompt proposes a Timing_Contract entry yet; a later task
-    // wires that through. Empty here changes no behaviour (task 1.3).
-    timingContractEntries: [],
+    timingContractEntries: timingContractEntries.value,
     acceptanceCriteria: acceptanceCriteria.value,
     architecture: architecture.value,
   });

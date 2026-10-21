@@ -217,6 +217,8 @@ const PREPASS_DOCUMENT: FormalPrepassDocument = Object.freeze({
   },
   clockPolarity: 'posedge' as const,
   initialStatePredicate: 'true',
+  // Required on the wire, and this fixture is about the elapsed-time charge rather than timing.
+  timing: { derived: true as const, ports: [] },
 });
 
 const PREPASS_REPORT_KEY = 'formalPrepassReport' satisfies RequiredOutput;

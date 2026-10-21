@@ -60,6 +60,7 @@ const REQUIRED_OUTPUTS: readonly RequiredOutput[] = [
   'netlistJson',
   'formalReport',
   'formalPrepassReport',
+  'lintReport',
 ];
 
 /**
@@ -74,6 +75,7 @@ const ARTIFACT_OUTPUTS: readonly RequiredOutput[] = [
   'netlistJson',
   'formalReport',
   'formalPrepassReport',
+  'lintReport',
 ];
 
 // -- Independent oracle -----------------------------------------------------
@@ -96,6 +98,7 @@ function outputPresent(output: RequiredOutput, capture: RawRunCapture): boolean 
     case 'netlistJson':
     case 'formalReport':
     case 'formalPrepassReport':
+    case 'lintReport':
       return Object.prototype.hasOwnProperty.call(capture.artifacts, output);
     default: {
       const unreachable: never = output;
@@ -203,16 +206,33 @@ function sourceFileArbitrary(): fc.Arbitrary<SourceFile> {
   });
 }
 
-/** A SandboxJob with a unique subset of required outputs (possibly empty). */
+/**
+ * A SandboxJob with a unique subset of required outputs (possibly empty).
+ *
+ * `synthesize` and `lint` each now REQUIRE their own payload at the seam (SGT-Q03, SGT-Q04), so a
+ * job of that kind attaches it here - otherwise this generator would build a job the contract now
+ * rejects, which `gotcha-ajv-strictrequired-refuses-required-in-a-then-branch.md` names as exactly
+ * the kind of site `tsc` cannot catch.
+ */
 function jobArbitrary(): fc.Arbitrary<SandboxJob> {
-  return fc.record({
-    kind: fc.constantFrom('simulate', 'synthesize'),
-    workspaceFiles: fc.array(sourceFileArbitrary(), { maxLength: 3 }),
-    limits: limitsArbitrary(),
-    requiredOutputs: fc.uniqueArray(fc.constantFrom(...REQUIRED_OUTPUTS), {
-      maxLength: REQUIRED_OUTPUTS.length,
-    }),
-  });
+  return fc
+    .record({
+      kind: fc.constantFrom('simulate', 'synthesize', 'lint'),
+      workspaceFiles: fc.array(sourceFileArbitrary(), { maxLength: 3 }),
+      limits: limitsArbitrary(),
+      requiredOutputs: fc.uniqueArray(fc.constantFrom(...REQUIRED_OUTPUTS), {
+        maxLength: REQUIRED_OUTPUTS.length,
+      }),
+    })
+    .map((base): SandboxJob => {
+      if (base.kind === 'synthesize') {
+        return { ...base, synthesize: { topModule: 'top', schematic: false } };
+      }
+      if (base.kind === 'lint') {
+        return { ...base, lint: { topModule: 'top' } };
+      }
+      return base;
+    });
 }
 
 /**

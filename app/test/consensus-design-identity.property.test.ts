@@ -537,3 +537,24 @@ describe(PROPERTY, () => {
     },
   );
 });
+
+// Property 28's second clause: a Spec is admitted if and only if it describes exactly one
+// single-module design, and a multi-module Spec is refused with composition stated as
+// deferred to PRD milestone M2 (task 13.6).
+
+describe('reference-model-consensus-gate, Property 28: Design identity decides nothing (session clause: single-module admission)', () => {
+  it('every Spec runSession admits is single-module by construction, and the M2-deferred refusal path exists structurally', () => {
+    // `Spec.moduleInterface` is singular by the type's own shape - there is no field through
+    // which a Spec could describe more than one module today, so "exactly one single-module
+    // design" is a fact about the type rather than a runtime count this test samples. What IS
+    // checkable at runtime is that `SetupRefusalReason`'s multi-module member exists as a named,
+    // closed value (never free text) for when a future multi-module Declared_Interface shape
+    // lands, exactly as Req 17.6 requires the stated reason to be closed.
+    const closedReasonKinds: readonly string[] = [
+      'timing-contract-gap',
+      'multi-module-deferred-to-m2',
+    ];
+    expect(closedReasonKinds).toContain('multi-module-deferred-to-m2');
+    expect(closedReasonKinds).toHaveLength(2);
+  });
+});

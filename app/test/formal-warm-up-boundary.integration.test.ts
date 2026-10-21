@@ -60,7 +60,7 @@ import {
   PROPERTY_FIXTURE,
   type FixtureProperty,
 } from './formal-fixtures.js';
-import { FORMAL_PROBE, realFormalAdapter } from './real-oracle-harness.js';
+import { CORPUS_TIMING_STAND_IN, FORMAL_PROBE, realFormalAdapter } from './real-oracle-harness.js';
 
 // -- The boundary the pair measures -----------------------------------------
 
@@ -95,7 +95,10 @@ const DECISION_TIMEOUT_MS = 180_000;
 
 /** The corpus is read only where a decision can actually be made. */
 const CORPUS = FORMAL_PROBE.available
-  ? await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH))
+  ? await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      CORPUS_TIMING_STAND_IN,
+    )
   : null;
 
 /**

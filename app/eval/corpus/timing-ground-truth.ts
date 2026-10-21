@@ -583,18 +583,25 @@ export const TIMING_GROUND_TRUTH: readonly TimingGroundTruthEntry[] = Object.fre
     expected: 'agrees',
     rationale: 'always @(*) reads mem[addr] directly off the declared data input addr.',
   },
+  // `r`, `zero` and `flag` are each cleanly driven in isolation (DQ-01's own measurement),
+  // but DQ-08 (session 2) found that `classifyPortTiming` discards every clean entry once
+  // ANY port of the design refuses: Req 2.1 returns one Timing_Contract total over the
+  // WHOLE design or one Timing_Refusal, never a partial contract, so `alu`'s undriven
+  // `carry`/`negative`/`overflow` voiding the design also voids these three, even though
+  // their own cone read is correct. `expected` records what the production derivation
+  // call actually returns, not what each port's cone would classify to in isolation.
   {
     design: 'alu',
     port: 'r',
     timing: 'combinational',
-    expected: 'agrees',
+    expected: 'refused',
     rationale: 'assign r = res[31:0], res decoded in the level-sensitive always @(a or b or aluc).',
   },
   {
     design: 'alu',
     port: 'zero',
     timing: 'combinational',
-    expected: 'agrees',
+    expected: 'refused',
     rationale: 'assign zero = (res == 0), so it reaches a, b and aluc through the same decode.',
   },
   // `carry`, `negative` and `overflow` are declared and then never assigned anywhere in
@@ -626,18 +633,18 @@ export const TIMING_GROUND_TRUTH: readonly TimingGroundTruthEntry[] = Object.fre
     design: 'alu',
     port: 'flag',
     timing: 'combinational',
-    expected: 'agrees',
+    expected: 'refused',
     rationale: 'assign reading aluc, a and b directly through the SLT/SLTU compare mux.',
   },
-  // REVIEW: `clkgenerator` has no input ports at all and drives `clk` from a delay loop,
-  // `always begin #(PERIOD/2) clk = ~clk; end`, which is simulation-only. The reading
-  // below is the semantic one, but a synthesis frontend may drop the delay loop and
-  // leave `clk` undriven, in which case the reviewed value becomes `refused`.
+  // `clkgenerator` has no input ports at all and drives `clk` from a delay loop,
+  // `always begin #(PERIOD/2) clk = ~clk; end`, which is simulation-only. Measured (task 12.7):
+  // the real Yosys frontend drops the delay loop and leaves `clk` undriven, so the derivation
+  // refuses it rather than reading the semantic `registered` value this review anticipated.
   {
     design: 'clkgenerator',
     port: 'clk',
     timing: 'registered',
-    expected: 'agrees',
+    expected: 'refused',
     rationale: 'Toggles off its own retained value with no data input anywhere in the module.',
   },
   {

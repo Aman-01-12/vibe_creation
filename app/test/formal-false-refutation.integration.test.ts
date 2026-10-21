@@ -35,6 +35,7 @@ import {
 } from './formal-false-refutation.js';
 import { PROPERTY_FIXTURE } from './formal-fixtures.js';
 import {
+  CORPUS_TIMING_STAND_IN,
   FORMAL_PROBE,
   PROBE,
   realFormalAdapter,
@@ -52,7 +53,10 @@ const READY = FORMAL_PROBE.available && PROBE.available;
 const CONTROL_TIMEOUT_MS = 120_000;
 
 const CORPUS = READY
-  ? await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH))
+  ? await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      CORPUS_TIMING_STAND_IN,
+    )
   : null;
 
 describe.skipIf(!READY || CORPUS === null || CORPUS.problems.length === 0)(

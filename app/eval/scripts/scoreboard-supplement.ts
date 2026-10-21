@@ -10,7 +10,12 @@ import { fileURLToPath } from 'node:url';
 
 import { designGroupOf, type DesignGroup } from '@app/agent';
 
-import { FileSystemCorpusCheckout, importRtllmCorpus, scoredRtllmCorpus } from '../corpus/index.js';
+import {
+  FileSystemCorpusCheckout,
+  importRtllmCorpus,
+  localTimingDerivation,
+  scoredRtllmCorpus,
+} from '../corpus/index.js';
 import { EVAL_CORPUS_ROOT, RTLLM_CHECKOUT_PATH } from '../corpus/fetch-node.js';
 import type { EvalProblem } from '../problem.js';
 import { streamingSupplementOf } from '../sweep/runner.js';
@@ -66,7 +71,10 @@ async function baselineIds(): Promise<readonly string[]> {
 
 async function main(): Promise<void> {
   const corpus = scoredRtllmCorpus(
-    await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH)),
+    await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      localTimingDerivation(),
+    ),
   );
   const lists = scoreboardCampaignLists(corpus.problems, await baselineIds());
   console.log(JSON.stringify(lists, null, 2));

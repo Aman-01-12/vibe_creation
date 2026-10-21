@@ -9,11 +9,15 @@
 import { CORE_LAYER } from '@app/core';
 
 export * from './formal/index.js';
+export * from './lint/index.js';
+export * from './mutation/generator.js';
 export * from './mutation/operators.js';
 export * from './sandbox/index.js';
 export * from './simulator/index.js';
 export * from './synth/index.js';
 export * from './verilog/admit-lexer.js';
+export * from './verilog/declared-module.js';
+export * from './verilog/int-expr.js';
 export * from './verilog/property.js';
 export * from './verilog/source-mask.js';
 export * from './verilog/valueless-failure-report.js';

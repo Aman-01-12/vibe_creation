@@ -208,3 +208,14 @@ export function reduceSignature(
 
   return { digest: digestOf(trace), trace, sampleCount: trace.length };
 }
+
+/**
+ * Count the distinct output tuples in `signature.trace` (Req 6.1), a Quality_Signal that
+ * never gates (C9): a Masked_Output is counted as part of the tuple it sits in, since masking
+ * is itself part of what the tuple observed. Pure fold over the signature's own retained trace,
+ * so no run is re-simulated to report this.
+ */
+export function distinctOutputCount(signature: WaveformSignature): number {
+  const distinctTuples = new Set(signature.trace.map((record) => JSON.stringify(record.values)));
+  return distinctTuples.size;
+}

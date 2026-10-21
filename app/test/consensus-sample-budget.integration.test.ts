@@ -37,6 +37,7 @@ import type { ModuleInterface, Spec } from '@app/core';
 import {
   FileSystemCorpusCheckout,
   importRtllmCorpus,
+  localTimingDerivation,
   RTLLM_CHECKOUT_PATH,
   scoredRtllmCorpus,
   type EvalProblem,
@@ -109,12 +110,35 @@ function outputBundleWidthOf(moduleInterface: ModuleInterface): number {
     .reduce((sum, port) => sum + port.width, 0);
 }
 
-/** The retained corpus (Stage 0 plus the regression suite's own two exclusions), and its widest interface. */
-async function retainedCorpusWidestProblem(): Promise<{
+interface RetainedCorpus {
   readonly retained: readonly EvalProblem[];
   readonly widest: EvalProblem;
-}> {
-  const imported = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+}
+
+/**
+ * The retained corpus (Stage 0 plus the regression suite's own two exclusions), and its widest
+ * interface.
+ *
+ * Imported at most once per module run, the way `formal-oracle.integration.test.ts` caches its
+ * own corpus: the real derivation elaborates a netlist per design, so importing per test would
+ * pay that whole walk twice for one corpus that cannot change between them.
+ */
+let retainedOnce: Promise<RetainedCorpus> | null = null;
+
+function retainedCorpusWidestProblem(): Promise<RetainedCorpus> {
+  retainedOnce ??= importRetainedCorpus();
+  return retainedOnce;
+}
+
+async function importRetainedCorpus(): Promise<RetainedCorpus> {
+  // The REAL derivation, not the corpus stand-in: this suite feeds `spec.timingContract`
+  // straight into `renderConsensusHarness` below, so a fabricated contract would make the
+  // measured byte figure an artifact of the fabrication rather than of the widest design.
+  // Only reached inside the `RUNNABLE` guard, where the worker Python the probe found exists.
+  const imported = await importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    localTimingDerivation(),
+  );
   const scored = scoredRtllmCorpus(imported);
   const retained = scored.problems.filter(
     (problem) => !REGRESSION_SUITE_EXCLUDED_PROBLEM_IDS.has(problem.id),
@@ -147,11 +171,8 @@ async function retainedCorpusWidestProblem(): Promise<{
 const SUB_64BIT_REFERENCE_MODEL: SourceFile = {
   path: 'refmodel.v',
   contents: [
-    'function automatic [127:0] ece_stimulus(input [31:0] step);',
-    // A (low 64 bits) varies with step; B (high 64 bits) is a fixed non-zero constant - real
-    // varying hex digits in both halves, so the measured stdout exercises genuine data rather
-    // than an all-zero run.
-    "  ece_stimulus = {64'hFFFF_FFFF_0000_0001, {32'd0, step}};",
+    'function automatic [127:0] ece_reset_state(input dummy);',
+    "  ece_reset_state = 128'd0;",
     'endfunction',
     'function automatic [127:0] ece_next_state(input [127:0] s, input [127:0] in);',
     '  ece_next_state = s;',
@@ -187,6 +208,9 @@ function renderHarnessForWidestOrThrow(
     nonce,
     watchdogBudgetNs: 2_000_000,
     sampleBudget: SAMPLE_BUDGET,
+    roles: moduleInterface.ports
+      .filter((port) => port.direction === 'input')
+      .map((port) => ({ portName: port.name, role: 'data' as const })),
   };
   const rendered = renderConsensusHarness(request);
   if (!rendered.ok) {
@@ -205,12 +229,16 @@ describe('consensus Sample_Budget capability probe', () => {
 describe.skipIf(!RUNNABLE)(
   'the Sample_Budget for the widest retained-corpus interface stays inside the stdout cap (Req 7.7, 15.4)',
   () => {
-    it('excludes adder_pipe_64bit and asyn_fifo from the retained set it scans', async () => {
-      const { retained } = await retainedCorpusWidestProblem();
-      const retainedIds = new Set(retained.map((problem) => problem.id));
-      expect(retainedIds.has('rtllm/arithmetic/adder_pipe_64bit')).toBe(false);
-      expect(retainedIds.has('rtllm/memory/asyn_fifo')).toBe(false);
-    });
+    it(
+      'excludes adder_pipe_64bit and asyn_fifo from the retained set it scans',
+      async () => {
+        const { retained } = await retainedCorpusWidestProblem();
+        const retainedIds = new Set(retained.map((problem) => problem.id));
+        expect(retainedIds.has('rtllm/arithmetic/adder_pipe_64bit')).toBe(false);
+        expect(retainedIds.has('rtllm/memory/asyn_fifo')).toBe(false);
+      },
+      RUN_TIMEOUT,
+    );
 
     it(
       'measures the real stdout bytes of the widest retained interface at its sized Sample_Budget, inside the worker cap',

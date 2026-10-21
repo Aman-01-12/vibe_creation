@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 
 import { FORMAL_ORACLE_VERSION } from '@app/agent';
 import {
+  localTimingDerivation,
   FileSystemCorpusCheckout,
   importRtllmCorpus,
   probeToolchainVersions,
@@ -253,7 +254,10 @@ export async function runResetDerivationMeasurement(): Promise<
 > {
   const startedAt = Date.now();
   const toolchain = probeToolchainVersions(FORMAL_PROBE.pythonBin);
-  const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+  const corpus = await importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    localTimingDerivation(),
+  );
   const reference = corpus.references.get(LIFO_BUFFER_ID);
   const problem = corpus.problems.find((candidate) => candidate.id === LIFO_BUFFER_ID);
   if (reference === undefined || problem === undefined) {

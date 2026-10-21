@@ -40,3 +40,4 @@ export {
   type WaveJson,
   type WaveJsonSignal,
 } from './waveform/vcd-to-wavejson.js';
+export { signatureToWaveJson, type SampleRecord } from './waveform/signature-to-wavejson.js';

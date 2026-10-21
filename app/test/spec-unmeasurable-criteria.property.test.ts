@@ -48,7 +48,7 @@ import {
   type SpecRevisionContext,
 } from '@app/agent';
 import { isErr, isOk, newUlid, type Result } from '@app/core';
-import { propertyParameters, propertyTag } from '@app/test';
+import { propertyParameters, propertyTag, statedTimingEntriesFor } from '@app/test';
 
 // --- Independent measurability oracle (mirrors validation.ts, kept separate) -
 
@@ -160,20 +160,26 @@ function validPortArbitrary(): fc.Arbitrary<PortDraft> {
 
 /** A whole `SpecDraft` whose only possible offenders are its acceptance criteria. */
 function specDraftArbitrary(): fc.Arbitrary<SpecDraft> {
-  return fc.record<SpecDraft>({
-    goal: fromChars(LOWER, 4, 40),
-    constraints: fc.array(fromChars(LOWER, 3, 20), { maxLength: 3 }),
-    architecture: fromChars(LOWER, 4, 40),
-    moduleInterface: fc.record({
-      moduleName: identifierArbitrary(),
-      ports: fc.array(validPortArbitrary(), { minLength: 1, maxLength: 4 }),
-      clocking: fc.constant({ clockName: 'clk', resetName: 'rst', resetActiveLow: false }),
-    }),
-    // No case under this property proposes a Timing_Contract entry; the
-    // measurability gate under test does not read this field (task 1.3's migration).
-    timingContractEntries: fc.constant([]),
-    acceptanceCriteria: criteriaArbitrary(),
-  });
+  return (
+    fc
+      .record({
+        goal: fromChars(LOWER, 4, 40),
+        constraints: fc.array(fromChars(LOWER, 3, 20), { maxLength: 3 }),
+        architecture: fromChars(LOWER, 4, 40),
+        moduleInterface: fc.record({
+          moduleName: identifierArbitrary(),
+          ports: fc.array(validPortArbitrary(), { minLength: 1, maxLength: 4 }),
+          clocking: fc.constant({ clockName: 'clk', resetName: 'rst', resetActiveLow: false }),
+        }),
+        acceptanceCriteria: criteriaArbitrary(),
+      })
+      // Every draft states a complete contract, so the timing gate never fires and
+      // the measurability gate under test is the only possible offender.
+      .map((draft) => ({
+        ...draft,
+        timingContractEntries: statedTimingEntriesFor(draft.moduleInterface),
+      }))
+  );
 }
 
 // --- Agent wiring ------------------------------------------------------------

@@ -116,12 +116,14 @@ describe(PROPERTY_9, () => {
   it('refuses a simulate payload on any other job kind', () => {
     fc.assert(
       fc.property(
-        fc.constantFrom('synthesize', 'formal', 'formalPrepass'),
+        fc.constantFrom('synthesize', 'formal', 'formalPrepass', 'lint'),
         arbLimits,
         (kind, limits) => {
           const payloads: Record<string, object> = {
             formal: { formal: { topModule: 'w', depth: 4 } },
             formalPrepass: { formalPrepass: { topModule: 'dut' } },
+            synthesize: { synthesize: { topModule: 'dut', schematic: false } },
+            lint: { lint: { topModule: 'dut' } },
           };
           const job = {
             kind,

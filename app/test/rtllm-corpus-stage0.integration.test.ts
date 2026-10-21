@@ -51,7 +51,7 @@ import {
 import { SandboxToolRunner, type ResourceLimits } from '@app/tools';
 import { LocalWorkerRuntime } from '@app/tools';
 
-import { PROBE } from './real-oracle-harness.js';
+import { CORPUS_TIMING_STAND_IN, PROBE } from './real-oracle-harness.js';
 
 // -- Corpus availability probe ----------------------------------------------
 
@@ -120,7 +120,10 @@ async function runStage0(): Promise<{
   readonly corpus: RtllmCorpus;
   readonly report: Stage0Report;
 }> {
-  const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+  const corpus = await importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    CORPUS_TIMING_STAND_IN,
+  );
   const scorer = new SandboxGoldenTestbenchScorer(
     new SandboxToolRunner(new LocalWorkerRuntime(PROBE.pythonBin)),
   );
@@ -146,7 +149,10 @@ describe.skipIf(!RUNNABLE)('RTLLM import against the pinned checkout', () => {
   it(
     'imports every design upstream ships at the pinned commit',
     async () => {
-      const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+      const corpus = await importRtllmCorpus(
+        new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+        CORPUS_TIMING_STAND_IN,
+      );
 
       expect(corpus.pinnedCommit).toBe(RTLLM_PINNED_COMMIT);
       expect(corpus.designsSeen).toBe(RTLLM_EXPECTED_DESIGN_COUNT);
@@ -161,7 +167,10 @@ describe.skipIf(!RUNNABLE)('RTLLM import against the pinned checkout', () => {
   it(
     'gives every problem a golden testbench and a reference, and never leaks them into the Spec',
     async () => {
-      const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+      const corpus = await importRtllmCorpus(
+        new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+        CORPUS_TIMING_STAND_IN,
+      );
 
       for (const problem of corpus.problems) {
         expect(corpus.golden.has(problem.id)).toBe(true);

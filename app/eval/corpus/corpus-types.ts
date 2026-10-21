@@ -91,10 +91,21 @@ export type QuarantineReasonCode =
   | 'INTERFACE_UNPARSEABLE'
   /** A resolved port violates the domain's positive-width invariant. */
   | 'INTERFACE_PORT_INVALID'
+  /** The reviewed Validity_Output table names a port that is not one of the design's outputs. */
+  | 'VALIDITY_OUTPUT_UNDECLARED'
   /** The required module name never appears in the golden testbench text. */
   | 'MODULE_NAME_ABSENT_FROM_TESTBENCH'
   /** A data file the testbench needs has a name we will not write into a workspace. */
   | 'DATA_FILE_NAME_UNSAFE'
+  /**
+   * The Timing_Derivation refused this design, so no Port_Timing value is determined.
+   *
+   * The `detail` carries the refusal's closed cause token and its named output ports and
+   * nothing else. Recorded rather than defaulted: a design whose timing is undetermined is
+   * excluded with its cause, because the only available default is the all-`registered`
+   * fabrication this corpus used to carry (Req 3.5).
+   */
+  | 'TIMING_UNDERIVABLE'
   /** Stage 0: the reference plus its golden testbench does not compile under iverilog. */
   | 'REFERENCE_COMPILE_FAILED'
   /** Stage 0: the reference compiles but its own golden testbench reports failures. */

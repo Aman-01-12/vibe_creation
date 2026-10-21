@@ -101,13 +101,19 @@ import type { ResourceLimits } from '@app/tools';
 // `MutationProbeReport`, so neither function could relocate without the type it reads.
 import {
   allSurvivors,
+  DEFAULT_MUTANT_WALL_MS,
+  generateMutants,
   identityOf,
   killRateOf,
+  MAX_MUTANT_WALL_MS,
+  MAX_MUTATED_SOURCE_CHARS,
   MAX_SITE_TEXT_CHARS,
+  MIN_MUTANT_WALL_MS,
   type Mutant,
   type MutantIdentity,
   mutantIdOf,
   mutantRunLimits,
+  type MutationConfig,
   MUTATION_OPERATORS,
   type MutationOperatorId,
   type MutationProbeReport,
@@ -119,9 +125,15 @@ import {
 // site resolves to the exact same function/const/type `@app/tools` exports.
 export {
   allSurvivors,
+  DEFAULT_MUTANT_WALL_MS,
+  generateMutants,
   identityOf,
   killRateOf,
+  MAX_MUTANT_WALL_MS,
+  MAX_MUTATED_SOURCE_CHARS,
   MAX_SITE_TEXT_CHARS,
+  MIN_MUTANT_WALL_MS,
+  type MutationConfig,
   type Mutant,
   type MutantIdentity,
   mutantIdOf,
@@ -240,68 +252,6 @@ export const DEFAULT_MAX_MUTANTS_PER_PROBLEM = 24;
 
 /** Hard ceiling on the cap, so a config cannot ask for an unbounded campaign. */
 export const MAX_MUTANTS_PER_PROBLEM_LIMIT = 200;
-
-/**
- * Default wall-clock ceiling for ONE MUTANT run, in milliseconds - not a guess, a measurement.
- *
- * A mutant run must NOT inherit the student session's wall clock. The student cap exists to let
- * a real design compile and simulate under load; a mutant run is the same toolchain over the
- * same tiny design, and the only reason it would ever approach that cap is that it is HANGING.
- *
- * Measured on `rtllm/arithmetic/multi_pipe_8bit` at `limits.wallMs = 30000`, first 8 of its 24
- * mutants (golden calibration, real Icarus toolchain):
- *
- *     237ms  failed    ARITH_PLUS_TO_MINUS@69:29
- *     181ms  passed    ARITH_MINUS_TO_PLUS@17:15
- *   30005ms  error     CONDITION_NEGATED@26:10      <- the full 30s wall cap
- *     178ms  passed    RESET_BRANCH_DISABLED@26:10
- *     137ms  passed    CONST_ZERO_TO_ONE@27:33
- *     189ms  passed    CONST_INCREMENTED@2:22
- *     138ms  passed    INDEX_OFF_BY_ONE@17:16
- *     138ms  failed    ARITH_PLUS_TO_MINUS@70:29
- *
- * So a real mutant run costs 137-237ms and a HANGING one costs the whole cap. 5000ms is roughly
- * 20x the observed worst REAL run - wide enough that host load, a cold worker launch, or a
- * larger design cannot manufacture a false timeout - and 6x cheaper than 30s on a hang. The
- * hangs are structural rather than rare: RTLLM's golden testbenches commonly spin on a design
- * signal (`while (mul_en_out == 0)`), so any mutant that breaks that signal never reaches
- * `$finish`.
- *
- * It is CONFIGURABLE and part of the config identity, because it can change which mutants
- * classify as `golden-timeout`, which changes the gate set, which can move a measured number.
- */
-export const DEFAULT_MUTANT_WALL_MS = 5_000;
-
-/**
- * Floor on the mutant wall cap.
- *
- * Below the observed real-run band a cap manufactures timeouts, and a manufactured timeout is
- * now a KILL that enlarges the gate set - so too small is not merely slow, it corrupts the
- * measurement. 500ms is already more than double the slowest real run measured above, and
- * anything under it is rejected at the config boundary rather than discovered in a summary.
- */
-export const MIN_MUTANT_WALL_MS = 500;
-
-/**
- * Ceiling on the mutant wall cap.
- *
- * A mutant run has no legitimate reason to exceed a minute: past that the cap is not bounding a
- * hang any more, it is one. `mutants x samples x problems` multiplies whatever is set here, so
- * an absurd value is a config error, not a slow campaign.
- */
-export const MAX_MUTANT_WALL_MS = 60_000;
-
-/**
- * The knobs that decide WHICH mutants exist.
- *
- * Hashed into the calibration cache key, because a change to either changes the mutant set
- * and therefore invalidates every cached verdict. The operator list is carried explicitly
- * rather than assumed, so a future run that disables an operator is a different key.
- */
-export interface MutationConfig {
-  readonly maxMutantsPerProblem: number;
-  readonly operators: readonly MutationOperatorId[];
-}
 
 /** The default mutation configuration: every operator, the default cap. */
 export const DEFAULT_MUTATION_CONFIG: MutationConfig = Object.freeze({
