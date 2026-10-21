@@ -82,13 +82,28 @@ const TIMING_MEANING: Readonly<Record<'registered' | 'combinational', string>> =
   combinational: 'may depend on `s` and on `in`',
 };
 
+/**
+ * The declared Port_Timing for one output port, never defaulted.
+ *
+ * This read was `?? 'registered'` until timing-contract-inference landed, which made it the
+ * FOURTH site fabricating an all-`registered` contract - the same defect class that made the 13
+ * purely combinational corpus designs unwinnable, since a prompt that calls a combinational port
+ * `registered` tells the model to write `ece_expect` off retained state alone and the harness
+ * then compares it against the applied input. Unreachable through either real path, because a
+ * Spec's contract is built by `makeTimingContract` on both the production (Spec_Agent) and eval
+ * (Corpus_Importer) sides and that constructor is total over the declared output ports. So an
+ * absent entry is an invariant violation worth throwing on rather than a value to coerce around,
+ * the same call `timing-cross-check.ts` makes for its own unreachable rows.
+ */
 function timingOf(
   timingContract: TimingContract,
   portName: string,
 ): 'registered' | 'combinational' {
-  return (
-    timingContract.entries.find((entry) => entry.portName === portName)?.timing ?? 'registered'
-  );
+  const timing = timingContract.entries.find((entry) => entry.portName === portName)?.timing;
+  if (timing === undefined) {
+    throw new Error(`unreachable: Timing_Contract carries no entry for output port "${portName}"`);
+  }
+  return timing;
 }
 
 /** `{high, ..., low}` over the slices, the order a Verilog concatenation is written in (Q-19). */
