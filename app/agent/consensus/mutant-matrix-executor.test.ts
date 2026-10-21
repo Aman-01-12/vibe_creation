@@ -209,6 +209,44 @@ describe('runMutantMatrix - MutantRunRecord correctness', () => {
     expect(simulator.calls).toHaveLength(SESSION_MUTANTS_PER_DESIGN * testbenches.length);
   });
 
+  it("ignores a BROKEN peer's kills: a testbench that fails the parent cannot vote a mutant killable", async () => {
+    // MEASURED DEFECT this pins (5 Sessions on adder_8bit): `killed` is `verdict !== 'pass'`, so
+    // a testbench that fails the unmutated parent kills every one of its mutants trivially. When
+    // that counted as peer evidence, equivalent mutants entered every GOOD testbench's
+    // requirement set and the gate failed all of them at once - 2 of 2 Sessions containing such a
+    // member went unverified with 0 trusted testbenches, against 8 of 8 passing in the 3 Sessions
+    // without one. The gate's "no peer killed it either" argument needs the broken peer silenced.
+    const designs = [designOf(0)];
+    const testbenches = [testbenchOf(0), testbenchOf(1)];
+    // testbench-0 is BROKEN: it fails the unmutated design-0 in the Run_Matrix.
+    const matrix = matrixOf(designs, testbenches, new Set(['design-0\u0000testbench-0']));
+    // ...and, being broken, it "kills" every mutant, while testbench-1 kills nothing.
+    const simulator = scriptedSimulator((testbenchPath) =>
+      verdictOf({ verdict: testbenchPath.includes('testbench-0') ? 'fail' : 'pass' }),
+    );
+
+    const recordsByTestbench = await runMutantMatrix(
+      designs,
+      testbenches,
+      matrix,
+      simulator,
+      LIMITS,
+    );
+    const testbench1Records = recordsByTestbench.get('testbench-1') ?? [];
+
+    // The broken peer killed every mutant, but it cannot certify the parent, so none of its
+    // kills counts as evidence. Compare the sibling test above, where the SAME kill pattern with
+    // a parent-passing peer DOES set killedByPeer.
+    expect(testbench1Records.every((record) => record.killedByJudged)).toBe(false);
+    expect(testbench1Records.every((record) => !record.killedByPeer)).toBe(true);
+    // Nothing enters testbench-1's requirement set, so the gate cannot fail it on a mutant no
+    // credible peer ever killed - which is the whole point of the guard.
+    const requirement = testbench1Records.filter(
+      (record) => record.compiled && record.parentPassedJudged && record.killedByPeer,
+    );
+    expect(requirement).toHaveLength(0);
+  });
+
   it('reads parentPassedJudged from the existing RunMatrix cell, never re-simulating the unmutated design', async () => {
     const designs = [designOf(0), designOf(1)];
     const testbenches = [testbenchOf(0)];

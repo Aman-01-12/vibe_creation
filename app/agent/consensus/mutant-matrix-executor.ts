@@ -206,8 +206,24 @@ function parentPassed(matrix: RunMatrix, designId: Ulid, testbenchId: Ulid): boo
 
 /**
  * Build one testbench's `MutantRunRecord[]` by projecting the already-run cell map - no
- * mutant is re-run. `killedByPeer` is true iff some OTHER testbench's cell for this mutant
- * killed it, read directly off the same map rather than by a second simulate pass.
+ * mutant is re-run. `killedByPeer` is true iff some OTHER testbench that CAN CERTIFY THIS
+ * MUTANT'S UNMUTATED PARENT killed it, read directly off the same map rather than by a second
+ * simulate pass.
+ *
+ * WHY THE PEER MUST PASS THE PARENT, MEASURED
+ *   `killed` is `verdict !== 'pass'`, so a testbench that fails the unmutated parent design
+ *   kills every one of that design's mutants trivially, by being broken rather than by being
+ *   strong. Counting such a kill as peer evidence admits mutants that are equivalent in
+ *   principle into every GOOD testbench's requirement set, and `judgeMutationStrength` then
+ *   fails every good testbench for not killing something unkillable. The gate's own header
+ *   argues "a true equivalent mutant can never enter the requirement, because no peer killed
+ *   it either" - an argument that holds only once a broken peer cannot vote.
+ *
+ *   Measured over 5 Sessions on `adder_8bit` before this guard: a pool containing a testbench
+ *   that passed NO design failed the gate on 2 of 2 such Sessions, with that member killing
+ *   100% of the maximum mutant share and every failing member sharing ONE identical surviving
+ *   mutant; the 3 Sessions with no such member passed the gate 8 of 8. The standing requirement
+ *   applied here is the same one `parentPassedJudged` already applies to the judged testbench.
  */
 function recordsFor(
   testbenchId: Ulid,
@@ -220,6 +236,11 @@ function recordsFor(
     const ownCell = cellsByKey.get(cellKey(designId, mutant.mutantId, testbenchId));
     const killedByPeer = testbenchIds.some((otherId) => {
       if (otherId === testbenchId) {
+        return false;
+      }
+      // A peer that cannot certify the unmutated parent has no standing to call this mutant
+      // killable: it kills every mutant of that parent for the same reason it fails the parent.
+      if (!parentPassed(matrix, designId, otherId)) {
         return false;
       }
       return cellsByKey.get(cellKey(designId, mutant.mutantId, otherId))?.killed === true;
