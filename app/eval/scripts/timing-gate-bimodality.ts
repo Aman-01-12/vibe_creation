@@ -93,7 +93,7 @@ class RecordingTestbenches implements ReferenceModelGenerator {
 }
 
 /** One testbench's discriminating pair, plus what the gate said about it. */
-interface TestbenchRow {
+export interface TestbenchRow {
   readonly passedDesigns: number;
   readonly totalDesigns: number;
   readonly killedMutants: number;
@@ -103,7 +103,7 @@ interface TestbenchRow {
   readonly trusted: boolean;
 }
 
-interface SessionRow {
+export interface SessionRow {
   readonly index: number;
   readonly outcomeKind: SessionOutcome['kind'];
   readonly unmetCondition: string | null;
@@ -123,7 +123,8 @@ interface SessionRow {
   readonly survivorsIdenticalAcrossFailures: boolean;
 }
 
-async function runOne(index: number, spec: Spec): Promise<SessionRow> {
+/** Run ONE Session and reduce it to the measured row. Reused by the corpus sweep. */
+export async function runOne(index: number, spec: Spec): Promise<SessionRow> {
   const { sessionDeps } = liveConsensusSessionDeps();
   const designs = new RecordingDesigns(sessionDeps.generateDesign);
   const testbenches = new RecordingTestbenches(sessionDeps.generateReferenceModel);
