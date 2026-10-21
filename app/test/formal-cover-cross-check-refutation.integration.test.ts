@@ -56,7 +56,7 @@ import {
 
 import { guardedProperty } from './formal-fixtures.js';
 import { propertyParameters } from './property.js';
-import { FORMAL_PROBE, realFormalAdapter } from './real-oracle-harness.js';
+import { CORPUS_TIMING_STAND_IN, FORMAL_PROBE, realFormalAdapter } from './real-oracle-harness.js';
 
 const PROPERTY =
   'refutation-lost-to-cover-cross-check, Property 1: Bug Condition - a failed Base_Check whose Counterexample was registered reports refuted';
@@ -152,7 +152,10 @@ describe.skipIf(!RUNNABLE)(PROPERTY, () => {
   const observations: Observation[] = [];
 
   beforeAll(async () => {
-    const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+    const corpus = await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      CORPUS_TIMING_STAND_IN,
+    );
     const real = realFormalAdapter(FORMAL_PROBE.pythonBin);
     for (const pair of LOST_PAIRS) {
       const reference = corpus.references.get(pair.designId);

@@ -1,4 +1,4 @@
-// The Spec_Agent (S1): produce a Spec plus block-level architecture, run the two
+// The Spec_Agent (S1): produce a Spec plus block-level architecture, run the three
 // deterministic Spec gates, and model the student approve/edit cycle (Req 5.1-5.4,
 // 5.8, 5.9).
 //
@@ -15,19 +15,15 @@
 // that gates presentation, so the positive-width (Req 5.3, 5.9) and measurability
 // (Req 5.4) rules cannot be bypassed by approving directly.
 
-import {
-  makeTimingContract,
-  newUlid,
-  ok,
-  err,
-  type Json,
-  type Result,
-  type Spec,
-  type TimingContract,
-  type Ulid,
-} from '@app/core';
+import { newUlid, ok, err, type Json, type Result, type Spec, type Ulid } from '@app/core';
 
 import type { ActionRecorder, SpanDraft } from '../../action-recorder/index.js';
+// Imported from the module rather than `app/agent/consensus/index.js`: the role must
+// not depend on the whole consensus barrel to reuse one grammar builder.
+import {
+  buildBehaviourQuestion,
+  type BehaviourQuestion,
+} from '../../consensus/behaviour-question.js';
 import type {
   ModelRequest,
   ModelRouter,
@@ -46,7 +42,7 @@ import type {
   SpecRevisionContext,
   SpecValidationError,
 } from './types.js';
-import { validateSpecDraft, type ValidatedSpecCore } from './validation.js';
+import { validateInterface, validateSpecDraft, type ValidatedSpecCore } from './validation.js';
 
 /** The Trace `stageOrTool` name recorded for every Spec_Agent action. */
 const SPEC_STAGE = 'Spec_Agent' as const;
@@ -189,7 +185,16 @@ export class SpecAgent {
   presentDraft(context: SpecRevisionContext, draft: SpecDraft): EditablePresentation {
     const validated = validateSpecDraft(draft, this.#newId);
     if (!validated.ok) {
-      return { status: 'needs-revision', issues: validated.error, draft, context };
+      // Requirements 4.9 and 4.10 are an ordering constraint on the increment that
+      // landed the parser's own timing entries, not a runtime condition: escalation
+      // is live because that parser exists. Do not add a flag or a check for it.
+      return {
+        status: 'needs-revision',
+        issues: validated.error,
+        timingQuestion: buildTimingQuestion(draft, validated.error.timingUnstated),
+        draft,
+        context,
+      };
     }
     const spec = assembleSpec(context, validated.value, false);
     return { status: 'awaiting-approval', spec, draft, context };
@@ -212,8 +217,12 @@ export class SpecAgent {
       'From the confirmed intent below, produce a JSON object with exactly these',
       'fields: goal (string), constraints (string[]), architecture (string),',
       'moduleInterface { moduleName, ports [{ name, direction, width }], clocking',
-      '{ clockName, resetName, resetActiveLow } }, and acceptanceCriteria',
+      '{ clockName, resetName, resetActiveLow } }, timingContractEntries',
+      '[{ portName, timing }], and acceptanceCriteria',
       '[{ text, measurable, method }]. Every port width must be a positive integer.',
+      'Give exactly one timingContractEntries entry per declared output port, with',
+      'timing either registered or combinational.',
+      'measurable must be the JSON boolean true or false, never a string.',
       'Each acceptance criterion must be verifiable by simulation, formal, or',
       'manual-inspection.',
       '',
@@ -315,25 +324,40 @@ function mergeDraft(current: SpecDraft, edit: SpecEdit): SpecDraft {
 }
 
 /**
- * Build the Timing_Contract for an assembled Spec.
+ * The Behaviour_Question asked about an output port whose timing the draft left
+ * unstated (Req 4.7), built through the existing grammar with no new frame: the
+ * port name, the settle-at-cycle frame, and no alternatives, because a timing gap
+ * has no disagreeing Agreement_Cluster and no sample trace to contrast.
  *
- * ponytail: no current Spec_Agent prompt or draft field proposes a per-port timing
- * entry (that is the Spec role's own follow-up this task does not implement, per
- * `clarification-answers.md` Q-07), so every output port is placed at `registered`
- * here. Nothing reads `Spec.timingContract` yet, so this placeholder changes no
- * behaviour today; the upgrade path is wiring a real per-port proposal through
- * `SpecDraft.timingContractEntries` once the Spec role grows one.
+ * The interface is re-validated here because a rejected draft has no validated core
+ * to read `moduleInterface` from, and the grammar admits a signal token only for a
+ * declared port. `null` means the interface gate is what the student must fix
+ * first, so there is no port list to ask about yet.
  */
-function assembleTimingContract(core: ValidatedSpecCore): TimingContract {
-  const entries = core.moduleInterface.ports
-    .filter((port) => port.direction === 'output')
-    .map((port) => ({ portName: port.name, timing: 'registered' as const }));
-  const built = makeTimingContract(core.moduleInterface, entries);
-  if (!built.ok) {
-    // Unreachable: `entries` is derived from `core.moduleInterface`'s own output ports.
-    throw new Error(`Spec_Agent built an invalid timing contract: ${built.error.message}`);
+function buildTimingQuestion(
+  draft: SpecDraft,
+  unstatedPorts: readonly string[],
+): BehaviourQuestion | null {
+  const firstUnstatedPort = unstatedPorts[0];
+  if (firstUnstatedPort === undefined) {
+    return null;
   }
-  return built.value;
+  const moduleInterface = validateInterface(draft.moduleInterface);
+  if (!moduleInterface.ok) {
+    return null;
+  }
+  const question = buildBehaviourQuestion(
+    [
+      { kind: 'signal', name: firstUnstatedPort },
+      { kind: 'frame', id: 'output-settles-at-cycle' },
+    ],
+    moduleInterface.value,
+    [],
+  );
+  // Neither refusal is reachable: the token list carries exactly one frame, and the
+  // port name came from this same interface's own output ports. A residual refusal
+  // still yields no question rather than an exception (Req 4.8).
+  return question.ok ? question.value : null;
 }
 
 /** Assemble the core Spec from a validated draft and its revision context. */
@@ -348,7 +372,9 @@ function assembleSpec(
     goal: core.goal,
     constraints: core.constraints,
     moduleInterface: core.moduleInterface,
-    timingContract: assembleTimingContract(core),
+    // Every value is the draft's own statement, past the timing gate (Req 4.4, 4.5,
+    // 4.11): an all-`registered` contract now occurs only when the draft said so.
+    timingContract: core.timingContract,
     acceptanceCriteria: core.acceptanceCriteria,
     architecture: core.architecture,
     approved,

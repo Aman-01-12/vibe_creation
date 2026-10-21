@@ -140,6 +140,8 @@ const DERIVED_PREPASS = JSON.stringify({
   reset: { derived: true, resetName: 'rst_n', resetActiveLow: true, resetKind: 'async' },
   clockPolarity: 'posedge',
   initialStatePredicate: 'true',
+  // Required on the wire and not exercised here: this fixture is about the reset and the gate.
+  timing: { derived: true, ports: [] },
 });
 
 /**
@@ -152,6 +154,8 @@ const SYNC_DERIVED_PREPASS = JSON.stringify({
   reset: { derived: true, resetName: 'rst_n', resetActiveLow: true, resetKind: 'sync' },
   clockPolarity: 'posedge',
   initialStatePredicate: 'true',
+  // Required on the wire and not exercised here: this fixture is about the reset and the gate.
+  timing: { derived: true, ports: [] },
 });
 
 /** The pre-pass document for a REFUSED reset derivation: several nets, or none. */
@@ -159,6 +163,8 @@ const REFUSED_PREPASS = JSON.stringify({
   reset: { derived: false },
   clockPolarity: 'posedge',
   initialStatePredicate: 'true',
+  // Required on the wire and not exercised here: this fixture is about the reset and the gate.
+  timing: { derived: true, ports: [] },
 });
 
 /** One check's reported facts, as the worker writes them. */

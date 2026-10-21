@@ -39,10 +39,20 @@ const JOB: SandboxJob = {
   workspaceFiles: [],
   limits: { cpu: 1, memMb: 64, procs: 8, diskMb: 8, wallMs: 60_000 },
   requiredOutputs: [],
+  // The seam now requires this payload under `kind: 'synthesize'` (structural-gate-toolchain
+  // task 1.1); the worker never reads it on this path, since it refuses the kind before any
+  // tool runs, but a payload-less job here would be refused AT the schema before reaching it.
+  synthesize: { topModule: 'top', schematic: false },
 };
 
-/** The worker's own refusal of that kind, which is how this test knows the child answered. */
-const WORKER_REFUSAL = `unsupported job kind: ${JOB.kind}`;
+/**
+ * The worker's own refusal of this job: an empty source list, caught by the shared
+ * `_yosys_script_refusal` the synthesize/lint/formalPrepass routines all share, before any tool
+ * runs. All five job kinds dispatch to a real routine now (structural-gate-toolchain groups 1-2),
+ * so no kind is left "unsupported" to prove a sentinel-free child really ran; an empty-source
+ * refusal needs the same real dispatch and serves the same proof.
+ */
+const WORKER_REFUSAL = 'no Verilog source files to elaborate';
 
 /** awk over its own environment: every variable NAME the child holds. */
 const NAME_SCAN = 'BEGIN { for (n in ENVIRON) print n }';
@@ -126,8 +136,8 @@ describe.skipIf(WORKER_PYTHON === null)(
     });
 
     it('spawns a child that really ran, so an absent sentinel is not an absent process', () => {
-      // The worker's refusal of an unimplemented kind: it parsed the job and dispatched on it,
-      // which no unstarted child could have done.
+      // The worker's refusal of a sourceless synthesize job: it parsed the job and dispatched on
+      // it, which no unstarted child could have done.
       expect(capture?.stderr).toContain(WORKER_REFUSAL);
       expect(capture?.exitCode).toBe(1);
       expect({ infra: capture?.infraFailure, timedOut: capture?.timedOut }).toEqual({

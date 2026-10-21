@@ -18,7 +18,7 @@
 //   no SystemVerilog-2017 keyword can ever be drawn and fast-check never retries a rejected name.
 //
 // Validates (task 7.4, Property 9): Requirements 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 5.5, 17.4
-// Validates (task 7.5, Property 10): Requirements 6.3, 6.5, 6.6
+// Validates (tasks 7.5 and 19.1, Property 10): Requirements 6.3, 6.5, 6.6
 
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
@@ -151,6 +151,13 @@ function timingContractArbitrary(moduleInterface: ModuleInterface): fc.Arbitrary
     });
 }
 
+/** A total Role_Declaration naming every input port of `moduleInterface` as `data`. */
+function allDataRoles(moduleInterface: ModuleInterface) {
+  return moduleInterface.ports
+    .filter((port) => port.direction === 'input')
+    .map((port) => ({ portName: port.name, role: 'data' as const }));
+}
+
 function requestArbitrary(
   moduleInterface: ModuleInterface,
   timingContract: TimingContract,
@@ -167,6 +174,7 @@ function requestArbitrary(
       nonce,
       watchdogBudgetNs,
       sampleBudget,
+      roles: allDataRoles(moduleInterface),
     }));
 }
 
@@ -268,7 +276,9 @@ const SAMPLING_EDGE_LINE = "      #(ECE_SKEW) ece_clk = 1'b1;";
 function resetDriveLine(resetActiveLow: boolean, phase: 'assert' | 'release'): string {
   const assertedToken = resetActiveLow ? "1'b0" : "1'b1";
   const releasedToken = resetActiveLow ? "1'b1" : "1'b0";
-  return `    ece_reset_drive = ${phase === 'assert' ? assertedToken : releasedToken};`;
+  // 6-space indent: these two lines sit inside `task ece_harness_reset; begin ... end endtask;`
+  // (`renderHarnessResetTask`), one level deeper than the reset-drive declaration above it.
+  return `      ece_reset_drive = ${phase === 'assert' ? assertedToken : releasedToken};`;
 }
 
 // ---------------------------------------------------------------------------
@@ -331,17 +341,52 @@ describe('reference-model-consensus-gate, Property 9: The rendered harness is fa
             }
 
             // Clause 4: the declared reset is asserted, then released at the declared polarity,
-            // strictly before the first Sample_Point; absent entirely when none is declared.
-            if (resetName !== null) {
+            // strictly before the first Sample_Point; absent entirely when no reset is declared
+            // OR when the interface is clockless (Req 5.8) - a declared reset has no clock edge
+            // to assert across on a combinational interface, so the renderer gates reset
+            // rendering on BOTH `resetName !== null` and `clockName !== null`, never on the
+            // reset name alone (`ClockingContract` carries no type-level guarantee that a
+            // reset implies a clock, so this mirrors the renderer's own explicit check).
+            if (resetName !== null && clockName !== null) {
               resetCases += 1;
               const assertIndex = soleIndexOf(lines, resetDriveLine(resetActiveLow, 'assert'));
               const releaseIndex = soleIndexOf(lines, resetDriveLine(resetActiveLow, 'release'));
               expect(assertIndex).toBeGreaterThanOrEqual(0);
               expect(releaseIndex).toBeGreaterThan(assertIndex);
               expect(releaseIndex).toBeLessThan(sampleLineIndex);
+              // Q-16: the Reference_Model state is set from ece_reset_state right after the loop
+              // CALLS the reset task, not read off the task's own body (the release line above
+              // sits inside `task ece_harness_reset ... endtask`'s definition, a different
+              // location in the text from where the loop invokes it and primes state).
+              const resetCallIndex = soleIndexOf(lines, '        ece_harness_reset;');
+              expect(resetCallIndex).toBeGreaterThanOrEqual(0);
+              expect(resetCallIndex).toBeLessThan(sampleLineIndex);
+              expect(lines[resetCallIndex + 1]).toBe("        ece_state = ece_reset_state(1'b0);");
             } else {
+              // Reached for BOTH no-reset-declared AND reset-declared-but-clockless (Req 5.8):
+              // neither renders a reset TASK or an ECE_RESET_FRAME check, so both share the
+              // state-priming assertions below rather than needing a third branch.
               noResetCases += 1;
-              expect(text).not.toContain('ece_reset_drive');
+              if (resetName !== null) {
+                // Reset declared but no clock to assert-then-release across: the reset wire is
+                // still declared and driven, but held PERMANENTLY at its released polarity
+                // (never asserted), not left undriven - an undriven `reg` defaults to Verilog's
+                // `x`, which would corrupt every downstream comparison (measured directly: every
+                // CHECK line read FAIL from step 0 before this fix existed).
+                expect(lines).toContain(
+                  `  initial ece_reset_drive = ${resetActiveLow ? "1'b1" : "1'b0"};`,
+                );
+              } else {
+                expect(text).not.toContain('ece_reset_drive');
+              }
+              // Nested inside `if (step == 0) begin ... end`, same 8-space depth the
+              // reset-bearing branch's own `if ((step % ECE_RESET_FRAME) == 0) begin` nests at.
+              const resetStateIndex = soleIndexOf(
+                lines,
+                "        ece_state = ece_reset_state(1'b0);",
+              );
+              expect(resetStateIndex).toBeGreaterThanOrEqual(0);
+              expect(resetStateIndex).toBeLessThan(sampleLineIndex);
             }
 
             // Clauses 5 and 6: Drive_Point strictly before Sample_Point; Sample_Point strictly
@@ -468,25 +513,30 @@ function outputSlice(
   return { high, low };
 }
 
-/** The expectation expression `timing` renders for `outputPorts[index]`: the previous step's
- * shadow register for `registered`, or this step's packed slice for `combinational`. */
+/** The expectation expression `timing` renders for `outputPorts[index]` (Q-15): this step's
+ * zero-input bundle for `registered`, this step's applied-input bundle for `combinational`. */
 function expectedExpectationExpr(
   outputPorts: readonly Port[],
   index: number,
   timing: PortTiming,
 ): string {
-  const port = outputPorts[index] as Port;
-  if (timing === 'registered') {
-    return `ece_prev_exp_${port.name}`;
-  }
   const { high, low } = outputSlice(outputPorts, index);
-  return `ece_exp_bits[${String(high)}:${String(low)}]`;
+  const bundle = timing === 'registered' ? 'ece_exp_reg_bits' : 'ece_exp_bits';
+  return `${bundle}[${String(high)}:${String(low)}]`;
+}
+
+/** The input bundle width the harness packs: the declared input widths summed, at least 1. */
+function inputBundleWidthOf(ports: readonly Port[]): number {
+  return Math.max(
+    1,
+    ports.filter((port) => port.direction === 'input').reduce((sum, port) => sum + port.width, 0),
+  );
 }
 
 describe('reference-model-consensus-gate, Property 10: The rendered harness is faithful to the Timing_Contract per port', () => {
   it(
-    "compares a registered port against the previous Sample_Point's expectation and a " +
-      "combinational port against this Sample_Point's, selected per port rather than per design",
+    'compares a registered port against the expectation evaluated with an all-zero input and a ' +
+      'combinational port against the one evaluated with the applied input, selected per port',
     () => {
       let mixedCases = 0;
 
@@ -525,6 +575,25 @@ describe('reference-model-consensus-gate, Property 10: The rendered harness is f
             if (new Set(timings).size > 1) {
               mixedCases += 1;
             }
+
+            // The applied input reaches only the combinational bundle; the registered one is
+            // evaluated on this step's state with every input bit zero, inside the loop.
+            const loopStart = lines.findIndex((line) => line.trim().startsWith('for (step = 0;'));
+            const applied = lines.indexOf(
+              '      ece_exp_bits = ece_expect(ece_state, ece_in_bits);',
+            );
+            const zeroIn = lines.indexOf(
+              `      ece_exp_reg_bits = ece_expect(ece_state, {${String(
+                inputBundleWidthOf(request.moduleInterface.ports),
+              )}{1'b0}});`,
+            );
+            expect(applied).toBeGreaterThan(loopStart);
+            expect(zeroIn > loopStart).toBe(timings.includes('registered'));
+            // No step-0 priming: every expectation call sits inside the per-step loop.
+            const callLines = lines
+              .map((line, index) => ({ line, index }))
+              .filter(({ line }) => line.includes('ece_expect('));
+            expect(callLines.every(({ index }) => index > loopStart)).toBe(true);
           },
         ),
         propertyParameters(),

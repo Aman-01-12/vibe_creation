@@ -65,6 +65,7 @@ import {
   type PropertyOnlyDesign,
   type PropertyOnlyStack,
 } from '@app/eval';
+import { CORPUS_TIMING_STAND_IN } from './real-oracle-harness.js';
 import {
   admitProved,
   refusedWithoutProof,
@@ -111,7 +112,12 @@ function importedDesigns(
 }
 
 const DESIGNS = importedDesigns(
-  scoredRtllmCorpus(await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH))),
+  scoredRtllmCorpus(
+    await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      CORPUS_TIMING_STAND_IN,
+    ),
+  ),
 );
 
 const DESIGN_IDS: readonly string[] = [...DESIGNS.keys()];

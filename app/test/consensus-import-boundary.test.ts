@@ -23,7 +23,7 @@
 // EVERY CHECK HAS A POSITIVE CONTROL, same reason `structural-claims.test.ts` states it: a walker
 // that visited nothing would otherwise report a clean closure too.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -222,6 +222,10 @@ describe('the consensus barrel reaches no @app/eval module (Req 17.2)', () => {
  * The Run_Matrix executor holds a simulator and no router, which is the same claim this suite
  * already makes for the other five: none of them can spend a token because none of them can
  * reach the thing that spends one.
+ *
+ * `structural-gate-toolchain`'s task 5.1 adds the Structural_Gate_Adapter (C8) as a seventh root:
+ * it holds a `ToolRunner`, a `SimulatorAdapter`, and a `LintAdapter`, none of which can reach the
+ * router either.
  */
 const MODEL_FREE_ROOTS: readonly string[] = [
   resolvePath(HERE, '../agent/consensus/run-matrix.ts'),
@@ -230,6 +234,9 @@ const MODEL_FREE_ROOTS: readonly string[] = [
   resolvePath(HERE, '../agent/consensus/fault-attributor.ts'),
   resolvePath(HERE, '../agent/consensus/signature.ts'),
   resolvePath(HERE, '../agent/consensus/agreement.ts'),
+  // Added by structural-gate-toolchain task 5.1: a gate that could reach the model router could
+  // spend tokens admitting a Candidate_Design, so this is held to the same structural fact.
+  resolvePath(HERE, '../agent/consensus/structural-gate-adapter.ts'),
 ];
 
 /** Whether a visited file's path sits under `app/agent/model-router/`. */
@@ -263,5 +270,51 @@ describe('the five model-free consensus modules reach no model router (Req 15.6)
     );
 
     expect([...files].some(isModelRouterFile)).toBe(true);
+  });
+});
+
+/**
+ * The Structural_Gate_Adapter (task 5.1) and the Lint_Adapter it composes (task 4.4) spawn
+ * nothing: every tool invocation goes through the injected `ToolRunner` or `SimulatorAdapter`
+ * (Req 9.1, 9.2). This reads SOURCE TEXT rather than behaviour, because the claim is "no path to
+ * `child_process` exists in these files at all", which a scripted test double cannot show on its
+ * own - a double answers what the adapter DOES with the port it was given, not whether a second,
+ * unused path to the host exists beside it.
+ */
+describe('the Structural_Gate_Adapter and the Lint_Adapter spawn nothing directly (Req 9.1, 9.2)', () => {
+  const structuralGateAdapterPath = resolvePath(
+    HERE,
+    '../agent/consensus/structural-gate-adapter.ts',
+  );
+  const lintDir = resolvePath(HERE, '../tools/lint');
+
+  /** The `.ts` source files in `app/tools/lint/`, non-test files only. */
+  function lintAdapterFiles(): readonly string[] {
+    return readdirSync(lintDir)
+      .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
+      .map((name) => resolvePath(lintDir, name));
+  }
+
+  it('names no node:child_process specifier, in either file set', () => {
+    const files = [structuralGateAdapterPath, ...lintAdapterFiles()];
+    const violators = files
+      .map((file) => ({
+        file,
+        specifiers: runtimeSpecifiersOf(codeOf(readFileSync(file, 'utf8'))),
+      }))
+      .filter(({ specifiers }) => specifiers.includes('node:child_process'));
+
+    expect(violators).toEqual([]);
+  });
+
+  it('reports an inserted node:child_process import, so the scan is not one that would pass on nothing', () => {
+    const realSource = readFileSync(structuralGateAdapterPath, 'utf8');
+    const violating = insertAfter(
+      realSource,
+      "import type { ModuleInterface, Spec } from '@app/core';\n",
+      "import { spawn } from 'node:child_process';\n",
+    );
+
+    expect(runtimeSpecifiersOf(codeOf(violating))).toContain('node:child_process');
   });
 });

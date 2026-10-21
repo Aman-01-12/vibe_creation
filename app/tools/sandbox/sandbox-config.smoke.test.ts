@@ -68,9 +68,10 @@ const LIMIT_CASES: ReadonlyArray<{ readonly label: string; readonly limits: Reso
  */
 const KIND_PAYLOAD: Readonly<Record<SandboxJobKind, Partial<SandboxJob>>> = Object.freeze({
   simulate: {},
-  synthesize: {},
+  synthesize: { synthesize: { topModule: 'top', schematic: false } },
   formal: { formal: { topModule: 'top', depth: 1 } },
   formalPrepass: { formalPrepass: { topModule: 'top' } },
+  lint: { lint: { topModule: 'top' } },
 });
 
 /**

@@ -53,7 +53,8 @@
         "vcd",
         "netlistJson",
         "formalReport",
-        "formalPrepassReport"
+        "formalPrepassReport",
+        "lintReport"
       ]
     },
     "FormalJobRequest": {
@@ -95,6 +96,33 @@
         }
       }
     },
+    "SynthesizeJobRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["topModule", "schematic"],
+      "properties": {
+        "topModule": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_$]*$",
+          "maxLength": 128
+        },
+        "schematic": {
+          "type": "boolean"
+        }
+      }
+    },
+    "LintJobRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["topModule"],
+      "properties": {
+        "topModule": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_$]*$",
+          "maxLength": 128
+        }
+      }
+    },
     "SandboxJob": {
       "type": "object",
       "additionalProperties": false,
@@ -102,7 +130,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["simulate", "synthesize", "formal", "formalPrepass"]
+          "enum": ["simulate", "synthesize", "formal", "formalPrepass", "lint"]
         },
         "workspaceFiles": {
           "type": "array",
@@ -128,6 +156,12 @@
         },
         "simulate": {
           "$ref": "#/definitions/SimulateJobRequest"
+        },
+        "synthesize": {
+          "$ref": "#/definitions/SynthesizeJobRequest"
+        },
+        "lint": {
+          "$ref": "#/definitions/LintJobRequest"
         }
       },
       "allOf": [
@@ -196,6 +230,54 @@
             "type": "object",
             "properties": {
               "simulate": false
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "synthesize"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": ["synthesize"],
+            "properties": {
+              "synthesize": true
+            }
+          },
+          "else": {
+            "type": "object",
+            "properties": {
+              "synthesize": false
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "lint"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "required": ["lint"],
+            "properties": {
+              "lint": true
+            }
+          },
+          "else": {
+            "type": "object",
+            "properties": {
+              "lint": false
             }
           }
         }

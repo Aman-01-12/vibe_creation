@@ -30,7 +30,7 @@ import {
 import type { ResourceLimits } from '@app/tools';
 import { describe, expect, it } from 'vitest';
 
-import { PROBE, realOracleAdapter } from './real-oracle-harness.js';
+import { CORPUS_TIMING_STAND_IN, PROBE, realOracleAdapter } from './real-oracle-harness.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, 'fixtures', 'scoreboard');
@@ -70,7 +70,10 @@ async function streamingDesigns(): Promise<readonly string[]> {
 
 async function scoredProblem(problemId: string): Promise<EvalProblem> {
   const corpus = scoredRtllmCorpus(
-    await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH)),
+    await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      CORPUS_TIMING_STAND_IN,
+    ),
   );
   const problem = corpus.problems.find((candidate) => candidate.id === problemId);
   if (problem === undefined) {
@@ -129,7 +132,10 @@ describe.skipIf(!RUNNABLE)(
     it(
       'passes every reference with known-good fragments, through the precheck and the control',
       async () => {
-        const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+        const corpus = await importRtllmCorpus(
+          new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+          CORPUS_TIMING_STAND_IN,
+        );
         const control = new RtllmInstrumentControl({
           simulator: realOracleAdapter(),
           references: corpus.references,

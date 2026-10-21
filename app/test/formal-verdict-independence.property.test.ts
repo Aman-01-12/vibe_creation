@@ -260,7 +260,12 @@ const ASYNC_RESET: ResetContract = Object.freeze({
  */
 function prepassDocumentFor(contract: ResetContract): FormalPrepassDocument {
   if (!contract.derived) {
-    return { reset: { derived: false }, clockPolarity: 'none', initialStatePredicate: null };
+    return {
+      reset: { derived: false },
+      clockPolarity: 'none',
+      initialStatePredicate: null,
+      timing: { derived: true, ports: [] },
+    };
   }
   return {
     reset: {
@@ -271,6 +276,8 @@ function prepassDocumentFor(contract: ResetContract): FormalPrepassDocument {
     },
     clockPolarity: 'posedge',
     initialStatePredicate: contract.initialStateFree ? 'true' : PINNED_INITIAL_STATE,
+    // Required on the wire; these properties are about the reset and the wrapper, not timing.
+    timing: { derived: true, ports: [] },
   };
 }
 
@@ -461,6 +468,7 @@ function prepassRunFor(answer: PrepassAnswer, elapsedMs: number): ScriptedRun {
           reset: { derived: false },
           clockPolarity: 'posedge',
           initialStatePredicate: 'true',
+          timing: { derived: true, ports: [] },
         }),
       );
     case 'clock-refused':

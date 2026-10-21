@@ -34,8 +34,12 @@ import {
   type ModuleInterface,
   type Port,
   type PortDirection,
+  type Spec,
   type TimingContractEntry,
 } from '@app/core';
+
+import { makeBudgetLedger } from '../agent/consensus/budget.js';
+import { runSession, type ConsensusSessionDeps } from '../agent/consensus/session.js';
 
 import { ASCII_IDENT_CHARS, stringFromChars } from './generators/chars.js';
 import { propertyParameters } from './property.js';
@@ -301,5 +305,61 @@ describe(PROPERTY, () => {
   });
 });
 
-// Property 14's second clause (the Ambiguity_Escalation rule over a gapped Spec draft) is appended
-// here, below this closed `describe` block, by task 13.6.
+// Property 14's second clause: for any Spec whose draft contract has a gap, the Session raises
+// one Ambiguity_Escalation per gapped port and issues ZERO model calls (task 13.6).
+
+describe(`${PROPERTY} (session clause)`, () => {
+  it('a gapped Spec yields an escalation-pending outcome and zero generation calls, counted by injected fakes', async () => {
+    const moduleInterface: ModuleInterface = {
+      validityOutputName: null,
+      moduleName: 'm',
+      ports: [{ name: 'q', direction: 'output', width: 1 }],
+      clocking: { clockName: null, resetName: null, resetActiveLow: false },
+    };
+    // A Spec whose timingContract omits the sole declared output port entirely - the gap.
+    const gappedSpec: Spec = {
+      id: 'spec-1',
+      projectId: 'proj-1',
+      goal: 'A trivial module',
+      constraints: [],
+      architecture: 'n/a',
+      moduleInterface,
+      timingContract: { entries: [] },
+      acceptanceCriteria: [],
+      approved: true,
+      version: 1,
+    };
+
+    let designCalls = 0;
+    let referenceModelCalls = 0;
+    const deps: ConsensusSessionDeps = {
+      generateDesign: {
+        generate: () => {
+          designCalls += 1;
+          return Promise.reject(new Error('unreachable'));
+        },
+      },
+      generateReferenceModel: {
+        generate: () => {
+          referenceModelCalls += 1;
+          return Promise.reject(new Error('unreachable'));
+        },
+      },
+      structuralGate: { admit: () => Promise.reject(new Error('unreachable')) },
+      simulator: { simulate: () => Promise.reject(new Error('unreachable')) },
+      mutationStrengthGate: { judge: () => Promise.reject(new Error('unreachable')) },
+      limits: { cpu: 1, memMb: 512, procs: 128, diskMb: 128, wallMs: 30_000 },
+    };
+    const budget = makeBudgetLedger(80_000, 'session-token-budget');
+
+    const outcome = await runSession(gappedSpec, budget, deps);
+
+    expect(outcome.kind).toBe('unverified');
+    if (outcome.kind === 'unverified') {
+      expect(outcome.unmetCondition).toBe('escalation-pending');
+    }
+    expect(designCalls).toBe(0);
+    expect(referenceModelCalls).toBe(0);
+    expect(budget.spent()).toBe(0);
+  });
+});

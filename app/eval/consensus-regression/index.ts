@@ -1,0 +1,72 @@
+// The Benchmark_Regression_Suite (C20): the suite driver and its gate table.
+
+export {
+  CONSENSUS_REGRESSION_EXCLUDED_PROBLEM_IDS,
+  consensusRegressionConfigIdentity,
+  isExcludedFromConsensusRegression,
+  rtlOfDeliveredDesign,
+  runConsensusRegressionSample,
+  runConsensusRegressionSuite,
+  type ConsensusRegressionConfigIdentity,
+  type ConsensusRegressionDeps,
+  type ConsensusRegressionProblem,
+  type ConsensusRegressionRunReport,
+  type ConsensusRegressionSample,
+  type ConsensusRegressionSampleResult,
+  type GroundTruthEntry,
+  type ReferenceModelRecord,
+} from './harness.js';
+export { reduceGatedFigures, type ReducedGatedFigures } from './figures.js';
+export {
+  ATTRIBUTION_ACCURACY_RTL_BAR,
+  ATTRIBUTION_ACCURACY_TESTBENCH_BAR,
+  decideConsensusRegressionGate,
+  GOLDEN_MUTANT_KILL_FLOOR,
+  MEASURED_AGAINST_BENCHMARK_GROUND_TRUTH_NOTE,
+  MISATTRIBUTION_SHARE_BAR,
+  NO_STUDENT_ACCURACY_CLAIM_NOTE,
+  PILOT_DESIGN_SET,
+  PILOT_PASS_SHARE_BAR,
+  VERIFIED_CORRECT_SHARE_BAR,
+  WRONG_LABEL_SHARE_BAR,
+  type DiversityRecord,
+  type GateBar,
+  type GateDirection,
+  type GateFailure,
+  type GatedFigures,
+  type GateVerdict,
+  type PilotDesign,
+  type ReportedFigures,
+} from './gate.js';
+export {
+  ALL_ARMS,
+  CONSENSUS_REGRESSION_DIVERSITY_RECORD,
+  MAIN_ARM,
+  PER_RUN_ARMS,
+  SINGLE_FAMILY_CONTROL_ARM,
+  type ConsensusRegressionArm,
+  type ConsensusRegressionArmFamilySpread,
+} from './arms.js';
+export {
+  STRUCTURAL_GATE_EXCLUSIONS,
+  STRUCTURAL_GATE_EXCLUSION_IDS,
+  STRUCTURAL_GATE_EXCLUSION_NOTE,
+  type StructuralGateExclusion,
+} from './structural-gate-exclusions.js';
+export {
+  DEFAULT_SYNTHETIC_MEASUREMENT,
+  gatedFiguresOf,
+  nodeRunDirPort,
+  parseConsensusRegressionArgs,
+  parseRecordedMeasurement,
+  REPORT_FILENAME,
+  runConsensusRegressionCli,
+  syntheticMeasurementProvider,
+  type ConsensusRegressionCliCommand,
+  type ConsensusRegressionCliResult,
+  type ConsensusRegressionMeasuredFigures,
+  type ConsensusRegressionMeasurementProvider,
+  type ConsensusRegressionReport,
+  type ConsensusRegressionRunDirPort,
+  type MeasuredShare,
+} from './cli.js';

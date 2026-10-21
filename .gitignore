@@ -96,3 +96,5 @@ build/
 /measurements/
 # One-off analysis write-up, not referenced by any steering file, hook, or build step.
 /PCB-VERIFICATION-ANALYSIS.md
+# Added by code-review-graph
+.code-review-graph/

@@ -9,11 +9,12 @@ capture-all-or-error classification.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from .commands import CommandRunner
 from .contract import SandboxJob
-from .eda import EdaCapture, formal, formal_prepass, simulate
+from .eda import EdaCapture, formal, formal_prepass, lint, simulate, synthesize
 from .report import WorkerReport
 from .resources import start_usage_meter
 from .workspace import materialize_workspace
@@ -46,6 +47,95 @@ def _refused(reason: str) -> EdaCapture:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _DispatchArgs:
+    """The job and run parameters every kind-specific dispatcher below needs.
+
+    Bundled into one value so each dispatcher takes a single parameter rather than
+    the five `_run_kind` otherwise has to repeat per kind.
+    """
+
+    job: SandboxJob
+    workspace_root: Path
+    source_relpaths: list[str]
+    runner: CommandRunner
+    timeout_s: float
+    disk_limit_bytes: int
+
+
+def _dispatch_formal(args: _DispatchArgs) -> EdaCapture:
+    """Run the ``formal`` kind, or an honest refusal when its payload is absent.
+
+    `load_job` refuses a payload-less ``formal`` job at the parse boundary, so the
+    remaining way here is a caller assembling a SandboxJob directly. Refused rather
+    than run: there is no default top module or depth to fall back to.
+    """
+    if args.job.formal is None:
+        return _refused("formal job carries no formal payload")
+    return formal(
+        args.workspace_root,
+        args.source_relpaths,
+        args.job.formal,
+        args.runner,
+        args.timeout_s,
+        args.disk_limit_bytes,
+    )
+
+
+def _dispatch_formal_prepass(args: _DispatchArgs) -> EdaCapture:
+    """Run the ``formalPrepass`` kind, or an honest refusal when its payload is absent.
+
+    Same reasoning as :func:`_dispatch_formal`: there is no default design name to
+    fall back to for a caller-assembled job that skipped `load_job`.
+    """
+    if args.job.formal_prepass is None:
+        return _refused("formalPrepass job carries no formalPrepass payload")
+    return formal_prepass(
+        args.workspace_root,
+        args.source_relpaths,
+        args.job.formal_prepass,
+        args.runner,
+        args.timeout_s,
+        args.disk_limit_bytes,
+    )
+
+
+def _dispatch_synthesize(args: _DispatchArgs) -> EdaCapture:
+    """Run the ``synthesize`` kind, or an honest refusal when its payload is absent.
+
+    Same reasoning as :func:`_dispatch_formal`: there is no default top module to
+    fall back to for a caller-assembled job that skipped `load_job`.
+    """
+    if args.job.synthesize is None:
+        return _refused("synthesize job carries no synthesize payload")
+    return synthesize(
+        args.workspace_root,
+        args.source_relpaths,
+        args.job.synthesize,
+        args.runner,
+        args.timeout_s,
+        args.disk_limit_bytes,
+    )
+
+
+def _dispatch_lint(args: _DispatchArgs) -> EdaCapture:
+    """Run the ``lint`` kind, or an honest refusal when its payload is absent.
+
+    Same reasoning as :func:`_dispatch_formal`: there is no default top module to
+    fall back to for a caller-assembled job that skipped `load_job`.
+    """
+    if args.job.lint is None:
+        return _refused("lint job carries no lint payload")
+    return lint(
+        args.workspace_root,
+        args.source_relpaths,
+        args.job.lint,
+        args.runner,
+        args.timeout_s,
+        args.disk_limit_bytes,
+    )
+
+
 def _run_kind(
     job: SandboxJob, workspace_root: Path, source_relpaths: list[str], runner: CommandRunner
 ) -> EdaCapture:
@@ -56,35 +146,17 @@ def _run_kind(
         return simulate(
             workspace_root, source_relpaths, runner, timeout_s, disk_limit_bytes, job.simulate
         )
+    args = _DispatchArgs(job, workspace_root, source_relpaths, runner, timeout_s, disk_limit_bytes)
     if job.kind == "formal":
-        if job.formal is None:
-            # `load_job` refuses this at the parse boundary, so the remaining way here
-            # is a caller assembling a SandboxJob directly. Refused rather than run:
-            # there is no default top module or depth to fall back to, and falling
-            # through would report a supported kind as unsupported.
-            return _refused("formal job carries no formal payload")
-        return formal(
-            workspace_root, source_relpaths, job.formal, runner, timeout_s, disk_limit_bytes
-        )
+        return _dispatch_formal(args)
     if job.kind == "formalPrepass":
-        if job.formal_prepass is None:
-            # `load_job` refuses this at the parse boundary, so the remaining way here is a
-            # caller assembling a SandboxJob directly. Refused rather than run, for the same
-            # reason as the `formal` branch: there is no default design name to fall back to,
-            # and falling through would report a supported kind as unsupported.
-            return _refused("formalPrepass job carries no formalPrepass payload")
-        return formal_prepass(
-            workspace_root,
-            source_relpaths,
-            job.formal_prepass,
-            runner,
-            timeout_s,
-            disk_limit_bytes,
-        )
-    # Synthesis (Yosys) is a later worker slice and is STILL unimplemented; this dispatch
-    # gained a THIRD and a FOURTH kind and fixed nothing about the second
-    # (`chipAgent/_inbox/gotcha-worker-synthesize-kind-unimplemented.md`). Report an honest
-    # non-zero capture with no artifact rather than fabricating a result.
+        return _dispatch_formal_prepass(args)
+    if job.kind == "synthesize":
+        return _dispatch_synthesize(args)
+    if job.kind == "lint":
+        return _dispatch_lint(args)
+    # Every kind the Seam_Schema admits is dispatched above. Report an honest non-zero
+    # capture with no artifact rather than fabricating a result for anything else.
     return _refused(f"unsupported job kind: {job.kind}")
 
 

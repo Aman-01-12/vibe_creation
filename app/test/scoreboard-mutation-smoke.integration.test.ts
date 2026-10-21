@@ -32,7 +32,7 @@ import {
 } from '@app/tools';
 import { describe, expect, it } from 'vitest';
 
-import { PROBE } from './real-oracle-harness.js';
+import { CORPUS_TIMING_STAND_IN, PROBE } from './real-oracle-harness.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROBLEM_ID = 'rtllm/arithmetic/accu';
@@ -49,7 +49,10 @@ if (!RUNNABLE) {
 
 describe.skipIf(!RUNNABLE)('11.4 the accu scoreboard fixture kills mutants', () => {
   it('is measured by the Negative_Control and kills at least one valid mutant', async () => {
-    const imported = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+    const imported = await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      CORPUS_TIMING_STAND_IN,
+    );
     const problem = scoredRtllmCorpus(imported).problems.find((p) => p.id === PROBLEM_ID);
     if (problem === undefined) {
       throw new Error(`${PROBLEM_ID} is not in the scored corpus`);

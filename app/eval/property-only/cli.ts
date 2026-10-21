@@ -86,6 +86,7 @@ import {
 import {
   FileSystemCorpusCheckout,
   importRtllmCorpus,
+  localTimingDerivation,
   NodeCheckoutProbePort,
   RTLLM_CHECKOUT_PATH,
   scoredRtllmCorpus,
@@ -1056,7 +1057,10 @@ interface PreparedRun {
 /** Every scored design that has a reference, keyed by design id, read from the pinned corpus. */
 async function importDesigns(): Promise<ReadonlyMap<string, PropertyOnlyDesign>> {
   const corpus = scoredRtllmCorpus(
-    await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH)),
+    await importRtllmCorpus(
+      new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+      localTimingDerivation(),
+    ),
   );
   const designs = new Map<string, PropertyOnlyDesign>();
   for (const problem of corpus.problems) {

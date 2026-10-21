@@ -13,6 +13,7 @@
 // fixture's call to this helper with real per-port entries the moment a test
 // starts asserting on `Spec.timingContract`.
 
+import type { ModuleInterfaceDraft, TimingContractEntryDraft } from '@app/agent';
 import { makeTimingContract, type ModuleInterface, type TimingContract } from '@app/core';
 
 /**
@@ -30,4 +31,22 @@ export function timingContractFor(moduleInterface: ModuleInterface): TimingContr
     throw new Error(`timingContractFor built an invalid timing contract: ${built.error.message}`);
   }
   return built.value;
+}
+
+/**
+ * One `registered` statement per distinct declared output port of a `SpecDraft`
+ * interface, so the Spec role's timing gate never fires.
+ *
+ * Used by property tests whose subject is a DIFFERENT Spec gate: they need a
+ * complete contract statement, not an interesting one. A name repeated across two
+ * port declarations gets ONE entry, because a second would be the duplicate
+ * statement the gate rejects.
+ */
+export function statedTimingEntriesFor(
+  moduleInterface: ModuleInterfaceDraft,
+): TimingContractEntryDraft[] {
+  const outputNames = new Set(
+    moduleInterface.ports.filter((port) => port.direction === 'output').map((port) => port.name),
+  );
+  return [...outputNames].map((portName) => ({ portName, timing: 'registered' }));
 }

@@ -366,6 +366,9 @@ function arbPrepassDocument(): fc.Arbitrary<FormalPrepassDocument> {
     reset: arbPrepassResetFinding(),
     clockPolarity: fc.constantFrom(...CLOCK_POLARITIES),
     initialStatePredicate: arbInitialStatePredicate(),
+    // PINNED rather than drawn: this property is about the reset, the clock, and the predicate, and
+    // the timing finding's own shapes belong to the report-parse property instead.
+    timing: fc.constant({ derived: true as const, ports: [] }),
   });
 }
 
@@ -508,6 +511,7 @@ function prepassTextWithPolarity(polarity: unknown): string {
     reset: { derived: true, resetName: 'rst_n', resetActiveLow: false, resetKind: 'async' },
     clockPolarity: polarity,
     initialStatePredicate: FREE_PREDICATE,
+    timing: { derived: true, ports: [] },
   });
 }
 
@@ -562,6 +566,10 @@ function plantedHonestDocument(): Record<string, unknown> {
     clockPolarity: 'posedge',
     // Balanced, non-empty, and NOT the free literal, so this document parses and derives.
     initialStatePredicate: `(= ((|m_n ${PLANTED_DOCUMENT_VALUE}| state)) #b0)`,
+    timing: {
+      derived: true,
+      ports: [{ port: 'out', sources: [], reachesState: true, undriven: false }],
+    },
   };
 }
 
@@ -801,6 +809,7 @@ describe(PROPERTY, () => {
         reset: { derived: true, resetName: 'rst_n', resetActiveLow: raw, resetKind: 'async' },
         clockPolarity: 'posedge',
         initialStatePredicate: FREE_PREDICATE,
+        timing: { derived: true, ports: [] },
       });
       const parsed = parseFormalPrepassReport(text);
       expect({ raw, parsed: parsed.ok }).toEqual({ raw, parsed: false });
@@ -819,6 +828,7 @@ describe(PROPERTY, () => {
       reset: { derived: true, resetActiveLow: true, resetKind: 'async' },
       clockPolarity: 'posedge',
       initialStatePredicate: FREE_PREDICATE,
+      timing: { derived: true, ports: [] },
     });
     expect(parseFormalPrepassReport(text).ok).toBe(false);
     expect(readFormalPrepassReport(text)).toEqual({ ok: false, error: UNREADABLE_REFUSAL });

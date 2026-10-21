@@ -64,7 +64,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -325,6 +325,143 @@ def _lifobuffer_netlist(enable_polarity: str = _ONE_WIDE) -> dict[str, Any]:
     return _netlist(cells, _ENABLE_GATED_PORTS)
 
 
+# ---------------------------------------------------------------------------
+# Hand-written `$mem_v2` fixtures: the shapes the corpus does NOT contain
+# ---------------------------------------------------------------------------
+#
+# MEASURED, by elaborating every `verified_*.v` in `.eval-corpus/rtllm` and reading each
+# `$mem_v2`'s parameters: the corpus holds exactly TWO memory cells, `ROM`'s `\mem` and
+# `asyn_fifo`'s `\dual_port_RAM.RAM_MEM`, and BOTH are `RD_PORTS=1` with `RD_CLK_ENABLE='0'`.
+# So the corpus witnesses the asynchronous single-port direction only - the committed `ROM`
+# fixture is that witness - and there is NO corpus netlist for a clocked read port or for a
+# second read port.
+#
+# These fixtures cover those two shapes, and they are HAND-WRITTEN rather than measured: they
+# pin the rule's two remaining branches and they are NOT evidence about any real design. The
+# parameter spellings below are copied from the real `ROM` cell so the shape stays faithful.
+
+#: One address bit per read port, one enable bit per read port, and `_MEM_WIDTH` data bits per
+#: read port - the per-port concatenation layout a `$mem_v2` pin actually carries. Kept clear of
+#: the flop fixtures' bits 2..7 so a netlist carrying both is unambiguous.
+_MEM_WIDTH = 2
+_MEM_ADDR_BITS = (20, 21)
+_MEM_EN_BITS = (22, 23)
+_MEM_DATA_BITS = ((30, 31), (32, 33))
+
+#: ``ABITS`` and ``WIDTH`` as ``write_json`` spells them: one address bit per port, two data
+#: bits per port. Narrow spellings on purpose, since the reader must not care about width.
+_MEM_PARAMETERS: Final[dict[str, Any]] = {"ABITS": "1", "WIDTH": "10"}
+
+
+def _memory_netlist(clock_enable: Any, read_ports: int = 1) -> dict[str, Any]:
+    """A ``$mem_v2`` driving ONE declared output port per read port.
+
+    ``clock_enable`` is the raw ``RD_CLK_ENABLE`` value, passed through UNTOUCHED so a test can
+    hand it any spelling or an unreadable value. Read port ``p`` reads top-level input
+    ``addr{p}``, is qualified by ``en{p}``, and drives declared output ``dout{p}``, so a rule
+    that indexed the wrong port's clock-enable bit, or traversed another port's address, shows
+    up as the wrong port name in the wrong ``sources`` list.
+    """
+    ports: dict[str, Any] = {}
+    connections: dict[str, Any] = {"RD_ADDR": [], "RD_EN": [], "RD_DATA": [], "RD_CLK": ["x"]}
+    for port in range(read_ports):
+        ports[f"addr{port}"] = {"direction": "input", "bits": [_MEM_ADDR_BITS[port]]}
+        ports[f"en{port}"] = {"direction": "input", "bits": [_MEM_EN_BITS[port]]}
+        ports[f"dout{port}"] = {"direction": "output", "bits": list(_MEM_DATA_BITS[port])}
+        connections["RD_ADDR"].append(_MEM_ADDR_BITS[port])
+        connections["RD_EN"].append(_MEM_EN_BITS[port])
+        connections["RD_DATA"].extend(_MEM_DATA_BITS[port])
+    cell = {
+        "type": "$mem_v2",
+        "parameters": {
+            **_MEM_PARAMETERS,
+            "RD_PORTS": f"{read_ports:b}",
+            "RD_CLK_ENABLE": clock_enable,
+        },
+        "port_directions": {
+            "RD_ADDR": "input",
+            "RD_CLK": "input",
+            "RD_EN": "input",
+            "RD_DATA": "output",
+        },
+        "connections": connections,
+    }
+    return {"modules": {_TOP: {"ports": ports, "cells": {"mem": cell}}}}
+
+
+def _memory_timing_ports(tmp_path: Path, netlist: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ``timing.ports`` list derived over one hand-written memory netlist."""
+    report = _derive(tmp_path, netlist, top_module=_TOP)
+    timing: dict[str, Any] = report["timing"]
+    assert timing["derived"] is True
+    ports: list[dict[str, Any]] = timing["ports"]
+    return ports
+
+
+#: Where the COMMITTED reference netlists live.
+_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
+
+#: The two measured cone anchors. ``adder_8bit`` is purely combinational and hierarchical, so
+#: it also exercises ``prep -flatten``'s eight ``$scopeinfo`` cells; ``traffic_light`` is the
+#: registered anchor, and its ``clock`` port is the one that reaches a flop through a BARE
+#: ALIAS (``assign clock = cnt``) rather than through a cell.
+_ADDER_8BIT = "adder_8bit"
+_TRAFFIC_LIGHT = "traffic_light"
+
+#: The measured ASYNCHRONOUS-READ MEMORY anchor: ``always @(*) dout = mem[addr]``, which Yosys
+#: models as a ``$mem_v2`` whose ``RD_CLK_ENABLE`` is ``'0'``. Its module is named ``ROM``
+#: rather than ``verified_ROM`` - the ``verified_`` prefix is on the FILENAME only - which is
+#: why :func:`_timing_ports` takes the top module rather than deriving it from the design name.
+_ROM = "ROM"
+
+
+def _reference_netlist(design: str) -> dict[str, Any]:
+    """The committed ``write_json`` document for one reference design.
+
+    REAL YOSYS OUTPUT, produced by running the pre-pass's own script over the reference RTL in
+    ``.eval-corpus/rtllm`` and committed verbatim, so the cone claims below are made against
+    the shape Yosys actually writes while the suite still runs with no Yosys installed.
+
+    Committed UNEDITED and never hand-trimmed: a fixture narrowed by hand stops reproducing
+    the measured shape, and a claim made over it is a claim about the fixture - see
+    ``chipAgent/_inbox/gotcha-a-mutation-probe-over-an-unfaithful-fixture-over-reports-its-own-catch-count.md``.
+    """
+    with (_FIXTURE_DIR / f"prepass-netlist-{design}.json").open(encoding="utf-8") as handle:
+        loaded: dict[str, Any] = json.load(handle)
+    return loaded
+
+
+def _timing_ports(
+    tmp_path: Path, design: str, top_module: str | None = None
+) -> list[dict[str, Any]]:
+    """The ``timing.ports`` list the pre-pass derives over one committed reference netlist.
+
+    ``top_module`` defaults to the ``verified_`` prefix most rtllm references carry in both the
+    filename and the module name, and is passed explicitly where a reference carries it on the
+    filename only.
+    """
+    report = _derive(
+        tmp_path, _reference_netlist(design), top_module=top_module or f"verified_{design}"
+    )
+    timing: dict[str, Any] = report["timing"]
+    assert timing["derived"] is True
+    ports: list[dict[str, Any]] = timing["ports"]
+    return ports
+
+
+def _timing_finding(
+    tmp_path: Path, netlist: dict[str, Any], top_module: str = _TOP
+) -> dict[str, Any]:
+    """The WHOLE ``timing`` object the pre-pass derives, both arms included.
+
+    Distinct from :func:`_timing_ports` and :func:`_memory_timing_ports`, which assert
+    ``derived`` is true and hand back the ports: a refusal has no ports list to hand back, and
+    a test about a refusal must see the object itself to assert what it does NOT carry.
+    """
+    finding: dict[str, Any] = _derive(tmp_path, netlist, top_module=top_module)["timing"]
+    return finding
+
+
 class _RecordingPrepassRunner(CommandRunner):
     """A fake Yosys that records every argv and writes the two files the pre-pass reads back.
 
@@ -414,18 +551,29 @@ def _report(workspace_root: Path) -> dict[str, Any]:
     return loaded
 
 
-def _derive(tmp_path: Path, netlist: dict[str, Any] | None, **kwargs: Any) -> dict[str, Any]:
+def _derive(
+    tmp_path: Path,
+    netlist: dict[str, Any] | None,
+    *,
+    top_module: str = _TOP,
+    **kwargs: Any,
+) -> dict[str, Any]:
     """Run the pre-pass over ``netlist`` and return the report it wrote.
 
     The whole path is exercised each time - script assembly, the fake Yosys, the netlist read,
     the cell walk, the derivation, and the report write - rather than the derivation being
     called directly, because the claim in every cell-level test is about what the PRE-PASS
     derives and the walk is only reachable through it.
+
+    ``top_module`` is the ``-top`` the job names, which the module lookup goes through. The
+    hand-written fixtures above all name :data:`_TOP`; a COMMITTED reference netlist carries
+    the real design's own module name, so it has to be passed through rather than renamed in
+    the fixture.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     runner = _RecordingPrepassRunner(netlist=netlist, **kwargs)
     sources = _write_design(tmp_path, _DESIGN_FILE)
-    _run_prepass(tmp_path, runner, sources)
+    _run_prepass(tmp_path, runner, sources, top_module=top_module)
     return _report(tmp_path)
 
 
@@ -1098,11 +1246,19 @@ def test_a_readable_netlist_registers_the_report_under_the_required_key(
     assert set(capture.artifacts) == {_REPORT_KEY}
     assert capture.artifacts[_REPORT_KEY].name == _REPORT_FILE
     assert capture.exit_code == 0
-    # THREE fields, all present: the reset finding, the clock finding, and the predicate's TEXT.
+    # FOUR fields, all present: the reset finding, the clock finding, the predicate's TEXT, and
+    # the per-port timing facts.
     # `initialStatePredicate` crosses the seam as a BODY rather than as a boolean, because
     # whether `true` means the initial state is FREE is decided ONCE on the TypeScript side,
     # together with the refusal an absent or unparseable predicate produces (Req 14.24).
-    assert set(_report(tmp_path)) == {"reset", "clockPolarity", "initialStatePredicate"}
+    # `timing` crosses it as FACTS for the same reason: the classification rule is the
+    # TypeScript side's, and this side must not become a second decider of it.
+    assert set(_report(tmp_path)) == {
+        "reset",
+        "clockPolarity",
+        "initialStatePredicate",
+        "timing",
+    }
     assert _report(tmp_path)["initialStatePredicate"] == "true"
 
 
@@ -1330,3 +1486,316 @@ def test_the_module_is_looked_up_by_the_requested_top_and_not_by_whatever_elabor
 
     assert capture.artifacts == {}
     assert not (tmp_path / _REPORT_FILE).exists()
+
+
+# ---------------------------------------------------------------------------
+# The cone walk: the two measured anchors
+# ---------------------------------------------------------------------------
+#
+# Both are pinned over COMMITTED REAL NETLISTS rather than hand-written cells, because the
+# cone walk's claims are about connectivity Yosys produces - a flattened hierarchy, a wide
+# port, a bare alias merging an output net into a register's Q - and a hand-written fixture
+# would be asserting the shape its author imagined.
+#
+# These two expectations are LOAD-BEARING for the whole component. `traffic_light`'s four
+# ports are why the cone rule was chosen over flip-flop adjacency, and its `clock` port is
+# what falsified an earlier source-text design: a CONTINUOUS assignment whose honest answer
+# is state-dependent.
+
+
+def test_a_combinational_design_reports_every_data_input_source_and_no_state(
+    tmp_path: Path,
+) -> None:
+    """Requirement 1.11: a purely combinational port names its sources and reaches no state.
+
+    ``adder_8bit`` is hierarchical - eight ``full_adder`` instances - so this also pins that
+    ``prep -flatten``'s ``$scopeinfo`` cells, which carry an EMPTY ``port_directions`` and no
+    output pin at all, neither drive a bit nor stop a walk.
+
+    Both declared outputs must name all three data inputs: ``cout`` is the final carry and
+    ``sum`` the ripple result, and in a ripple-carry adder every output bit depends on every
+    input through the carry chain.
+    """
+    assert _timing_ports(tmp_path, _ADDER_8BIT) == [
+        {"port": "sum", "sources": ["a", "b", "cin"], "reachesState": False, "undriven": False},
+        {"port": "cout", "sources": ["a", "b", "cin"], "reachesState": False, "undriven": False},
+    ]
+
+
+def test_a_registered_design_reports_no_data_input_source_on_any_port(tmp_path: Path) -> None:
+    """Requirement 1.4: a retained-state cell ENDS the cone, so nothing behind it is a source.
+
+    All four of ``traffic_light``'s declared outputs are state-dependent and name NO source,
+    and the declared data input ``pass_request`` appears in none of them - it drives the
+    counter's next-state logic, which sits BEHIND the flop boundary.
+
+    ``clock`` is the interesting one and the reason this anchor is here: it is driven by
+    ``assign clock = cnt`` over a register, so ``write_json`` merges the output net into the
+    flop's ``Q`` and the walk reaches the boundary with no cell in between. A rule keyed on the
+    assignment's source context reads that continuous assignment as combinational and is wrong.
+    """
+    stateful = {"sources": [], "reachesState": True, "undriven": False}
+    assert _timing_ports(tmp_path, _TRAFFIC_LIGHT) == [
+        {"port": "clock", **stateful},
+        {"port": "red", **stateful},
+        {"port": "yellow", **stateful},
+        {"port": "green", **stateful},
+    ]
+
+
+# The ASYNCHRONOUS-READ MEMORY rule (Requirements 1.4, 1.12).
+#
+# A memory is a retained-state boundary on every pin except an asynchronous `RD_DATA`, and
+# `ROM` is why the exception exists: `always @(*) dout = mem[addr]` is a genuinely
+# combinational read, so a rule that made every memory a plain boundary would derive
+# `registered` for `dout` against Requirement 3.2's `combinational`.
+
+
+def test_an_asynchronous_memory_read_names_its_address_and_still_reaches_state(
+    tmp_path: Path,
+) -> None:
+    """Requirement 1.12: ``RD_CLK_ENABLE`` zero exposes ``RD_ADDR`` and sets ``reaches_state``.
+
+    ``ROM``'s measured netlist: one ``$mem_v2`` whose ``RD_DATA`` IS the declared ``dout`` net
+    and whose ``RD_ADDR`` IS the declared ``addr`` net, with ``RD_CLK_ENABLE`` written as
+    ``'0'`` and ``RD_CLK`` tied to ``x``.
+
+    BOTH halves are asserted together because each alone is satisfiable by a wrong rule: a
+    plain boundary gives ``reaches_state`` with no source, and crossing the memory as ordinary
+    logic gives the source with no ``reaches_state``. The value is read out of memory AND the
+    address reaches it this cycle, so the honest answer carries both.
+    """
+    assert _timing_ports(tmp_path, _ROM, top_module=_ROM) == [
+        {"port": "dout", "sources": ["addr"], "reachesState": True, "undriven": False},
+    ]
+
+
+@pytest.mark.parametrize("clock_enable", ["0", "00", 0, False, _ZERO_WIDE])
+def test_every_spelling_of_a_zero_clock_enable_reads_as_asynchronous(
+    tmp_path: Path, clock_enable: Any
+) -> None:
+    """``RD_CLK_ENABLE`` is read as a BINARY INTEGER, so its spelling cannot change the answer.
+
+    ``write_json`` emits a parameter's width UNSTABLY - the measured ``CLK_POLARITY`` case is
+    the same value spelled two ways in one run - so a reader comparing against ``"0"`` answers
+    differently per pass sequence. A multi-bit ``"00"`` is included because it is what a
+    two-read-port memory carries, and a string comparison fails it outright.
+    """
+    ports = _memory_timing_ports(tmp_path, _memory_netlist(clock_enable))
+    assert ports == [
+        {"port": "dout0", "sources": ["addr0", "en0"], "reachesState": True, "undriven": False},
+    ]
+
+
+def test_a_clocked_memory_read_is_a_boundary_that_names_no_source(tmp_path: Path) -> None:
+    """Requirement 1.4: ``RD_CLK_ENABLE`` one keeps the memory a plain boundary.
+
+    The clocked counterpart of the ``ROM`` case, and HAND-WRITTEN rather than measured: the
+    rtllm corpus holds exactly two ``$mem_v2`` cells and both are asynchronous, so there is no
+    reference netlist to read this direction off. ``verified_RAM`` is not it - Yosys reports
+    ``Replacing memory \\RAM with list of registers``, because the reset loop writing
+    ``RAM[i] <= 0`` forces ``mem2reg``, and the elaborated design carries no memory cell at all.
+    """
+    ports = _memory_timing_ports(tmp_path, _memory_netlist(_ONE_NARROW))
+    assert ports == [
+        {"port": "dout0", "sources": [], "reachesState": True, "undriven": False},
+    ]
+
+
+@pytest.mark.parametrize("clock_enable", ["x", "", "0b0", None, [0]])
+def test_an_unreadable_clock_enable_refuses_rather_than_reading_as_a_boundary(
+    tmp_path: Path, clock_enable: Any
+) -> None:
+    """An unreadable ``RD_CLK_ENABLE`` is ``cell-shape-unreadable``, not a silent boundary.
+
+    A boundary would be the conservative ANSWER - state-dependent, no source - and that is
+    exactly why it is wrong here: it is an answer, and we have no evidence for one. Without
+    this parameter the memory is neither clocked nor asynchronous as far as this reader is
+    concerned, so the honest report says the shape could not be read.
+
+    The spellings are the ones :func:`_binary_parameter` must reject: a don't-care, an empty
+    value, a Python literal ``int`` would accept, an absent parameter, and a non-string.
+    """
+    timing = _timing_finding(tmp_path, _memory_netlist(clock_enable))
+
+    assert timing == {"derived": False, "cause": "cell-shape-unreadable"}
+
+
+def test_each_read_port_of_a_memory_is_clocked_by_its_own_enable_bit(tmp_path: Path) -> None:
+    """``RD_CLK_ENABLE`` is indexed PER READ PORT, from the bit's position within ``RD_DATA``.
+
+    Two read ports, mask ``"10"``: port 0 asynchronous, port 1 clocked. So ``dout0`` names its
+    own address and enable while ``dout1`` names nothing, and the two cannot be swapped or
+    merged - a rule reading bit 0 for every ``RD_DATA`` bit would report BOTH as asynchronous,
+    and one reading ``int(mask, 2)`` as a truth value would report both as clocked.
+
+    It also pins the per-port SLICING of the input pins: ``dout0`` must not name ``addr1`` or
+    ``en1``, which it would if the whole ``RD_ADDR`` connection joined the frontier.
+
+    HAND-WRITTEN: the corpus holds no multi-read-port memory. Both of its memories report
+    ``RD_PORTS=1``, including ``asyn_fifo``'s ``dual_port_RAM``, whose two ports are one READ
+    and one WRITE.
+    """
+    ports = _memory_timing_ports(tmp_path, _memory_netlist("10", read_ports=2))
+    assert ports == [
+        {"port": "dout0", "sources": ["addr0", "en0"], "reachesState": True, "undriven": False},
+        {"port": "dout1", "sources": [], "reachesState": True, "undriven": False},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# The three structural refusals (Requirements 1.13, 2.5)
+# ---------------------------------------------------------------------------
+#
+# The three fixtures below are HAND-WRITTEN and are NOT corpus evidence, by the convention the
+# `$mem_v2` fixtures above follow. They cannot be measured: `prep -flatten` leaves no module
+# instance behind, Yosys 0.66 produces no clocked cell outside the ten named types, and it
+# writes `port_directions` on every cell it emits. That is the POINT of all three - each
+# guards a shape this reader has never seen, and a guard with no test is a comment.
+#
+# The corpus half of the claim is `test_no_structural_guard_refuses_a_real_netlist` below,
+# which pins that the three COMMITTED REAL netlists still DERIVE. A guard that refuses the
+# whole corpus is worse than no guard, and `adder_8bit`'s eight `$scopeinfo` cells - whose
+# `port_directions` is legitimately an EMPTY dict - are the shape that would make
+# `cell-shape-unreadable` over-fire.
+
+#: A cell name as Yosys actually spells one, measured on `radix2_div`. It embeds the design's
+#: SOURCE FILE and LINE, which is why the refusal Requirement 2.5 describes names no cell.
+_SOURCE_BEARING_CELL_NAME = "$and$radix2_div.v:58$21_Y"
+
+#: The ports every fixture below presents: one data input driving one declared output, plus the
+#: clock the clocked fixture connects to.
+_CONE_PORTS = _ports(clk="input", en="input", out="output")
+
+
+def _cone_cell(cell_type: str, *, clocked: bool = False, shaped: bool = True) -> dict[str, Any]:
+    """One cell driving the declared output ``out`` from the declared data input ``en``.
+
+    ``clocked`` attaches the ``CLK`` pin that makes a cell a boundary, on BOTH the declared
+    shape and the connections, as a real clocked cell carries it.
+
+    ``shaped=False`` drops ``port_directions`` ENTIRELY rather than emptying it, because an
+    empty one is what ``$scopeinfo`` legitimately carries and must keep deriving.
+    """
+    directions = {"A": "input", "Y": "output"}
+    connections: dict[str, Any] = {"A": [_EN_BIT], "Y": [_OUTPUT_BIT]}
+    parameters: dict[str, Any] = {}
+    if clocked:
+        directions["CLK"] = "input"
+        connections["CLK"] = [_CLK_BIT]
+        parameters["CLK_POLARITY"] = _ONE_WIDE
+    cell: dict[str, Any] = {
+        "type": cell_type,
+        "parameters": parameters,
+        "connections": connections,
+    }
+    if shaped:
+        cell["port_directions"] = directions
+    return cell
+
+
+def test_an_unflattened_module_instance_refuses_the_whole_design(tmp_path: Path) -> None:
+    """Requirement 1.13: a type not beginning with ``$`` is a structure we did not elaborate.
+
+    THE DIRECTION IS THE WHOLE CLAIM. The alternative is not "a slightly worse answer": a
+    submodule's internals were never elaborated, so a register inside it is invisible, and
+    crossing the instance as ordinary logic reports every output behind it as
+    ``combinational`` - the one error this feature exists to remove.
+
+    The refusal is DESIGN-level and carries no ports list, because which cones this instance
+    sits in is exactly what not having elaborated it leaves undecidable.
+    """
+    netlist = _netlist({"u_full_adder": _cone_cell("full_adder")}, _CONE_PORTS)
+
+    assert _timing_finding(tmp_path, netlist) == {
+        "derived": False,
+        "cause": "module-instance",
+    }
+
+
+def test_a_clocked_cell_outside_the_named_set_refuses_the_whole_design(tmp_path: Path) -> None:
+    """Requirement 1.13: a ``CLK``-bearing type the retained-state set does not name refuses.
+
+    ``$dffsr`` is a REAL Yosys cell type - a flop with both set and clear - that the ten named
+    types do not cover, so the fixture is a shape Yosys can write rather than an invented one.
+
+    Measured as EMPTY over the corpus: the named ten are every clocked cell Yosys 0.66
+    produces for it, so this is a GUARD against an unseen design or a future Yosys rather than
+    a live branch. It still earns its place, because the failure it prevents is silent: an
+    unnamed boundary is CROSSED, and crossing a flop reports a registered port as
+    ``combinational``.
+    """
+    netlist = _netlist({"ff": _cone_cell("$dffsr", clocked=True)}, _CONE_PORTS)
+
+    assert _timing_finding(tmp_path, netlist) == {
+        "derived": False,
+        "cause": "unrecognized-clocked-cell",
+    }
+
+
+def test_a_cell_with_no_port_directions_refuses_the_whole_design(tmp_path: Path) -> None:
+    """Requirement 1.13: a shape we could not read is not evidence, so it refuses by name.
+
+    Before this guard the same netlist still refused, but through the WRONG CAUSE: a cell
+    contributing no driver left its output bit reading as ``undriven``, which is a claim about
+    the DESIGN - this port has an unconnected bit - made on the strength of a claim about our
+    READER. The two facts reach a student as different sentences, so they must not share a
+    channel.
+    """
+    netlist = _netlist({"logic": _cone_cell("$add", shaped=False)}, _CONE_PORTS)
+
+    assert _timing_finding(tmp_path, netlist) == {
+        "derived": False,
+        "cause": "cell-shape-unreadable",
+    }
+
+
+def test_a_refusal_carries_the_bare_cause_and_never_the_offending_cell_name(
+    tmp_path: Path,
+) -> None:
+    """Requirement 2.5: the refusal carries declared names and a cause token, nothing else.
+
+    A Yosys cell name is not a neutral identifier - it embeds the SOURCE PATH and LINE it was
+    generated from - so naming the offending cell would leak the design's source through the
+    one field whose job is to say we could not read it. Asserted rather than commented,
+    because "we just don't add it" is not a property anything checks.
+
+    The equality pins the whole object, so a later field carrying a diagnostic, a path, or a
+    port list fails here; the substring check states the specific leak the cause token exists
+    to avoid.
+    """
+    netlist = _netlist({_SOURCE_BEARING_CELL_NAME: _cone_cell("full_adder")}, _CONE_PORTS)
+
+    timing = _timing_finding(tmp_path, netlist)
+
+    assert timing == {"derived": False, "cause": "module-instance"}
+    assert _SOURCE_BEARING_CELL_NAME not in json.dumps(timing)
+
+
+@pytest.mark.parametrize(
+    ("design", "top_module"),
+    [
+        (_ADDER_8BIT, f"verified_{_ADDER_8BIT}"),
+        (_TRAFFIC_LIGHT, f"verified_{_TRAFFIC_LIGHT}"),
+        (_ROM, _ROM),
+    ],
+)
+def test_no_structural_guard_refuses_a_real_netlist(
+    tmp_path: Path, design: str, top_module: str
+) -> None:
+    """Every COMMITTED reference netlist still DERIVES: the guards do not refuse the corpus.
+
+    The regression this exists for is `cell-shape-unreadable` over-firing on ``adder_8bit``,
+    whose eight ``$scopeinfo`` cells carry an EMPTY ``port_directions`` - a cell type with no
+    output pin at all, which is a fact about that type rather than an unreadable shape. A
+    guard keyed on "no pins" rather than "no readable dict" refuses this design and, with it,
+    every flattened hierarchy in the corpus.
+
+    ``ROM`` is here for the memory arm: its shape parameters must READ, or the asynchronous
+    rule the ``dout`` claim above depends on would never be reached.
+    """
+    timing = _timing_finding(tmp_path, _reference_netlist(design), top_module)
+
+    assert timing["derived"] is True
+    assert "cause" not in timing
+    assert timing["ports"]

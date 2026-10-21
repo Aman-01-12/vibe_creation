@@ -56,9 +56,9 @@ export type MutationOperatorId =
  *
  * The order is part of the contract, not an implementation detail: it is what makes the
  * capped mutant set a deterministic function of the reference plus the config (see
- * `MutationConfig.maxMutantsPerProblem` in `@app/eval/mutation-control.ts`). Adding an
- * operator, or reordering these, changes the mutant set - which is exactly why the
- * calibration cache is keyed by a hash of the config that names them.
+ * `MutationConfig.maxMutantsPerProblem` below). Adding an operator, or reordering these,
+ * changes the mutant set - which is exactly why the calibration cache is keyed by a hash of
+ * the config that names them.
  */
 export const MUTATION_OPERATORS: readonly MutationOperatorId[] = Object.freeze([
   'ARITH_PLUS_TO_MINUS',
@@ -74,6 +74,24 @@ export const MUTATION_OPERATORS: readonly MutationOperatorId[] = Object.freeze([
   'CONST_INCREMENTED',
   'INDEX_OFF_BY_ONE',
 ] as const);
+
+/**
+ * The knobs that decide WHICH mutants `generateMutants` produces.
+ *
+ * RELOCATED from `@app/eval/mutation-control.ts` (reference-model-consensus-gate,
+ * design-answers-round3.md) alongside `generateMutants` itself, since the generator takes
+ * this type as its own parameter and `@app/tools` cannot import it back from `@app/eval`.
+ * `@app/eval/mutation-control.ts` re-exports it by binding, so every existing eval call site
+ * is untouched.
+ *
+ * Hashed into the calibration cache key, because a change to either changes the mutant set
+ * and therefore invalidates every cached verdict. The operator list is carried explicitly
+ * rather than assumed, so a future run that disables an operator is a different key.
+ */
+export interface MutationConfig {
+  readonly maxMutantsPerProblem: number;
+  readonly operators: readonly MutationOperatorId[];
+}
 
 /** Longest site excerpt retained, so a mutant identity cannot grow without bound. */
 export const MAX_SITE_TEXT_CHARS = 48;
@@ -148,6 +166,60 @@ export function mutantIdOf(operator: MutationOperatorId, site: MutationSite): st
 export function identityOf(mutant: MutantIdentity): MutantIdentity {
   return { mutantId: mutant.mutantId, operator: mutant.operator, site: mutant.site };
 }
+
+/**
+ * Default wall-clock ceiling for ONE MUTANT run, in milliseconds - not a guess, a measurement.
+ *
+ * RELOCATED from `@app/eval/mutation-control.ts` (reference-model-consensus-gate,
+ * design-answers-round3.md) alongside `mutantRunLimits`, which already lived here and takes
+ * this value as its own default caller argument.
+ *
+ * A mutant run must NOT inherit the student session's wall clock. The student cap exists to let
+ * a real design compile and simulate under load; a mutant run is the same toolchain over the
+ * same tiny design, and the only reason it would ever approach that cap is that it is HANGING.
+ *
+ * Measured on `rtllm/arithmetic/multi_pipe_8bit` at `limits.wallMs = 30000`, first 8 of its 24
+ * mutants (golden calibration, real Icarus toolchain):
+ *
+ *     237ms  failed    ARITH_PLUS_TO_MINUS@69:29
+ *     181ms  passed    ARITH_MINUS_TO_PLUS@17:15
+ *   30005ms  error     CONDITION_NEGATED@26:10      <- the full 30s wall cap
+ *     178ms  passed    RESET_BRANCH_DISABLED@26:10
+ *     137ms  passed    CONST_ZERO_TO_ONE@27:33
+ *     189ms  passed    CONST_INCREMENTED@2:22
+ *     138ms  passed    INDEX_OFF_BY_ONE@17:16
+ *     138ms  failed    ARITH_PLUS_TO_MINUS@70:29
+ *
+ * So a real mutant run costs 137-237ms and a HANGING one costs the whole cap. 5000ms is roughly
+ * 20x the observed worst REAL run - wide enough that host load, a cold worker launch, or a
+ * larger design cannot manufacture a false timeout - and 6x cheaper than 30s on a hang. The
+ * hangs are structural rather than rare: RTLLM's golden testbenches commonly spin on a design
+ * signal (`while (mul_en_out == 0)`), so any mutant that breaks that signal never reaches
+ * `$finish`.
+ *
+ * It is CONFIGURABLE and part of the config identity, because it can change which mutants
+ * classify as `golden-timeout`, which changes the gate set, which can move a measured number.
+ */
+export const DEFAULT_MUTANT_WALL_MS = 5_000;
+
+/**
+ * Floor on the mutant wall cap.
+ *
+ * Below the observed real-run band a cap manufactures timeouts, and a manufactured timeout is
+ * now a KILL that enlarges the gate set - so too small is not merely slow, it corrupts the
+ * measurement. 500ms is already more than double the slowest real run measured above, and
+ * anything under it is rejected at the config boundary rather than discovered in a summary.
+ */
+export const MIN_MUTANT_WALL_MS = 500;
+
+/**
+ * Ceiling on the mutant wall cap.
+ *
+ * A mutant run has no legitimate reason to exceed a minute: past that the cap is not bounding a
+ * hang any more, it is one. `mutants x samples x problems` multiplies whatever is set here, so
+ * an absurd value is a config error, not a slow campaign.
+ */
+export const MAX_MUTANT_WALL_MS = 60_000;
 
 /**
  * The sandbox limits ONE MUTANT run executes under (pure, total).

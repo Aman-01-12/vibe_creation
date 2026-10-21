@@ -57,6 +57,23 @@ export type { EvalProblem, EvalProblemSource } from './problem.js';
 // The RTLLM corpus: pinned fetch, import, and the independent golden testbench judge.
 export * from './corpus/index.js';
 
+// The real per-port Timing_Cross_Check derivation loop (task 12.7), reused by the manifest
+// ratchet integration test (task 12.8) so there is one owner of "import the checkout, then
+// derive each design's real per-port timing" rather than two drifting copies.
+export {
+  deriveTimingCrossCheckMeasurement,
+  type TimingCrossCheckMeasurement,
+} from './scripts/timing-cross-check-artifact.js';
+
+// The Paired_Contract_Experiment's verdict (task 15.3; Req 8.6): decided from exactly a
+// run's own pass outcome and CHECK-FAIL count, with no parameter through which a trusted-
+// testbench count, peer vote, or Mutation_Strength_Gate outcome could ever reach it.
+export {
+  decidePairedContractVerdict,
+  type PairedContractMeasurement,
+  type PairedContractVerdict,
+} from './paired-contract-verdict.js';
+
 // The independent-judge seam the harness records a SECOND verdict through, plus the
 // agreement summary that measures whether our own testbenches catch bugs.
 export {
@@ -358,3 +375,8 @@ export {
   type RunLimits,
   type RunPropertyOnlyOptions,
 } from './property-only/cli.js';
+
+// The Benchmark_Regression_Suite (C20): drives the Consensus_Gate over the retained RTLLM
+// corpus with the golden testbench as the Independent_Judge, and folds this spec's version
+// constants into the suite's own configuration identity.
+export * from './consensus-regression/index.js';

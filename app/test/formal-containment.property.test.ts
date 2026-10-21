@@ -449,7 +449,12 @@ const PINNED_INITIAL_STATE = '(= ((|m_n q| state)) #b1)';
  */
 function prepassDocumentFor(contract: ResetContract): FormalPrepassDocument {
   if (!contract.derived) {
-    return { reset: { derived: false }, clockPolarity: 'none', initialStatePredicate: null };
+    return {
+      reset: { derived: false },
+      clockPolarity: 'none',
+      initialStatePredicate: null,
+      timing: { derived: true, ports: [] },
+    };
   }
   return {
     reset: {
@@ -460,6 +465,8 @@ function prepassDocumentFor(contract: ResetContract): FormalPrepassDocument {
     },
     clockPolarity: 'posedge',
     initialStatePredicate: contract.initialStateFree ? 'true' : PINNED_INITIAL_STATE,
+    // Required on the wire; these properties are about the reset and the wrapper, not timing.
+    timing: { derived: true, ports: [] },
   };
 }
 
@@ -1033,6 +1040,7 @@ function prepassRunFor(
           reset: { derived: false },
           clockPolarity: 'posedge',
           initialStatePredicate: 'true',
+          timing: { derived: true, ports: [] },
         }),
         stderr,
       );

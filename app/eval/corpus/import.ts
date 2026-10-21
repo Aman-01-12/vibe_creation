@@ -28,8 +28,8 @@
 //   into the scored corpus with an invented interface.
 
 import {
+  makeModuleInterface,
   makePort,
-  makeTimingContract,
   newUlid,
   type AcceptanceCriterion,
   type ClockingContract,
@@ -38,7 +38,7 @@ import {
   type Spec,
   type TimingContract,
 } from '@app/core';
-import type { SourceFile } from '@app/tools';
+import type { SourceFile, TimingRefusal } from '@app/tools';
 
 import type { EvalProblem } from '../problem.js';
 import type { CorpusCheckoutPort } from './checkout-port.js';
@@ -66,6 +66,8 @@ import type {
   ReferenceDesign,
   RtllmCorpus,
 } from './corpus-types.js';
+import type { TimingDerivationPort } from './timing-derivation-port.js';
+import { validityOutputFor } from './validity-outputs.js';
 
 /** Workspace filename the (renamed) reference RTL is materialized under for Stage 0. */
 export const REFERENCE_WORKSPACE_FILENAME = 'dut_reference.v' as const;
@@ -396,28 +398,16 @@ export function readOverriddenParameters(
 }
 
 /**
- * Build the Timing_Contract for an imported design.
+ * The operator-facing detail for a design the Timing_Derivation refused.
  *
- * ponytail: RTLLM carries no per-port Port_Timing source - `verilog-module.ts`
- * discards the `reg`/`wire` qualifier while parsing, and inferring from it would
- * only move the guess rather than remove it. Every output port is placed at
- * `registered` here, which is wrong on 13 of 31 clocked references (Req 6.2's own
- * 42% figure). This corpus's `timingContract` is not read by anything yet - only
- * `golden-judge.ts`'s Icarus run against the untouched RTLLM testbench scores a
- * design - so the placeholder changes no behaviour today. The upgrade path, per
- * `clarification-answers.md` Q-07, is the Spec role stating per-port timing at
- * authoring time; this placeholder must be replaced once a consumer reads it.
+ * Carries the closed cause token and the undetermined output port names and nothing else,
+ * so a refusal cannot smuggle a host path, design source, or tool diagnostic into the
+ * quarantine report (Req 2.5). The design name is recorded by the quarantine record itself
+ * (Req 3.5), so it is not repeated here.
  */
-function buildTimingContract(moduleInterface: ModuleInterface): TimingContract {
-  const entries = moduleInterface.ports
-    .filter((port) => port.direction === 'output')
-    .map((port) => ({ portName: port.name, timing: 'registered' as const }));
-  const built = makeTimingContract(moduleInterface, entries);
-  if (!built.ok) {
-    // Unreachable: `entries` is derived from `moduleInterface`'s own output ports.
-    throw new Error(`corpus import built an invalid timing contract: ${built.error.message}`);
-  }
-  return built.value;
+function timingRefusalDetail(refusal: TimingRefusal): string {
+  const ports = refusal.ports.length === 0 ? 'none named' : refusal.ports.join(', ');
+  return `the timing derivation refused (${refusal.cause}); undetermined output ports: ${ports}`;
 }
 
 /** Assemble the approved Spec for one imported design. */
@@ -425,6 +415,7 @@ function buildSpec(
   moduleName: string,
   description: DesignDescription,
   moduleInterface: ModuleInterface,
+  timingContract: TimingContract,
 ): Spec {
   return {
     id: newUlid(),
@@ -434,7 +425,7 @@ function buildSpec(
     // benchmark's mouth and could contradict the description a candidate is judged on.
     constraints: [],
     moduleInterface,
-    timingContract: buildTimingContract(moduleInterface),
+    timingContract,
     acceptanceCriteria: [wholeDesignCriterion(moduleName, description)],
     architecture:
       description.implementation.length > 0
@@ -446,7 +437,11 @@ function buildSpec(
 }
 
 /** Convert one design's files into a problem, judge, and reference, or quarantine it. */
-function convertDesign(location: DesignLocation, files: DesignFiles): ConversionOutcome {
+async function convertDesign(
+  location: DesignLocation,
+  files: DesignFiles,
+  timing: TimingDerivationPort,
+): Promise<ConversionOutcome> {
   const parsedDescription = parseDesignDescription(files.descriptionText);
   if (!parsedDescription.ok) {
     return reject('DESCRIPTION_UNREADABLE', parsedDescription.reason);
@@ -477,37 +472,59 @@ function convertDesign(location: DesignLocation, files: DesignFiles): Conversion
   if (!parsedModule.ok) {
     return reject('INTERFACE_UNPARSEABLE', parsedModule.reason);
   }
-  return assembleDesign(location, files, description, {
-    topModule,
-    ports: parsedModule.module.ports,
-  });
+  return assembleDesign(
+    location,
+    files,
+    description,
+    { topModule, ports: parsedModule.module.ports },
+    timing,
+  );
 }
 
-/** Build the converted design from the validated description and parsed interface. */
-function assembleDesign(
+/**
+ * Build the converted design from the validated description and parsed interface.
+ *
+ * The Timing_Contract comes from the injected Timing_Derivation over the RENAMED reference -
+ * the same bytes Stage 0 and the harness see - so the contract is derived from the design
+ * rather than assumed from its shape (Req 3.1). A refusal quarantines the design through the
+ * importer's existing exclusion channel instead of being filled in with a default (Req 3.5).
+ */
+async function assembleDesign(
   location: DesignLocation,
   files: DesignFiles,
   description: DesignDescription,
   parsed: { readonly topModule: string; readonly ports: readonly DeclaredPort[] },
-): ConversionOutcome {
+  timing: TimingDerivationPort,
+): Promise<ConversionOutcome> {
   const { moduleName } = description;
   const split = splitClocking(parsed.ports);
   const ports = buildPorts(split.declared);
   if (!ports.ok) {
     return reject('INTERFACE_PORT_INVALID', ports.detail);
   }
-  const moduleInterface: ModuleInterface = {
+  const built = makeModuleInterface({
     moduleName,
     ports: ports.ports,
     clocking: split.clocking,
-    // RTLLM states no Validity_Output; this task changes no behaviour (task 1.3).
-    validityOutputName: null,
+    validityOutputName: validityOutputFor(location.problemId),
+  });
+  if (!built.ok) {
+    return reject('VALIDITY_OUTPUT_UNDECLARED', built.error.message);
+  }
+  const moduleInterface = built.value;
+  const rtl: SourceFile = {
+    path: REFERENCE_WORKSPACE_FILENAME,
+    contents: renameTopModule(files.referenceText, parsed.topModule, moduleName),
   };
+  const derived = await timing.derive({ rtl, moduleInterface });
+  if (!derived.ok) {
+    return reject('TIMING_UNDERIVABLE', timingRefusalDetail(derived.error));
+  }
   const problem: EvalProblem = {
     id: location.problemId,
     title: `${location.designName} (${location.category})`,
     source: 'RTLLM',
-    spec: buildSpec(moduleName, description, moduleInterface),
+    spec: buildSpec(moduleName, description, moduleInterface, derived.value),
     intentSummary: oneLine(description.statement),
   };
   return {
@@ -524,10 +541,7 @@ function assembleDesign(
       },
       reference: {
         problemId: location.problemId,
-        rtl: {
-          path: REFERENCE_WORKSPACE_FILENAME,
-          contents: renameTopModule(files.referenceText, parsed.topModule, moduleName),
-        },
+        rtl,
         topModuleRenamedFrom: parsed.topModule === moduleName ? null : parsed.topModule,
       },
     },
@@ -571,8 +585,16 @@ function accumulate(
  * subcategory and design order, so two imports of the same checkout produce
  * identical problem lists. Every design either becomes a problem with a judge and a
  * reference, or a quarantine record with a reason - never a silent omission.
+ *
+ * `timing` is REQUIRED rather than optional. An optional port needs a fallback, and the only
+ * fallback available here is the all-`registered` constant this importer used to fabricate -
+ * the defect that made every purely combinational design unwinnable. A caller that has not
+ * wired a derivation is a compile error rather than a quietly fabricated contract (DQ-04).
  */
-export async function importRtllmCorpus(checkout: CorpusCheckoutPort): Promise<RtllmCorpus> {
+export async function importRtllmCorpus(
+  checkout: CorpusCheckoutPort,
+  timing: TimingDerivationPort,
+): Promise<RtllmCorpus> {
   const locations = await locateDesigns(checkout);
   const acc: ImportAccumulator = {
     problems: [],
@@ -585,7 +607,7 @@ export async function importRtllmCorpus(checkout: CorpusCheckoutPort): Promise<R
     accumulate(
       acc,
       location,
-      read.ok ? convertDesign(location, read.files) : reject(read.code, read.detail),
+      read.ok ? await convertDesign(location, read.files, timing) : reject(read.code, read.detail),
     );
   }
   return {

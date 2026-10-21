@@ -13,3 +13,4 @@ export * from './testbench/index.js';
 export * from './iteration/index.js';
 export * from './teach/index.js';
 export * from './property/index.js';
+export * from './reference-model/index.js';

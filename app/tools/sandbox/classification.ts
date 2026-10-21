@@ -28,6 +28,7 @@ function outputCaptured(output: RequiredOutput, capture: RawRunCapture): boolean
     case 'netlistJson':
     case 'formalReport':
     case 'formalPrepassReport':
+    case 'lintReport':
       return Object.prototype.hasOwnProperty.call(capture.artifacts, output);
     default: {
       // Exhaustiveness: a new RequiredOutput must be handled explicitly.

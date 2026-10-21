@@ -78,7 +78,7 @@ export {
   MAX_RETAINED_ARTIFACT_BYTES,
   MAX_RETAINED_TOTAL_BYTES,
 } from './artifact-retention.js';
-export type { ArtifactRetentionSink } from './artifact-retention.js';
+export type { ArtifactRetentionSink, ArtifactTextReader } from './artifact-retention.js';
 export { FakeSandboxRuntime } from './fake-runtime.js';
 export type { FakeCaptureScript } from './fake-runtime.js';
 

@@ -177,7 +177,7 @@ function expectOk<T, E>(result: Result<T, E>): T {
 
 /** A well-formed Spec draft: every port positive-width, every criterion measurable. */
 const GOOD_DRAFT: SpecDraft = {
-  timingContractEntries: [],
+  timingContractEntries: [{ portName: 'q', timing: 'registered' }],
   goal: 'A 4-bit synchronous up counter',
   constraints: ['synchronous active-high reset', 'wraps to zero after 15'],
   architecture:

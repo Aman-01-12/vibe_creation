@@ -31,6 +31,7 @@
     "eval:reportability-slice": "vitest run app/agent/roles/testbench/prompt-version.test.ts app/test/testbench-rtl-isolation.property.test.ts app/test/reportability-fixtures.test.ts && node app/eval/dist/sweep/cli.js --config app/eval/sweep/sweep.config.reportability-slice-v1.json",
     "eval:sweep": "node app/eval/dist/sweep/cli.js",
     "eval:property-only": "node app/eval/dist/property-only/cli.js",
+    "eval:consensus-regression": "node app/eval/dist/consensus-regression/cli.js",
     "corpus:fetch": "node app/eval/dist/corpus/fetch-cli.js",
     "formal:anchors": "node app/test/dist/formal-anchor-measurement.js",
     "vault:manifest": "node scripts/vault-manifest.mjs",

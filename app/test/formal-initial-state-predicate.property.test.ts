@@ -128,6 +128,8 @@ function documentCarrying(predicate: string | null): FormalPrepassDocument {
     reset: { derived: true, resetName: 'rst', resetActiveLow: false, resetKind: 'sync' },
     clockPolarity: 'posedge',
     initialStatePredicate: predicate,
+    // Pinned with the rest of the skeleton, so the predicate stays the only free dimension.
+    timing: { derived: true, ports: [] },
   };
 }
 

@@ -422,17 +422,19 @@ def test_only_the_two_known_yosys_scripts_exist_in_the_module() -> None:
     exactly two of each, one per script, so a hand-built third script path fails here -
     which the single-call assertion above would not notice.
 
-    RE-PINNED, deliberately, for the Reset_Contract_Prepass: this module now emits TWO
-    Yosys scripts rather than one, because the pre-pass is a SECOND invocation over the
-    candidate design ALONE and cannot be a step inside the ``formal`` kind
-    (Requirement 14.11). The old form asserted exactly ONE script literal and therefore
-    failed by construction once the second script landed, and that failure was the point
+    RE-PINNED, deliberately, each time a Yosys script was added to this module: this test
+    once asserted exactly ONE script literal, then TWO once the Reset_Contract_Prepass
+    (Requirement 14.11) landed as a SECOND invocation over the candidate design ALONE, THREE
+    with :data:`eda.YOSYS_SYNTH_SCRIPT` (Component 3), and now FOUR with
+    :data:`eda.YOSYS_LINT_SCRIPT` (Component 4), which also carries no ``write_smt2`` -
+    neither the Netlist_Stage nor the Lint_Engine writes SMT2, so ``read_verilog`` and
+    ``write_smt2`` no longer land at the same count. Each prior failure was the point
     rather than a problem: the count is what stops a script arriving unnoticed.
 
     COUNTED OVER OCCURRENCES RATHER THAN OVER LITERALS, which also closes the hole the
-    previous version's own docstring admitted it could not see: a script spelled as
+    original version's own docstring admitted it could not see: a script spelled as
     several adjacent literals, or concatenated around a filename constant, used to escape
-    a literal count entirely. Both scripts here are built that way.
+    a literal count entirely. All four scripts here are built that way.
 
     WHAT IT DOES NOT COVER, stated rather than implied: a Yosys script assembled in a
     DIFFERENT module is outside this assertion's reach. ``eda.py`` is the only module in
@@ -442,8 +444,9 @@ def test_only_the_two_known_yosys_scripts_exist_in_the_module() -> None:
     literals = _non_docstring_str_literals(ast.parse(source_path.read_text(encoding="utf-8")))
     scripts = "\n".join(text for text in literals if "read_verilog" in text or "write_smt2" in text)
 
-    # TWO Yosys scripts and no third: the Lowering_Sequence and the Reset_Contract_Prepass.
-    assert scripts.count("read_verilog") == 2
+    # FOUR Yosys scripts and no fifth: the Lowering_Sequence, the Reset_Contract_Prepass,
+    # the Netlist_Stage, and the Lint_Engine, neither of the last two writing SMT2.
+    assert scripts.count("read_verilog") == 4
     assert scripts.count("write_smt2") == 2
 
     # The Lowering_Sequence carries every pass in order, checked against this suite's own
@@ -940,15 +943,18 @@ def test_a_formal_job_with_no_payload_is_refused_honestly(tmp_path: Path) -> Non
     assert report["stderr"] == "formal job carries no formal payload"
 
 
-def test_the_unsupported_synthesize_kind_still_reports_its_own_refusal(tmp_path: Path) -> None:
-    """``synthesize`` is still undispatched, and adding a third kind did not change it.
+def test_an_unsupported_job_kind_still_reports_its_own_refusal(tmp_path: Path) -> None:
+    """`_run_kind`'s own fallback branch still refuses a kind the dispatch chain never names.
 
-    Guards the fallback branch the formal dispatch was inserted ahead of; see
-    ``chipAgent/_inbox/gotcha-worker-synthesize-kind-unimplemented.md``.
+    ``synthesize`` and ``lint`` are both dispatched now (structural-gate-toolchain,
+    Components 3 and 4) and are covered in their own ``test_synthesize.py`` and
+    ``test_lint.py``; this guards the ``_refused(f"unsupported job kind: ...")`` branch
+    itself, through a kind the Seam_Schema admits nowhere, mirroring what this test
+    asserted about ``synthesize`` and then ``lint`` before each was dispatched.
     """
     runner = _RecordingYosysRunner()
     job = SandboxJob(
-        kind="synthesize",
+        kind="notAKind",
         workspace_files=[_source(_DESIGN_FILE)],
         limits=ResourceLimits(cpu=1.0, mem_mb=256, procs=32, disk_mb=64, wall_ms=5000),
         required_outputs=["stdout", "stderr", "exitCode"],
@@ -959,7 +965,7 @@ def test_the_unsupported_synthesize_kind_still_reports_its_own_refusal(tmp_path:
     assert runner.calls == []
     assert report["exitCode"] != 0
     assert report["artifacts"] == {}
-    assert report["stderr"] == "unsupported job kind: synthesize"
+    assert report["stderr"] == "unsupported job kind: notAKind"
 
 
 # --- Task 6.8: the structural claims the worker carries --------------------------------------

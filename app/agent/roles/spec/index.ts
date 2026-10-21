@@ -15,6 +15,7 @@
 export * from './types.js';
 export * from './validation.js';
 export { parseSpecDraft } from './parse.js';
+export { renderTimingQuestion } from './present.js';
 export {
   SpecAgent,
   type SpecAgentDeps,

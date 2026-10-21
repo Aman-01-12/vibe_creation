@@ -12,6 +12,7 @@ import {
   RTLLM_CHECKOUT_PATH,
   RTLLM_PINNED_COMMIT,
 } from '@app/eval';
+import { CORPUS_TIMING_STAND_IN } from './real-oracle-harness.js';
 import { MAX_WARM_UP_DEPTH } from '@app/tools';
 
 import {
@@ -209,7 +210,10 @@ describe('PROPERTY_FIXTURE membership', () => {
   });
 });
 
-const CORPUS = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+const CORPUS = await importRtllmCorpus(
+  new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+  CORPUS_TIMING_STAND_IN,
+);
 
 describe.skipIf(CORPUS.problems.length === 0)(
   'PROPERTY_FIXTURE names only signals the Property_Wrapper declares',

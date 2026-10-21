@@ -114,6 +114,34 @@ class FormalPrepassRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SynthesizeRequest:
+    """The ``synthesize`` job kind's parameters: which module to synthesize, and the schematic.
+
+    Mirrors the seam's ``SynthesizeJobRequest``. ``top_module`` reaches a Yosys command line
+    inside the one ``-p`` script, so it is validated here, at the point the untrusted job is
+    parsed, rather than on first use. ``schematic`` decides whether the Schematic_Stage runs at
+    all, so it is read as a strict Python ``bool`` rather than any truthy value - see
+    :func:`_synthesize_request`.
+    """
+
+    top_module: str
+    schematic: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LintRequest:
+    """The ``lint`` job kind's parameter: which module to lint.
+
+    Mirrors the seam's ``LintJobRequest``. ONE field, like :class:`FormalPrepassRequest`: the
+    Lint_Engine runs no solver and renders no schematic, so ``top_module`` is the whole of it.
+    It reaches a Yosys command line inside the one ``-p`` script, so it is validated here rather
+    than on first use.
+    """
+
+    top_module: str
+
+
+@dataclass(frozen=True, slots=True)
 class SimulateRequest:
     """The ``simulate`` job kind's optional compile parameter: the default timescale.
 
@@ -146,6 +174,11 @@ class SandboxJob:
     #: The optional simulate payload: allowed only under ``"simulate"``, absent on every
     #: Golden_Judge job, which then compiles exactly as before.
     simulate: SimulateRequest | None = None
+    #: The synthesize payload, present if and only if ``kind`` is ``"synthesize"``, by the same
+    #: biconditional :func:`_kind_payload` enforces for ``formal``.
+    synthesize: SynthesizeRequest | None = None
+    #: The lint payload, present if and only if ``kind`` is ``"lint"``, by the same biconditional.
+    lint: LintRequest | None = None
 
 
 def _schema_path() -> Path:
@@ -256,6 +289,43 @@ def _formal_prepass_request(payload: dict[str, Any]) -> FormalPrepassRequest | N
     return request
 
 
+def _synthesize_request(payload: dict[str, Any]) -> SynthesizeRequest | None:
+    """Narrow and re-validate the ``synthesize`` payload, or refuse the job.
+
+    Beyond the biconditional :func:`_kind_payload` owns, two VALUE rules: ``top_module`` is a
+    plain identifier, for the reason :func:`_formal_prepass_request` carries, and ``schematic``
+    is a Python ``bool`` and nothing else - ``bool(...)`` on the string ``"true"`` or on ``1``
+    would both read as a request, which is why the raw value is checked by ``isinstance`` rather
+    than coerced. The schema's ``"type": "boolean"`` carries the same rule, but the path to it
+    is env-overridable, same as every other value rule in this module.
+    """
+    fields = _kind_payload(payload, "synthesize", "synthesize")
+    if fields is None:
+        return None
+    schematic = fields["schematic"]
+    if not isinstance(schematic, bool):
+        raise JobContractError("synthesize schematic is not a boolean")
+    request = SynthesizeRequest(top_module=str(fields["topModule"]), schematic=schematic)
+    if TOP_MODULE_RE.fullmatch(request.top_module) is None:
+        raise JobContractError("synthesize topModule is not a plain Verilog identifier")
+    return request
+
+
+def _lint_request(payload: dict[str, Any]) -> LintRequest | None:
+    """Narrow and re-validate the ``lint`` payload, or refuse the job.
+
+    ONE VALUE RULE, as :func:`_formal_prepass_request` carries: ``top_module`` is a plain
+    identifier, because it lands inside the one Yosys ``-p`` script.
+    """
+    fields = _kind_payload(payload, "lint", "lint")
+    if fields is None:
+        return None
+    request = LintRequest(top_module=str(fields["topModule"]))
+    if TOP_MODULE_RE.fullmatch(request.top_module) is None:
+        raise JobContractError("lint topModule is not a plain Verilog identifier")
+    return request
+
+
 def _to_job(payload: dict[str, Any]) -> SandboxJob:
     """Narrow a schema-valid payload into the typed :class:`SandboxJob`.
 
@@ -283,6 +353,8 @@ def _to_job(payload: dict[str, Any]) -> SandboxJob:
         formal=_formal_request(payload),
         formal_prepass=_formal_prepass_request(payload),
         simulate=_simulate_request(payload),
+        synthesize=_synthesize_request(payload),
+        lint=_lint_request(payload),
     )
 
 

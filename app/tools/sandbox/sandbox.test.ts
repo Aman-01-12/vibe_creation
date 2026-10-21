@@ -49,6 +49,12 @@ const FORMAL_PAYLOAD = { topModule: 'wrapper_top', depth: 20 } as const;
  */
 const PREPASS_PAYLOAD = { topModule: 'counter_12' } as const;
 
+/** The payload a well-formed `synthesize` job carries. */
+const SYNTHESIZE_PAYLOAD = { topModule: 'top', schematic: false } as const;
+
+/** The payload a well-formed `lint` job carries. */
+const LINT_PAYLOAD = { topModule: 'top' } as const;
+
 /**
  * A job of `kind` carrying `field: payload` verbatim, or carrying no such key at all.
  *
@@ -78,6 +84,16 @@ function jobWithFormal(kind: string, formal?: unknown): unknown {
 /** A job of `kind` carrying `formalPrepass` verbatim, or carrying no such key at all. */
 function jobWithPrepass(kind: string, formalPrepass?: unknown): unknown {
   return jobWithPayload(kind, 'formalPrepass', 'formalPrepassReport', formalPrepass);
+}
+
+/** A job of `kind` carrying `synthesize` verbatim, or carrying no such key at all. */
+function jobWithSynthesize(kind: string, synthesize?: unknown): unknown {
+  return jobWithPayload(kind, 'synthesize', 'netlistJson', synthesize);
+}
+
+/** A job of `kind` carrying `lint` verbatim, or carrying no such key at all. */
+function jobWithLint(kind: string, lint?: unknown): unknown {
+  return jobWithPayload(kind, 'lint', 'lintReport', lint);
 }
 
 /** A fully captured, successful run; override fields to model each scenario. */
@@ -354,6 +370,78 @@ describe('validateSandboxJob (the formalPrepass payload biconditional)', () => {
     const withDepth = { ...PREPASS_PAYLOAD, depth: 20 };
 
     expect(validateSandboxJob(jobWithPrepass('formalPrepass', withDepth)).ok).toBe(false);
+  });
+});
+
+describe('validateSandboxJob (the synthesize payload biconditional)', () => {
+  // The same shape group 1 asserts for `formal`: `synthesize` is present IF AND ONLY IF `kind`
+  // is `'synthesize'` (SGT-Q04), and the payload reaches a command line inside the sandbox
+  // (`synth -top`), so its own constraints are asserted here too.
+
+  it('given a synthesize job with NO payload, when validated, then it is rejected', () => {
+    expect(validateSandboxJob(jobWithSynthesize('synthesize')).ok).toBe(false);
+  });
+
+  it('given a well-formed synthesize job, when validated, then it is accepted', () => {
+    expect(validateSandboxJob(jobWithSynthesize('synthesize', SYNTHESIZE_PAYLOAD)).ok).toBe(true);
+  });
+
+  it('given a SIMULATE job carrying a synthesize payload, when validated, then it is rejected', () => {
+    expect(validateSandboxJob(jobWithSynthesize('simulate', SYNTHESIZE_PAYLOAD)).ok).toBe(false);
+  });
+
+  it('given a topModule that is not a plain identifier, when validated, then it is rejected', () => {
+    const shellMetacharacters = { ...SYNTHESIZE_PAYLOAD, topModule: 'top; rm -rf /' };
+
+    expect(validateSandboxJob(jobWithSynthesize('synthesize', shellMetacharacters)).ok).toBe(false);
+  });
+
+  it('given a synthesize payload with no schematic field, when validated, then it is rejected', () => {
+    // `schematic` is required, not optional, so "no schematic" has exactly one spelling.
+    const { topModule } = SYNTHESIZE_PAYLOAD;
+
+    expect(validateSandboxJob(jobWithSynthesize('synthesize', { topModule })).ok).toBe(false);
+  });
+
+  it('given a schematic value that is not a boolean, when validated, then it is rejected', () => {
+    expect(
+      validateSandboxJob(jobWithSynthesize('synthesize', { ...SYNTHESIZE_PAYLOAD, schematic: 1 }))
+        .ok,
+    ).toBe(false);
+  });
+
+  it('given an extra key inside the synthesize payload, when validated, then it is rejected', () => {
+    const withRogueKey = { ...SYNTHESIZE_PAYLOAD, engine: 'yosys' };
+
+    expect(validateSandboxJob(jobWithSynthesize('synthesize', withRogueKey)).ok).toBe(false);
+  });
+});
+
+describe('validateSandboxJob (the lint payload biconditional)', () => {
+  // Same shape, for `lint` under `'lint'` (SGT-Q03, SGT-Q04).
+
+  it('given a lint job with NO payload, when validated, then it is rejected', () => {
+    expect(validateSandboxJob(jobWithLint('lint')).ok).toBe(false);
+  });
+
+  it('given a well-formed lint job, when validated, then it is accepted', () => {
+    expect(validateSandboxJob(jobWithLint('lint', LINT_PAYLOAD)).ok).toBe(true);
+  });
+
+  it('given a SIMULATE job carrying a lint payload, when validated, then it is rejected', () => {
+    expect(validateSandboxJob(jobWithLint('simulate', LINT_PAYLOAD)).ok).toBe(false);
+  });
+
+  it('given a topModule that is not a plain identifier, when validated, then it is rejected', () => {
+    const shellMetacharacters = { topModule: 'top; rm -rf /' };
+
+    expect(validateSandboxJob(jobWithLint('lint', shellMetacharacters)).ok).toBe(false);
+  });
+
+  it('given an extra key inside the lint payload, when validated, then it is rejected', () => {
+    const withRogueKey = { ...LINT_PAYLOAD, depth: 20 };
+
+    expect(validateSandboxJob(jobWithLint('lint', withRogueKey)).ok).toBe(false);
   });
 });
 

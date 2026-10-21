@@ -1,0 +1,26 @@
+{
+  "design": "adder_8bit",
+  "simulator": "Icarus 13.0",
+  "sampleBudget": 64,
+  "measurements": [
+    {
+      "timingContract": "registered",
+      "referenceModelStyle": "registered-style",
+      "passed": false,
+      "checkFailCount": 94
+    },
+    {
+      "timingContract": "registered",
+      "referenceModelStyle": "combinational",
+      "passed": false,
+      "checkFailCount": 91
+    },
+    {
+      "timingContract": "combinational",
+      "referenceModelStyle": "combinational",
+      "passed": true,
+      "checkFailCount": 0
+    }
+  ],
+  "citedFrom": "chipAgent/_inbox/gotcha-the-timing-contract-is-fabricated-all-registered-in-three-places-so-15-of-46-combinational-designs-are-unwinnable-by-construction.md"
+}

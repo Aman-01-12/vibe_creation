@@ -131,6 +131,13 @@ function allCombinationalTiming(moduleInterface: ModuleInterface): TimingContrac
   return built.value;
 }
 
+/** A total Role_Declaration naming every input port of `moduleInterface` as `data`. */
+function allDataRoles(moduleInterface: ModuleInterface) {
+  return moduleInterface.ports
+    .filter((port) => port.direction === 'input')
+    .map((port) => ({ portName: port.name, role: 'data' as const }));
+}
+
 function requestFor(moduleInterface: ModuleInterface, nonce = 'nonce1'): ConsensusHarnessRequest {
   return {
     moduleInterface,
@@ -138,6 +145,7 @@ function requestFor(moduleInterface: ModuleInterface, nonce = 'nonce1'): Consens
     nonce,
     watchdogBudgetNs: 2_000_000,
     sampleBudget: 8,
+    roles: allDataRoles(moduleInterface),
   };
 }
 
@@ -169,14 +177,22 @@ const SKELETON_VOCABULARY: ReadonlySet<string> = new Set([
   'ece_state',
   'ece_in_bits',
   'ece_exp_bits',
+  'ece_exp_reg_bits',
   'ece_clk',
   'ece_reset_drive',
+  'ece_reset_state',
   'ece_stimulus',
   'ece_next_state',
   'ece_expect',
   'ece_cycle',
   'step',
   'repeat',
+  // The Stimulus_Mixer (C4, Req 2.12, 2.13): the splitmix64 finalizer function and its own
+  // parameter and local-variable names, fixed product text in every rendering.
+  'ece_mix',
+  'lane',
+  'h',
+  'v',
   'ECE_WATCHDOG_BUDGET_NS',
   'ECE_SAMPLE_BUDGET',
   'ECE_PERIOD',
@@ -219,11 +235,13 @@ const SKELETON_VOCABULARY: ReadonlySet<string> = new Set([
 /**
  * A Verilog sized-literal radix fragment this scan's identifier regex also matches: `'d`, `'b`,
  * `'h`, or `'o` followed by the literal's own digits (e.g. `64'd2000000` tokenizes to `d2000000`;
- * `1'b0` tokenizes to `b0`). Not an identifier at all - the apostrophe before it is what marks it
- * as a literal's radix marker in the real text - so these are excluded by shape rather than
- * enumerated by value, since the digits vary with every width and value the renderer emits.
+ * `1'b0` tokenizes to `b0`), or a HEX literal's digits, which may themselves include the letters
+ * A-F (`64'h9E3779B97F4A7C15` tokenizes to `h9E3779B97F4A7C15`, the Stimulus_Mixer's own splitmix64
+ * constants). Not an identifier at all - the apostrophe before it is what marks it as a literal's
+ * radix marker in the real text - so these are excluded by shape rather than enumerated by value,
+ * since the digits vary with every width and value the renderer emits.
  */
-const RADIX_LITERAL_FRAGMENT = /^[bdho]\d+$/;
+const RADIX_LITERAL_FRAGMENT = /^(?:[bdo]\d+|h[0-9A-Fa-f]+)$/;
 
 /**
  * One token a scan must not look inside: a `//` line comment. The rendered harness text has no
@@ -295,9 +313,6 @@ describe(PROPERTY, () => {
                 return false;
               }
               if (token === moduleInterface.moduleName || token === portName || token === nonce) {
-                return false;
-              }
-              if (token === `ece_prev_exp_${portName}`) {
                 return false;
               }
               if (token === `${nonce}_${portName}`) {

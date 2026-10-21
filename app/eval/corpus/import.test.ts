@@ -16,6 +16,8 @@ import type { CorpusCheckoutPort } from './checkout-port.js';
 import type { RtllmCorpus } from './corpus-types.js';
 import { importRtllmCorpus, readOverriddenParameters, renameTopModule } from './import.js';
 import { RTLLM_PINNED_COMMIT } from './pinned-source.js';
+import { FixedTimingDerivation, RefusingTimingDerivation } from './timing-derivation-double.js';
+import type { TimingDerivationPort } from './timing-derivation-port.js';
 
 /** One design folder's files, keyed by filename. */
 type DesignFolder = Readonly<Record<string, string>>;
@@ -106,9 +108,17 @@ function oneDesign(designName: string, files: DesignFolder): CheckoutTree {
   return { Arithmetic: { Adder: { [designName]: files } } };
 }
 
-/** Import a tree, returning the corpus. */
-function importTree(tree: CheckoutTree): Promise<RtllmCorpus> {
-  return importRtllmCorpus(new FakeCheckout(tree));
+/**
+ * Import a tree, returning the corpus.
+ *
+ * The default derivation succeeds for every design, because these cases are about the
+ * conversion rather than the timing; the refusal path passes its own port.
+ */
+function importTree(
+  tree: CheckoutTree,
+  timing: TimingDerivationPort = new FixedTimingDerivation('combinational'),
+): Promise<RtllmCorpus> {
+  return importRtllmCorpus(new FakeCheckout(tree), timing);
 }
 
 /** The single imported problem, failing the test if there is not exactly one. */
@@ -493,6 +503,60 @@ describe('importRtllmCorpus - quarantines (recorded, never silent)', () => {
   });
 });
 
+describe('importRtllmCorpus - the required Timing_Derivation (task 5.2)', () => {
+  /** A design that converts cleanly, so the only thing deciding its fate is the derivation. */
+  const COUNTER = oneDesign('counter_12', {
+    'design_description.txt': description('counter_12', 'Count to twelve.'),
+    'testbench.v': testbench('counter_12'),
+    'verified_counter_12.v': PREFIXED_REFERENCE,
+  });
+
+  it('excludes a refused design, recording its cause and its named ports (Req 3.5)', async () => {
+    // GIVEN a port that refuses with a design-level cause naming the undetermined output.
+    const refusing = new RefusingTimingDerivation({
+      cause: 'undriven-output-port',
+      ports: ['out'],
+    });
+
+    const corpus = await importTree(COUNTER, refusing);
+
+    // THEN the design is out, with the cause and the port names recorded - not defaulted in.
+    expect(corpus.problems).toEqual([]);
+    expect(corpus.quarantined).toEqual([
+      {
+        problemId: 'rtllm/arithmetic/counter_12',
+        designName: 'counter_12',
+        category: 'Arithmetic',
+        stage: 'import',
+        code: 'TIMING_UNDERIVABLE',
+        detail:
+          'the timing derivation refused (undriven-output-port); undetermined output ports: out',
+      },
+    ]);
+    // Still accounted for in the denominator: excluded, never silently unseen.
+    expect(corpus.designsSeen).toBe(1);
+  });
+
+  it('distinguishes an instrument failure from a design-level refusal (Req 2.3)', async () => {
+    const corpus = await importTree(
+      COUNTER,
+      new RefusingTimingDerivation({ cause: 'netlist-unavailable', ports: ['out'] }),
+    );
+
+    expect(corpus.quarantined[0]?.detail).toContain('netlist-unavailable');
+  });
+
+  it('carries the derived Port_Timing into the imported Spec (Req 3.1)', async () => {
+    // The POSITIVE CONTROL for the two cases above: a port that refused unconditionally
+    // would satisfy them both, so one succeeding derivation has to reach the Spec.
+    const corpus = await importTree(COUNTER, new FixedTimingDerivation('combinational'));
+
+    expect(soleProblem(corpus).spec.timingContract).toEqual({
+      entries: [{ portName: 'out', timing: 'combinational' }],
+    });
+  });
+});
+
 describe('renameTopModule', () => {
   it('renames the identifier on whole-word boundaries only', () => {
     const source = 'module verified_adder(a);\nfull_adder u0();\nendmodule\n';
@@ -517,5 +581,49 @@ describe('readOverriddenParameters', () => {
 
   it('reports none when the testbench instantiates without an override list', () => {
     expect(readOverriddenParameters('adder_8bit uut (.a(a));', 'adder_8bit')).toEqual([]);
+  });
+});
+
+describe('importRtllmCorpus - the reviewed Validity_Output table (Q-18)', () => {
+  function accu(reference: string): DesignFolder {
+    return {
+      'design_description.txt': description('accu', 'Accumulate four inputs.'),
+      'testbench.v': testbench('accu'),
+      'accu.v': reference,
+    };
+  }
+
+  it('declares the tabled Validity_Output for accu', async () => {
+    const corpus = await importTree(
+      oneDesign(
+        'accu',
+        accu(
+          'module accu(input clk, input rst_n, output reg [9:0] data_out, output reg valid_out);\nendmodule\n',
+        ),
+      ),
+    );
+    expect(soleProblem(corpus).spec.moduleInterface.validityOutputName).toBe('valid_out');
+  });
+
+  it('quarantines accu when the tabled port is not one of its outputs', async () => {
+    const corpus = await importTree(
+      oneDesign(
+        'accu',
+        accu('module accu(input clk, input rst_n, output reg [9:0] data_out);\nendmodule\n'),
+      ),
+    );
+    expect(corpus.problems).toEqual([]);
+    expect(corpus.quarantined.map((record) => record.code)).toEqual(['VALIDITY_OUTPUT_UNDECLARED']);
+  });
+
+  it('leaves every untabled design without a Validity_Output', async () => {
+    const corpus = await importTree(
+      oneDesign('counter_12', {
+        'design_description.txt': description('counter_12', 'Count to twelve.'),
+        'testbench.v': testbench('counter_12'),
+        'verified_counter_12.v': PREFIXED_REFERENCE,
+      }),
+    );
+    expect(soleProblem(corpus).spec.moduleInterface.validityOutputName).toBeNull();
   });
 });

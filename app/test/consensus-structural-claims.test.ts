@@ -22,15 +22,17 @@
 // THE TWO ABSENCES
 //   1. No export of `@app/agent/consensus` returns an accuracy figure (Req 16.2). Checked by
 //      pinning every exported function's return type with `expectTypeOf(...).returns`, which
-//      shows exactly two of them resolve to a bare `number` - `poolCorrectness` and
-//      `BudgetLedger.spent` - and neither is a judged accuracy. `poolCorrectness` is the Pool_
-//      Correctness SHARE of the Session's OWN Testbench_Pool (how many of this session's own
-//      testbenches voted trusted), never a verdict against a golden testbench; no Independent_
-//      Judge exists for a student's design, so no function here could compute one even if asked
-//      to. `BudgetLedger.spent` is a token count, not a percentage at all. A source scan beside
-//      the type pins keeps this closed: it reports the full set of top-level exported functions
-//      whose declared return type is a bare `number`, so a THIRD one added later is visible here
-//      rather than only in a reviewer's memory of this comment.
+//      shows exactly three of them resolve to a bare `number` - `poolCorrectness`,
+//      `BudgetLedger.spent`, and `distinctOutputCount` - and none is a judged accuracy.
+//      `poolCorrectness` is the Pool_Correctness SHARE of the Session's OWN Testbench_Pool (how
+//      many of this session's own testbenches voted trusted), never a verdict against a golden
+//      testbench; no Independent_Judge exists for a student's design, so no function here could
+//      compute one even if asked to. `BudgetLedger.spent` is a token count, not a percentage at
+//      all. `distinctOutputCount` (signature.ts, task 11.1) is a Quality_Signal that never gates
+//      (C9) - a count of distinct observed output tuples, not a correctness judgment of any
+//      kind. A source scan beside the type pins keeps this closed: it reports the full set of
+//      top-level exported functions whose declared return type is a bare `number`, so a FOURTH
+//      one added later is visible here rather than only in a reviewer's memory of this comment.
 //   2. No largest-cluster accessor exists anywhere in the subsystem (Req 2.3). `agreement.ts`'s own
 //      header comment already states the absence by name: "There is deliberately no
 //      `largestCluster` export in this module, and no `isLargest` or `rank` field on
@@ -44,11 +46,6 @@
 //      `consensus-import-boundary.test.ts` and `app/tools/formal/structural-claims.test.ts` already
 //      apply to their own source scans.
 //
-// THE ONE CONSTANT DEFERRED
-//   `CONSENSUS_POOL_SIZE` is not yet defined; task 13.1 adds it to `app/agent/consensus/session.ts`
-//   at a measured value of 8. It is skipped below with a comment rather than asserted against an
-//   import that does not exist yet, which would fail the build rather than pin anything.
-
 import { readFileSync, readdirSync } from 'node:fs';
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
@@ -91,6 +88,7 @@ import {
   type MutationStrengthRequest,
 } from '../agent/consensus/mutation-strength-gate.js';
 import { peersOf, type FailingPairPeers, type RunCell } from '../agent/consensus/run-matrix.js';
+import { CONSENSUS_POOL_SIZE } from '../agent/consensus/session.js';
 import { reduceSignature, type WaveformSignature } from '../agent/consensus/signature.js';
 import {
   ATTRIBUTION_POOL_CORRECTNESS_GATE,
@@ -100,7 +98,52 @@ import {
   type AttributionStatus,
   type TestbenchTrust,
 } from '../agent/consensus/trust-vote.js';
-import type { ConsensusHarnessRequest } from '../tools/simulator/consensus-harness.js';
+import {
+  ENABLE_FRAME_PERIOD,
+  INPUT_ROLES,
+  RESET_FRAME_PERIOD,
+  SAMPLE_BUDGET,
+  CONSENSUS_HARNESS_VERSION,
+  type ConsensusHarnessRequest,
+} from '../tools/simulator/consensus-harness.js';
+import { buildReferenceModelInput } from '../agent/roles/reference-model/prompt.js';
+import { AUTHORING_CONTRACT_VERSION } from '../agent/roles/reference-model/authoring-contract.js';
+import { REFERENCE_MODEL_PROMPT_VERSION } from '../agent/roles/reference-model/prompt-version.js';
+import type {
+  ReferenceModelDraft,
+  ReferenceModelRequest,
+} from '../agent/roles/reference-model/types.js';
+import type { ConsensusRegressionConfigIdentity, ReferenceModelRecord } from '@app/eval';
+
+// -- Fixture for task 10.5's prompt assertions ---------------------------------------------------
+
+/** A minimal single-output clocked Spec, enough to render the Reference_Model generation prompt. */
+function referenceModelFixtureSpec(): import('@app/core').Spec {
+  const moduleInterface: import('@app/core').ModuleInterface = {
+    validityOutputName: null,
+    moduleName: 'm',
+    ports: [
+      { name: 'clk', direction: 'input', width: 1 },
+      { name: 'q', direction: 'output', width: 4 },
+    ],
+    clocking: { clockName: 'clk', resetName: null, resetActiveLow: false },
+  };
+  const timingContract = {
+    entries: [{ portName: 'q', timing: 'registered' as const }],
+  };
+  return {
+    id: 'spec-fixture',
+    projectId: 'project-fixture',
+    goal: 'A 4-bit register',
+    constraints: [],
+    architecture: 'A single clocked register.',
+    moduleInterface,
+    timingContract,
+    acceptanceCriteria: [],
+    approved: true,
+    version: 1,
+  };
+}
 
 // -- Shared source-scan helpers (duplicated per-file, matching
 //    consensus-import-boundary.test.ts and app/tools/formal/structural-claims.test.ts) -----------
@@ -222,15 +265,18 @@ describe('no export of @app/agent/consensus returns an accuracy figure (Req 16.2
     );
   }
 
-  it('reports exactly one top-level export declared to return a bare number, so a third one is visible here', () => {
+  it('reports exactly two top-level exports declared to return a bare number, so a third one is visible here', () => {
     const found = CONSENSUS_MODULES.flatMap((file) => bareNumberExportsIn(sourceOf(file)));
 
-    // `poolCorrectness` (trust-vote.ts) is the only one; `BudgetLedger.spent` is an interface
-    // method, not a top-level export, and is pinned above instead.
-    expect(found).toEqual(['poolCorrectness']);
+    // `distinctOutputCount` (signature.ts) and `poolCorrectness` (trust-vote.ts) are the two
+    // scanned ones, in the scan's own alphabetical-by-filename order; `BudgetLedger.spent` is an
+    // interface method, not a top-level export, and is pinned above instead.
+    expect(found).toEqual(['distinctOutputCount', 'poolCorrectness']);
 
     // Positive control: a second bare-number export inserted into an in-memory copy IS reported,
-    // so this scan is not one that would report a clean set over nothing scanned.
+    // so this scan is not one that would report a clean set over nothing scanned. Scans only
+    // this one synthesized string (trust-vote.ts plus the injected export), so distinctOutputCount
+    // (a different file) never appears here.
     const violating = `${sourceOf('trust-vote.ts')}\nexport function fakeAccuracy(): number {\n  return 1;\n}\n`;
     expect(bareNumberExportsIn(violating)).toEqual(['poolCorrectness', 'fakeAccuracy']);
   });
@@ -275,16 +321,13 @@ describe('no largest-cluster accessor exists anywhere in the subsystem (Req 2.3)
 // -- The constants: three pinned at their measured value, one deferred (Req 2.5, 8.3, 9.7) -------
 
 describe('the already-landed constants (Req 2.5, 8.3, 9.7)', () => {
-  it('pins PEER_FLOOR, ATTRIBUTION_POOL_CORRECTNESS_GATE, and the two token budgets', () => {
+  it('pins PEER_FLOOR, ATTRIBUTION_POOL_CORRECTNESS_GATE, CONSENSUS_POOL_SIZE, and the two token budgets', () => {
+    expect(CONSENSUS_POOL_SIZE).toBeGreaterThanOrEqual(8);
     expect(PEER_FLOOR).toBe(3);
     expect(ATTRIBUTION_POOL_CORRECTNESS_GATE).toBe(0.5);
     expect(SESSION_TOKEN_BUDGET).toBe(80_000);
     expect(RUN_TOKEN_BUDGET).toBe(200_000);
   });
-
-  // NOT YET DEFINED: `CONSENSUS_POOL_SIZE` is added by task 13.1 to `app/agent/consensus/
-  // session.ts`, at a measured value of 8. Once it lands, task 13.1 adds a case here asserting
-  // `expect(CONSENSUS_POOL_SIZE).toBeGreaterThanOrEqual(8)`, per the task's own "at least 8" text.
 });
 
 // -- Task 7.6's own type pin: ConsensusHarnessRequest carries no field for RTL, model output, or
@@ -293,10 +336,143 @@ describe('the already-landed constants (Req 2.5, 8.3, 9.7)', () => {
 describe('ConsensusHarnessRequest carries no field that can carry RTL, model output, or Spec prose (Req 4.7)', () => {
   // Compile-time only: `tsc -b` evaluates this, vitest does not. Appended per task 7.6's own
   // instruction ("a `describe` added by whichever of 10.5 or 7.4 lands first appends its own
-  // key-set pin after the block below") - the four blocks above are untouched.
-  it('pins ConsensusHarnessRequest to its five fields (consensus-harness.ts)', () => {
+  // key-set pin after the block below") - the four blocks above are untouched. Task 2.1 grows
+  // this pin from five keys to six, adding `roles` (Req 2.1): the pin is the one place the new
+  // field is admitted, so it cannot lag the field by a task.
+  it('pins ConsensusHarnessRequest to its six fields (consensus-harness.ts)', () => {
     expectTypeOf<keyof ConsensusHarnessRequest>().toEqualTypeOf<
-      'moduleInterface' | 'timingContract' | 'nonce' | 'watchdogBudgetNs' | 'sampleBudget'
+      'moduleInterface' | 'timingContract' | 'nonce' | 'watchdogBudgetNs' | 'sampleBudget' | 'roles'
     >();
+  });
+});
+
+// -- Task 10.5's own four pins: ReferenceModelRequest's key set, the absent check-count bound,
+//    the stimulus header, and the distinctness from the (not yet landed) Repair request type
+//    (Req 5.4, 5.6, 5.7, 5.10) -------------------------------------------------------------------
+
+describe('ReferenceModelRequest carries no field for RTL, a signature, or a log, and the generation prompt states no check-count bound (Req 5.4, 5.6, 5.7, 5.10)', () => {
+  it('pins ReferenceModelRequest to its five fields (reference-model/types.ts)', () => {
+    // Compile-time only: `tsc -b` evaluates this, vitest does not.
+    expectTypeOf<keyof ReferenceModelRequest>().toEqualTypeOf<
+      'moduleInterface' | 'timingContract' | 'goal' | 'constraints' | 'acceptanceCriteria'
+    >();
+  });
+
+  it('carries no numeric check-count bound phrasing in the rendered generation prompt', () => {
+    const prompt = buildReferenceModelInput(referenceModelFixtureSpec()).prompt;
+    expect(prompt).not.toMatch(/at least \d+ checks?/i);
+    expect(prompt).not.toMatch(/no more than \d+ checks?/i);
+    expect(prompt).not.toMatch(/exactly \d+ checks?/i);
+    expect(prompt).not.toMatch(/\d+ to \d+ checks?/i);
+  });
+
+  // NOT YET LANDED: the Repair_Attempt prompt (task 11.1's RepairRequest, built on task 15's
+  // repair-prompt renderer) is a later addition. Its own "no check-count bound" and "distinct
+  // named type from ReferenceModelRequest" assertions append here once it lands; this block is
+  // not restructured to make room.
+
+  // reference-model-rendered-stimulus Req 1.10, 4.1-4.4: the model no longer authors
+  // ece_stimulus. The product renders it from the Declared_Interface and a declared
+  // Role_Declaration (@app/tools consensus-harness.ts), so the generation prompt asks for
+  // the role vocabulary instead of a stimulus header or body - this replaces the prior
+  // assertion that the prompt rendered an `ece_stimulus(input [31:0] step)` header, which
+  // is no longer true by design once stimulus authorship moved off the model.
+  it('asks for a Role_Declaration instead of an ece_stimulus header or body', () => {
+    const prompt = buildReferenceModelInput(referenceModelFixtureSpec()).prompt;
+    expect(prompt).not.toContain('ece_stimulus');
+    expect(prompt).toContain('`data` or `enable`');
+  });
+});
+
+// -- Task 12.1: the type key sets and constants reference-model-rendered-stimulus adds (C1, C2,
+//    C8, C10; Req 1.8, 2.7, 2.8, 2.9, 2.13, 2.14, 3.1, 5.3, 7.1-7.5, 8.4, 8.7, 9.1, 9.3) ---------
+
+describe('ReferenceModelDraft and ReferenceModelRecord carry no field for a design, a mutant, a mutation site, or a signature (C1, C2, C8)', () => {
+  // Compile-time only: `tsc -b` evaluates these, vitest does not. Appended beside the
+  // ConsensusHarnessRequest pin above per the same "neither existing block restructured"
+  // discipline this file's header already states for appending a later type's own pin.
+  it('pins ReferenceModelDraft to its four fields (reference-model/types.ts)', () => {
+    expectTypeOf<keyof ReferenceModelDraft>().toEqualTypeOf<
+      'resetStateBody' | 'nextStateBody' | 'expectBody' | 'roles'
+    >();
+  });
+
+  it('pins ReferenceModelRecord to its seven fields (consensus-regression/harness.ts)', () => {
+    expectTypeOf<keyof ReferenceModelRecord>().toEqualTypeOf<
+      | 'testbenchId'
+      | 'family'
+      | 'referenceModelPromptVersion'
+      | 'resetStateBody'
+      | 'nextStateBody'
+      | 'expectBody'
+      | 'roles'
+    >();
+  });
+});
+
+describe('ConsensusRegressionConfigIdentity gains no identity field for this feature (C10, Req 9.3)', () => {
+  it('pins the existing five-key identity, so an added field is a compile error', () => {
+    expectTypeOf<keyof ConsensusRegressionConfigIdentity>().toEqualTypeOf<
+      | 'consensusHarnessVersion'
+      | 'consensusPoolSize'
+      | 'referenceModelPromptVersion'
+      | 'authoringContractVersion'
+      | 'signatureReductionVersion'
+    >();
+  });
+});
+
+describe('the constants reference-model-rendered-stimulus adds or moves, each asserted once (C1, C4, C7, C10)', () => {
+  it('pins INPUT_ROLES, ENABLE_FRAME_PERIOD, RESET_FRAME_PERIOD, SAMPLE_BUDGET, and the three bumped versions', () => {
+    expect(INPUT_ROLES).toEqual(['data', 'enable']);
+    expect(ENABLE_FRAME_PERIOD).toBe(20);
+    expect(RESET_FRAME_PERIOD).toBe(256);
+    expect(SAMPLE_BUDGET).toBe(2048);
+    expect(CONSENSUS_HARNESS_VERSION).toBe(3);
+    expect(AUTHORING_CONTRACT_VERSION).toBe(2);
+    expect(REFERENCE_MODEL_PROMPT_VERSION).toBe(6);
+  });
+
+  it('pins the rendered Stimulus_Mixer text: the additive constant, both multipliers, and the three shift amounts in order', () => {
+    // One leg of the three-legged mixer claim (task 8.3 states the other two: the real-toolchain
+    // run and the BigInt model's own statistical property). Not sufficient alone - a renderer
+    // that emitted this exact text but evaluated it wrongly at runtime would still pass this pin.
+    const mixerSource = readFileSync(
+      new URL('../tools/simulator/consensus-harness.ts', import.meta.url),
+      'utf8',
+    );
+    expect(mixerSource).toContain("64'h9E3779B97F4A7C15");
+    expect(mixerSource).toContain("64'hBF58476D1CE4E5B9");
+    expect(mixerSource).toContain("64'h94D049BB133111EB");
+    // The three shift amounts, in rendered order: >> 30, then >> 27, then >> 31.
+    const shiftOrder = [...mixerSource.matchAll(/>> (\d+)/g)].map((match) => match[1]);
+    expect(shiftOrder).toEqual(['30', '27', '31']);
+  });
+});
+
+describe('the Mutation_Strength_Gate is untouched by this feature (Req 7.1-7.5)', () => {
+  it('pins RunCell and MutationStrengthRequest to their existing key sets, so neither gained a mutation-outcome-adjacent field', () => {
+    // Already pinned above in this file's first describe block (task 5.3's own four-type pin);
+    // restated here by reference rather than duplicated, since `expectTypeOf` pins are
+    // compile-time and a second identical pin would only double the evaluation, not strengthen it.
+    expectTypeOf<keyof RunCell>().toEqualTypeOf<
+      'designId' | 'testbenchId' | 'passed' | 'signature' | 'failureCause'
+    >();
+    expectTypeOf<keyof MutationStrengthRequest>().toEqualTypeOf<'testbenchId' | 'mutantRuns'>();
+  });
+
+  it("touches none of the Mutation_Strength_Gate's own files (this spec's diff names only harness/role/eval-regression files)", () => {
+    // A structural claim about SCOPE, not behaviour: `mutation-strength-gate.ts` and
+    // `mutation-control.ts`/`operators.ts` are read here only to confirm the Stimulus_Function
+    // renderer never imports a mutation vocabulary name - the real "operator set unchanged"
+    // claim is `consensus-mutation-relocation.property.test.ts`'s own baseline-array pin, not
+    // restated here. This test instead checks the one thing this file's own scan machinery can:
+    // the Stimulus_Mixer/Stimulus_Function renderer source contains no mutation-vocabulary name.
+    const harnessSource = codeOf(
+      readFileSync(new URL('../tools/simulator/consensus-harness.ts', import.meta.url), 'utf8'),
+    );
+    expect(harnessSource).not.toMatch(/\bMUTATION_OPERATORS\b/);
+    expect(harnessSource).not.toMatch(/\bgenerateMutants\b/);
+    expect(harnessSource).not.toMatch(/\bMutationOperatorId\b/);
   });
 });

@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 import type { ModuleInterface } from '@app/core';
 import { FORMAL_ORACLE_VERSION } from '@app/agent';
 import {
+  localTimingDerivation,
   FileSystemCorpusCheckout,
   importRtllmCorpus,
   limitOrRefuse,
@@ -443,7 +444,10 @@ function anchorEntry(designId: string): FixtureProperty {
  * this measurement decides are the ones the corpus pins rather than copies held here.
  */
 async function anchorDesigns(): Promise<ReadonlyMap<string, FormalDesign>> {
-  const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+  const corpus = await importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    localTimingDerivation(),
+  );
   const designs = new Map<string, FormalDesign>();
   for (const designId of SCALING_ANCHOR_IDS) {
     const reference = corpus.references.get(designId);

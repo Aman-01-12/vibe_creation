@@ -188,12 +188,75 @@ export interface ResetEnable {
 }
 
 /**
+ * One declared output port's combinational cone, exactly as the worker's backward walk reports it.
+ *
+ * Mirrored field for field from `eda.py`'s `_port_timing_facts`, which is the ground truth, and
+ * carrying no derived VALUE: the port's timing class is decided by `classifyPortTiming` on this side,
+ * because only this side holds the `ModuleInterface` the Declared_Data_Input set is read from
+ * (timing-contract-inference Req 1.13).
+ */
+export interface PortTimingFacts {
+  /** The declared output port these facts are about. */
+  readonly port: string;
+  /**
+   * Top-level INPUT ports reached combinationally, clock and reset INCLUDED.
+   *
+   * Deliberately unsubtracted: the worker has no `clocking` record, so it cannot know which input is
+   * the clock or the reset, and the classifier on this side subtracts them. Filtering here would move
+   * that rule to the side that cannot state it.
+   */
+  readonly sources: readonly string[];
+  /** Whether the walk crossed into retained state, which makes the port sequential. */
+  readonly reachesState: boolean;
+  /** Whether any bit of the port has no driver at all, which refuses the port ahead of every clause. */
+  readonly undriven: boolean;
+}
+
+/**
+ * The design's timing finding: every declared output port's cone facts, or ONE structural refusal.
+ *
+ * TWO ARMS AND NOTHING BETWEEN THEM, matching `PrepassResetFinding`'s discipline and the worker's
+ * `_timing_finding` exactly: `derived: true` carries `ports`, and `derived: false` carries a `cause`
+ * and NO `ports`, because a refusal means the walk's answers are not evidence and half a finding
+ * would be read as a finding. The refusal is per DESIGN rather than per port for the same reason -
+ * an unreadable cell leaves open whether it sits in any port's cone.
+ */
+export type PrepassTimingFinding =
+  | { readonly derived: true; readonly ports: readonly PortTimingFacts[] }
+  | { readonly derived: false; readonly cause: PrepassTimingRefusalCause };
+
+/**
+ * Why the worker refused to derive timing for a whole design. Closed at the worker's three tokens.
+ *
+ * A cell type not beginning with `$` is an unelaborated `module-instance`; a `CLK`-bearing cell
+ * outside the retained-state set is an `unrecognized-clocked-cell`; and a cell with no readable
+ * `port_directions`, or an unparseable `RD_CLK_ENABLE`, is `cell-shape-unreadable`.
+ */
+export type PrepassTimingRefusalCause =
+  'module-instance' | 'unrecognized-clocked-cell' | 'cell-shape-unreadable';
+
+/**
+ * The same three tokens as a runtime list, so the schema's `enum` is not a second hand-spelled copy.
+ *
+ * Annotated rather than `as const`-and-derived, which is the one direction that matters here: a token
+ * spelled wrong, or one the type does not admit, is a COMPILE error. A token added to the type but
+ * not to this list is refused by the parse, which is the fail-safe direction - an unreadable report
+ * reaches the gate as `toolchain-unavailable` rather than as a fact about the design.
+ */
+const TIMING_REFUSAL_CAUSES: readonly PrepassTimingRefusalCause[] = [
+  'module-instance',
+  'unrecognized-clocked-cell',
+  'cell-shape-unreadable',
+];
+
+/**
  * `formal-prepass-report.json` as the WORKER WRITES IT. The wire shape, mirrored field for field.
  *
- * Three fields, all required. `initialStatePredicate` is the only one design.md's
+ * Four fields, all required. `initialStatePredicate` is the only one design.md's
  * `FormalPrepassReport` does not carry, and it is the reason the two shapes are two types: the
  * worker hands the predicate's BODY across so the free-initial-state RULE has a single owner on the
- * side that also owns the refusal an unreadable predicate produces (Req 14.24).
+ * side that also owns the refusal an unreadable predicate produces (Req 14.24). `timing` is the
+ * second: the cone FACTS are the worker's and the timing CLASS is this side's.
  */
 export interface FormalPrepassDocument {
   /** The derived reset facts or the refusal, before the free-initial-state fact is read. */
@@ -207,6 +270,14 @@ export interface FormalPrepassDocument {
    * 4096-character bound, because all three are the same fact on this side: no predicate arrived.
    */
   readonly initialStatePredicate: string | null;
+  /**
+   * The per-port cone facts of the same netlist walk, or the structural refusal that voids them.
+   *
+   * REQUIRED for the reason `initialStatePredicate` is: `json.dumps` writes the key on every run, so
+   * an absent key is a document THIS SIDE DOES NOT RECOGNIZE rather than an honest absence. Both
+   * halves ship in one increment, so no old report meets this schema.
+   */
+  readonly timing: PrepassTimingFinding;
 }
 
 /**
@@ -276,13 +347,20 @@ export interface FormalPrepassReport {
  * The accepted size of one pre-pass report document, in characters.
  *
  * Checked BEFORE `JSON.parse`, so an oversized blob is refused rather than turned into a parse tree
- * first. The widest HONEST report is the worker's own `MAX_INITIAL_STATE_PREDICATE_CHARS` (4096) for
- * the predicate, plus a reset object whose only unbounded-looking field is a Verilog identifier,
- * plus one of four polarity strings - call it 4.3 KiB. 16 KiB is roughly four times that while
- * still bounding the work done on a file this layer does not trust.
+ * first. The document carries TWO findings and a predicate, and the honest worst case is all three
+ * at once, MEASURED over the 48 corpus designs that elaborate by running the worker's own pre-pass
+ * script and `json.dumps` (Yosys 0.69+post): the predicate at the worker's
+ * `MAX_INITIAL_STATE_PREDICATE_CHARS` (4096, so 4098 once encoded), the widest reset finding
+ * (`LIFObuffer`'s enable-gated one, 134), the widest timing finding (`alu`'s six output ports over
+ * three inputs, 529), and the envelope's four field names, polarity string, and punctuation (78) -
+ * 4839 characters, so 16 KiB carries 3.3x headroom over a worst case no single design reaches. The
+ * widest document the corpus actually produces is `alu`'s 628.
  *
  * Reject rather than truncate, by the same rule `MAX_REPORT_CHARS` follows: a truncated JSON
- * document is not a report, and repairing one would be inventing evidence.
+ * document is not a report, and repairing one would be inventing evidence. No net NAME is bounded,
+ * so a design far wider than this corpus is REFUSED and reaches the gate as `toolchain-unavailable`,
+ * which is the fail-safe direction. `app/test/formal-prepass-report-size.test.ts` pins every figure
+ * above, so a finding that grows fails there rather than in production.
  */
 export const MAX_PREPASS_REPORT_CHARS = 16_384;
 
@@ -366,6 +444,56 @@ const DERIVED_RESET_SCHEMA: SchemaObject = {
 };
 
 /**
+ * One port's cone facts: closed, and REQUIRING ALL FOUR so a half-written entry is refused.
+ *
+ * `sources` is an array of strings and nothing looser, because the classifier INTERSECTS it with the
+ * Declared_Data_Input set: a number or a nested array arriving there would intersect with nothing and
+ * read as "no data input reached", which is the sequential-looking answer for a combinational port.
+ * Unbounded in length and in each name for the reason `resetName` is - `MAX_PREPASS_REPORT_CHARS`
+ * bounds the whole document before it is parsed at all.
+ */
+const PORT_TIMING_FACTS_SCHEMA: SchemaObject = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['port', 'sources', 'reachesState', 'undriven'],
+  properties: {
+    port: { type: 'string' },
+    sources: { type: 'array', items: { type: 'string' } },
+    // Booleans and never the raw bits they were read from, the same trap `resetActiveLow` guards:
+    // JavaScript reads the non-empty string `"0"` as TRUTHY, so a passed-through bit would invert.
+    reachesState: { type: 'boolean' },
+    undriven: { type: 'boolean' },
+  },
+};
+
+/** The derived arm of the timing union: the discriminant and the port list, closed. */
+const DERIVED_TIMING_SCHEMA: SchemaObject = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['derived', 'ports'],
+  properties: {
+    derived: { type: 'boolean', const: true },
+    ports: { type: 'array', items: PORT_TIMING_FACTS_SCHEMA },
+  },
+};
+
+/**
+ * The refused arm: the discriminant, the cause, and NO `ports`.
+ *
+ * `additionalProperties: false` is what makes the absence a RULE rather than a convention: a worker
+ * that refused and shipped the walk's answers anyway fails the parse instead of having them ignored.
+ */
+const REFUSED_TIMING_SCHEMA: SchemaObject = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['derived', 'cause'],
+  properties: {
+    derived: { type: 'boolean', const: false },
+    cause: { type: 'string', enum: [...TIMING_REFUSAL_CAUSES] },
+  },
+};
+
+/**
  * The JSON Schema for `formal-prepass-report.json`, closed at every level.
  *
  * Exported so a test asserts against THIS object rather than a hand-copied restatement of it: a
@@ -379,7 +507,7 @@ const DERIVED_RESET_SCHEMA: SchemaObject = {
 export const formalPrepassReportSchema: SchemaObject = {
   type: 'object',
   additionalProperties: false,
-  required: ['reset', 'clockPolarity', 'initialStatePredicate'],
+  required: ['reset', 'clockPolarity', 'initialStatePredicate', 'timing'],
   properties: {
     // A `oneOf` of two independently closed arms rather than an `if`/`then` over `derived`, because
     // `strictRequired` refuses a `required` naming a property a sibling subschema declares.
@@ -389,6 +517,11 @@ export const formalPrepassReportSchema: SchemaObject = {
     // so an absent key is a document we do not recognize; `null` is the worker saying honestly that
     // it could not read a predicate, which this side turns into a refusal rather than a default.
     initialStatePredicate: { type: ['string', 'null'] },
+    // The same `oneOf` of two independently closed arms, for the same `strictRequired` reason: the
+    // refused arm's `required: ['cause']` would be refused as a sibling's property under an
+    // `if`/`then` over `derived`, and the failure shape is a THROW at module load rather than a
+    // failing assertion.
+    timing: { oneOf: [DERIVED_TIMING_SCHEMA, REFUSED_TIMING_SCHEMA] },
   },
 };
 

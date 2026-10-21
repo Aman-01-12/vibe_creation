@@ -29,7 +29,11 @@ import {
 import { NORMALIZER_VERSION } from '@app/agent';
 
 import { CONTROL_TESTBENCH_WORKSPACE_FILENAME } from '../corpus/rtllm-instrument-control.js';
-import { FileSystemCorpusCheckout, importRtllmCorpus } from '../corpus/index.js';
+import {
+  FileSystemCorpusCheckout,
+  importRtllmCorpus,
+  localTimingDerivation,
+} from '../corpus/index.js';
 import { RTLLM_CHECKOUT_PATH } from '../corpus/fetch-node.js';
 import {
   decideReplayGate,
@@ -217,7 +221,10 @@ async function harnessReplay(
 
 /** Load the corpus references and each design's Control_Arm Required_Check names. */
 async function loadCorpus(): Promise<Omit<ReplayContext, 'replayer'>> {
-  const corpus = await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH));
+  const corpus = await importRtllmCorpus(
+    new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
+    localTimingDerivation(),
+  );
   const references = new Map<string, SourceFile>();
   for (const [problemId, reference] of corpus.references) {
     references.set(problemId, reference.rtl);

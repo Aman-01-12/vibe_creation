@@ -31,7 +31,7 @@ import { routedModelIdFor } from '@app/test';
 
 /** A well-formed Spec draft: every port positive-width, every criterion measurable. */
 const GOOD_DRAFT: SpecDraft = {
-  timingContractEntries: [],
+  timingContractEntries: [{ portName: 'q', timing: 'registered' }],
   goal: 'A 4-bit synchronous up counter',
   constraints: ['synchronous active-high reset'],
   architecture: 'A single clocked always block increments q on each rising clk edge.',
@@ -239,6 +239,38 @@ describe('parseSpecDraft - a conforming envelope wrapped in a markdown code fenc
     expect(parsed).toEqual({ ok: false, error: 'field "goal" must be a non-empty string' });
   });
 
+  it('given a draft omitting timingContractEntries when parsed then the entries are empty', () => {
+    const withoutEntries: Record<string, unknown> = { ...GOOD_DRAFT };
+    delete withoutEntries['timingContractEntries'];
+
+    const parsed = parseSpecDraft(JSON.stringify(withoutEntries));
+
+    expect(parsed).toEqual({ ok: true, value: { ...withoutEntries, timingContractEntries: [] } });
+  });
+
+  it('given an out-of-vocabulary timing string when parsed then it survives the parse', () => {
+    const entries = [{ portName: 'q', timing: 'eventually-maybe' }];
+
+    const parsed = parseSpecDraft(
+      JSON.stringify({ ...GOOD_DRAFT, timingContractEntries: entries }),
+    );
+
+    expect(parsed).toEqual({ ok: true, value: { ...GOOD_DRAFT, timingContractEntries: entries } });
+  });
+
+  it('given a timing contract entry with a blank portName when parsed then it is rejected', () => {
+    const entries = [{ portName: '  ', timing: 'registered' }];
+
+    const parsed = parseSpecDraft(
+      JSON.stringify({ ...GOOD_DRAFT, timingContractEntries: entries }),
+    );
+
+    expect(parsed).toEqual({
+      ok: false,
+      error: 'timing contract entry field "portName" must be a non-empty string',
+    });
+  });
+
   it('given a fenced draft when the agent runs then it presents a Spec awaiting approval', async () => {
     const { agent } = agentReturning(routed(fencedReply(JSON.stringify(GOOD_DRAFT))));
 
@@ -426,5 +458,65 @@ describe('SpecAgent edit-then-re-present cycle (Req 5.8)', () => {
       expect(edited.spec.moduleInterface.ports).toHaveLength(3);
       expect(edited.spec.acceptanceCriteria).toHaveLength(2);
     }
+  });
+});
+
+// The Port_Timing outcomes of assembly (task 8.7; Req 4.4-4.11).
+//
+// A two-output draft is used because the deleted all-`registered` fabrication and a
+// contract sourced from the draft are indistinguishable on a draft whose only
+// statement is `registered`: one port must state `combinational`, and a partial
+// statement list is only representable with more than one output port.
+describe('SpecAgent Port_Timing sourcing and escalation (Req 4.4-4.11)', () => {
+  const TWO_OUTPUT_DRAFT: SpecDraft = {
+    ...GOOD_DRAFT,
+    moduleInterface: {
+      ...GOOD_DRAFT.moduleInterface,
+      ports: [
+        { name: 'clk', direction: 'input', width: 1 },
+        { name: 'q', direction: 'output', width: 4 },
+        { name: 'carry', direction: 'output', width: 1 },
+      ],
+    },
+    timingContractEntries: [
+      { portName: 'q', timing: 'registered' },
+      { portName: 'carry', timing: 'combinational' },
+    ],
+  };
+
+  it('given a draft stating every output port when presented then the Spec carries the stated contract', () => {
+    const { agent } = agentForDraft(GOOD_DRAFT);
+
+    const presentation = agent.presentDraft(context(), TWO_OUTPUT_DRAFT);
+
+    expect(presentation.status).toBe('awaiting-approval');
+    if (presentation.status !== 'awaiting-approval') {
+      throw new Error('expected awaiting-approval');
+    }
+    expect(presentation.spec.timingContract.entries).toEqual(
+      TWO_OUTPUT_DRAFT.timingContractEntries,
+    );
+  });
+
+  it('given a draft stating only one output port when presented then it escalates for exactly the missing port', () => {
+    const { agent } = agentForDraft(GOOD_DRAFT);
+    const partial: SpecDraft = {
+      ...TWO_OUTPUT_DRAFT,
+      timingContractEntries: [{ portName: 'q', timing: 'registered' }],
+    };
+
+    const presentation = agent.presentDraft(context(), partial);
+
+    expect(presentation.status).toBe('needs-revision');
+    if (presentation.status !== 'needs-revision') {
+      throw new Error('expected needs-revision');
+    }
+    expect(presentation.issues.timingUnstated).toEqual(['carry']);
+    expect(presentation.issues.signalIssues).toEqual([]);
+    expect(presentation.timingQuestion?.tokens).toEqual([
+      { kind: 'signal', name: 'carry' },
+      { kind: 'frame', id: 'output-settles-at-cycle' },
+    ]);
+    expect(presentation.timingQuestion?.alternatives).toEqual([]);
   });
 });

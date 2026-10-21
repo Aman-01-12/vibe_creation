@@ -1,5 +1,5 @@
 // Example tests for the Consensus_Harness renderer (C6; Req 4.1-4.9, 5.2, 6.5, 6.6), pinning the
-// cases task 7.1's own body names: the version is 1; the rendered text declares exactly one top
+// cases task 7.1's own body names: the version is 2 (task 19.1); the rendered text declares exactly one top
 // module; a port name with a space, a semicolon, a newline, a backtick, or a `/*` refuses with a
 // DomainError; a module name that is a Verilog keyword refuses; two renders of one request are
 // byte-identical.
@@ -12,10 +12,14 @@ import type { ClockingContract, ModuleInterface, Port, TimingContract } from '@a
 import {
   CONSENSUS_HARNESS_PATH,
   CONSENSUS_HARNESS_VERSION,
+  ENABLE_FRAME_PERIOD,
+  packedPortSlices,
   renderConsensusHarness,
+  RESET_FRAME_PERIOD,
   SAMPLE_BUDGET,
   sizedSampleBudget,
   type ConsensusHarnessRequest,
+  type RoleDeclaration,
 } from './consensus-harness.js';
 
 const CLOCKED: ClockingContract = { clockName: 'clk', resetName: 'rst', resetActiveLow: false };
@@ -54,6 +58,13 @@ const COUNTER_INTERFACE = moduleInterfaceWith(
   CLOCKED,
 );
 
+/** A total Role_Declaration naming every input port of `moduleInterface` as `data`. */
+function allDataRoles(moduleInterface: ModuleInterface): RoleDeclaration {
+  return moduleInterface.ports
+    .filter((port) => port.direction === 'input')
+    .map((port) => ({ portName: port.name, role: 'data' as const }));
+}
+
 function requestFor(
   moduleInterface: ModuleInterface,
   overrides: Partial<ConsensusHarnessRequest> = {},
@@ -64,6 +75,7 @@ function requestFor(
     nonce: 'abc123',
     watchdogBudgetNs: 2_000_000,
     sampleBudget: SAMPLE_BUDGET,
+    roles: allDataRoles(moduleInterface),
     ...overrides,
   };
 }
@@ -74,8 +86,8 @@ function moduleDeclarationCount(text: string): number {
 }
 
 describe('renderConsensusHarness', () => {
-  it('is at version 1', () => {
-    expect(CONSENSUS_HARNESS_VERSION).toBe(1);
+  it('is at version 3', () => {
+    expect(CONSENSUS_HARNESS_VERSION).toBe(3);
   });
 
   it('renders text declaring exactly one top module', () => {
@@ -164,7 +176,7 @@ describe('renderConsensusHarness', () => {
     expect(rendered.value.contents).not.toContain('ece_clk');
   });
 
-  it('instantiates the Candidate_Design once and CALLS the three Reference_Model functions without redeclaring them', () => {
+  it('instantiates the Candidate_Design once and CALLS the four Reference_Model functions without redeclaring three of them', () => {
     const rendered = renderConsensusHarness(requestFor(COUNTER_INTERFACE));
     expect(rendered.ok).toBe(true);
     if (!rendered.ok) return;
@@ -173,14 +185,151 @@ describe('renderConsensusHarness', () => {
     const instanceCount = (rendered.value.contents.match(/\bece_candidate\b/g) ?? []).length;
     expect(instanceCount).toBeGreaterThan(0);
     expect(rendered.value.contents).not.toContain('ece_reference');
-    // NO `function automatic` declaration anywhere in this file: a module-scoped redeclaration
-    // of the same name SHADOWS the Reference_Model file's own compilation-unit-scope definition,
-    // which silently resolves every call to an empty stub reading 'x' - a real bug an earlier
-    // draft had, caught only by task 8.4's real-toolchain integration test (see module header).
-    expect(rendered.value.contents).not.toContain('function automatic');
+    // Exactly two `function automatic` declarations in the whole file: ece_mix and ece_stimulus,
+    // both rendered at compilation-unit scope ABOVE the module. ece_reset_state, ece_next_state,
+    // and ece_expect are only CALLED, never declared here - a module-scoped redeclaration of one
+    // of those three would SHADOW the Reference_Model file's own compilation-unit-scope
+    // definition, silently resolving every call to an empty stub reading 'x' (see module header).
+    const declarationCount = (rendered.value.contents.match(/^function automatic/gmu) ?? []).length;
+    expect(declarationCount).toBe(2);
+    expect(rendered.value.contents).not.toContain('function automatic [63:0] ece_reset_state');
+    expect(rendered.value.contents).not.toContain('function automatic [63:0] ece_next_state');
+    expect(rendered.value.contents).not.toContain('function automatic [63:0] ece_expect');
+    expect(rendered.value.contents).toContain("ece_state = ece_reset_state(1'b0);");
     expect(rendered.value.contents).toContain('ece_stimulus(');
     expect(rendered.value.contents).toContain('ece_next_state(');
     expect(rendered.value.contents).toContain('ece_expect(');
+  });
+
+  it('declares ece_mix and ece_stimulus at compilation-unit scope, both strictly above the module', () => {
+    const rendered = renderConsensusHarness(requestFor(COUNTER_INTERFACE));
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    const lines = rendered.value.contents.split('\n');
+    const mixIndex = lines.findIndex((line) =>
+      line.startsWith('function automatic [63:0] ece_mix'),
+    );
+    const stimulusIndex = lines.findIndex((line) =>
+      line.startsWith('function automatic [0:0] ece_stimulus'),
+    );
+    const moduleIndex = lines.findIndex((line) => line.startsWith('module ece_consensus_harness'));
+    expect(mixIndex).toBeGreaterThan(-1);
+    expect(stimulusIndex).toBeGreaterThan(-1);
+    expect(moduleIndex).toBeGreaterThan(-1);
+    expect(mixIndex).toBeLessThan(moduleIndex);
+    expect(stimulusIndex).toBeLessThan(moduleIndex);
+  });
+
+  it("renders ece_stimulus's single lane at inW <= 64 byte-identical to the probe's `ece_stimulus = h` (C4, C5)", () => {
+    const rendered = renderConsensusHarness(requestFor(COUNTER_INTERFACE));
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    expect(rendered.value.contents).toContain("v[0:0] = ece_mix(32'd0, step);");
+    expect(rendered.value.contents).toContain('ece_stimulus = v;');
+  });
+
+  it('renders one lane per 64 bits of a bundle wider than 64 bits, truncating the top lane', () => {
+    const wideInterface = moduleInterfaceWith(
+      'adder_64bit',
+      [
+        { name: 'a', direction: 'input', width: 64 },
+        { name: 'b', direction: 'input', width: 64 },
+        { name: 'cin', direction: 'input', width: 1 },
+        { name: 'sum', direction: 'output', width: 65 },
+      ],
+      COMBINATIONAL,
+    );
+    const timingBuilt = makeTimingContract(wideInterface, [
+      { portName: 'sum', timing: 'combinational' },
+    ]);
+    if (!timingBuilt.ok) throw new Error(`test fixture defect: ${timingBuilt.error.code}`);
+    const rendered = renderConsensusHarness(
+      requestFor(wideInterface, { timingContract: timingBuilt.value }),
+    );
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    expect(rendered.value.contents).toContain("v[63:0] = ece_mix(32'd0, step);");
+    expect(rendered.value.contents).toContain("v[127:64] = ece_mix(32'd1, step);");
+    expect(rendered.value.contents).toContain("v[128:128] = ece_mix(32'd2, step);");
+  });
+
+  it("overwrites an enable-role port's own slice with the release-frame expression, releasing one step in ENABLE_FRAME_PERIOD", () => {
+    const ramInterface = moduleInterfaceWith(
+      'RAM',
+      [
+        { name: 'we', direction: 'input', width: 1 },
+        { name: 'addr', direction: 'input', width: 14 },
+        { name: 'din', direction: 'input', width: 16 },
+        { name: 'oe', direction: 'input', width: 1 },
+        { name: 'dout', direction: 'output', width: 16 },
+      ],
+      COMBINATIONAL,
+    );
+    const timingBuilt = makeTimingContract(ramInterface, [
+      { portName: 'dout', timing: 'combinational' },
+    ]);
+    if (!timingBuilt.ok) throw new Error(`test fixture defect: ${timingBuilt.error.code}`);
+    const inputPorts = ramInterface.ports.filter((port) => port.direction === 'input');
+    const slices = packedPortSlices(inputPorts);
+    const weSlice = slices.find((slice) => slice.name === 'we');
+    const oeSlice = slices.find((slice) => slice.name === 'oe');
+    if (weSlice === undefined || oeSlice === undefined) throw new Error('fixture defect');
+    const roles: RoleDeclaration = [
+      { portName: 'we', role: 'enable' },
+      { portName: 'addr', role: 'data' },
+      { portName: 'din', role: 'data' },
+      { portName: 'oe', role: 'enable' },
+    ];
+    const rendered = renderConsensusHarness(
+      requestFor(ramInterface, { timingContract: timingBuilt.value, roles }),
+    );
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    expect(rendered.value.contents).toContain(
+      `v[${String(weSlice.high)}:${String(weSlice.low)}] = {1{(step % ${String(ENABLE_FRAME_PERIOD)}) != 0}};`,
+    );
+    expect(rendered.value.contents).toContain(
+      `v[${String(oeSlice.high)}:${String(oeSlice.low)}] = {1{(step % ${String(ENABLE_FRAME_PERIOD)}) != 0}};`,
+    );
+    // Exactly two overwrite lines: one per enable-role port (we, oe); addr and din are data and
+    // get no overwrite of their own, since they are only ever written by the lane assignment.
+    const overwriteCount = (rendered.value.contents.match(/!= 0\}\};/gu) ?? []).length;
+    expect(overwriteCount).toBe(2);
+  });
+
+  it('refuses an incomplete Role_Declaration with INCOMPLETE_ROLE_DECLARATION rather than defaulting the omitted port to data', () => {
+    const rendered = renderConsensusHarness(requestFor(COUNTER_INTERFACE, { roles: [] }));
+    expect(rendered.ok).toBe(false);
+    if (rendered.ok) return;
+    expect(rendered.error.code).toBe('INCOMPLETE_ROLE_DECLARATION');
+  });
+
+  it('refuses a Role_Declaration naming an unknown port', () => {
+    const rendered = renderConsensusHarness(
+      requestFor(COUNTER_INTERFACE, {
+        roles: [
+          { portName: 'en', role: 'data' },
+          { portName: 'nope', role: 'data' },
+        ],
+      }),
+    );
+    expect(rendered.ok).toBe(false);
+    if (rendered.ok) return;
+    expect(rendered.error.code).toBe('INCOMPLETE_ROLE_DECLARATION');
+  });
+
+  it('refuses a Role_Declaration naming the same input port twice', () => {
+    const rendered = renderConsensusHarness(
+      requestFor(COUNTER_INTERFACE, {
+        roles: [
+          { portName: 'en', role: 'data' },
+          { portName: 'en', role: 'enable' },
+        ],
+      }),
+    );
+    expect(rendered.ok).toBe(false);
+    if (rendered.ok) return;
+    expect(rendered.error.code).toBe('INCOMPLETE_ROLE_DECLARATION');
   });
 });
 
@@ -286,5 +435,186 @@ describe('sizedSampleBudget (C6, C8)', () => {
     expect(rendered.value.contents).not.toContain(`ECE_SAMPLE_BUDGET = ${String(SAMPLE_BUDGET)};`);
     const expectedBudget = sizedSampleBudget('abc123'.length, 4096, SAMPLE_BUDGET);
     expect(rendered.value.contents).toContain(`ECE_SAMPLE_BUDGET = ${String(expectedBudget)};`);
+  });
+});
+
+// Task 19.1 (Q-15, Q-18): the per-port comparison and the validity mask, read off the rendered text.
+describe('the state-convention comparison and the validity mask (C6)', () => {
+  const ACCU = moduleInterfaceWith(
+    'accu',
+    [
+      { name: 'data_in', direction: 'input', width: 8 },
+      { name: 'valid_out', direction: 'output', width: 1 },
+      { name: 'data_out', direction: 'output', width: 10 },
+    ],
+    CLOCKED,
+  );
+
+  function render(
+    moduleInterface: ModuleInterface,
+    timings: Record<string, 'registered' | 'combinational'>,
+  ) {
+    const built = makeTimingContract(
+      moduleInterface,
+      Object.entries(timings).map(([portName, timing]) => ({ portName, timing })),
+    );
+    if (!built.ok) throw new Error(`test fixture defect: ${built.error.code}`);
+    const rendered = renderConsensusHarness(
+      requestFor(moduleInterface, { timingContract: built.value }),
+    );
+    if (!rendered.ok) throw new Error(`render refused: ${rendered.error.code}`);
+    return rendered.value.contents;
+  }
+
+  it('compares a registered port against the zero-input expectation and a combinational port against the applied-input one', () => {
+    const text = render(ACCU, { valid_out: 'combinational', data_out: 'registered' });
+
+    expect(text).toContain("      ece_exp_reg_bits = ece_expect(ece_state, {8{1'b0}});");
+    expect(text).toContain('if (ece_exp_bits[0:0] === valid_out)');
+    expect(text).toContain('if (ece_exp_reg_bits[10:1] === data_out)');
+    expect(text).not.toContain('ece_prev_exp');
+  });
+
+  it('declares no zero-input expectation when no port is registered', () => {
+    expect(render(ACCU, { valid_out: 'combinational', data_out: 'combinational' })).not.toContain(
+      'ece_exp_reg_bits',
+    );
+  });
+
+  it('checks a data output only where the declared Validity_Output is 1, and the Validity_Output always', () => {
+    const text = render(
+      { ...ACCU, validityOutputName: 'valid_out' },
+      {
+        valid_out: 'registered',
+        data_out: 'registered',
+      },
+    );
+    const lines = text.split('\n');
+    const guard = lines.findIndex((line) => line.trim() === "if (valid_out === 1'b1) begin");
+    const dataCheck = lines.findIndex((line) => line.includes('=== data_out)'));
+    const validCheck = lines.findIndex((line) => line.includes('=== valid_out)'));
+
+    expect(guard).toBeGreaterThan(-1);
+    expect(dataCheck).toBe(guard + 1);
+    expect(lines.filter((line) => line.includes("if (valid_out === 1'b1)"))).toHaveLength(1);
+    expect(lines[validCheck - 1]?.trim()).not.toBe("if (valid_out === 1'b1) begin");
+  });
+
+  it('refuses a Validity_Output that is not a declared output port', () => {
+    const built = makeTimingContract(ACCU, [
+      { portName: 'valid_out', timing: 'registered' },
+      { portName: 'data_out', timing: 'registered' },
+    ]);
+    if (!built.ok) throw new Error('fixture');
+    const rendered = renderConsensusHarness(
+      requestFor({ ...ACCU, validityOutputName: 'data_in' }, { timingContract: built.value }),
+    );
+    expect(rendered.ok).toBe(false);
+    if (rendered.ok) return;
+    expect(rendered.error.code).toBe('VALIDITY_OUTPUT_NOT_A_DECLARED_OUTPUT_PORT');
+  });
+});
+
+// Task 6.1 (C6, Req 5.1-5.8): the mid-run reset, factored into one task called from the loop
+// head, so step 0 and every mid-run reset share one rendered shape.
+describe('the mid-run reset (C6)', () => {
+  it('renders ece_harness_reset as a task, zeroing ece_in_bits at its real declared width, for a reset-bearing interface', () => {
+    const rendered = renderConsensusHarness(requestFor(COUNTER_INTERFACE));
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    const text = rendered.value.contents;
+    expect(text).toContain('task ece_harness_reset;');
+    expect(text).toContain('endtask');
+    // COUNTER_INTERFACE has one input port `en` at width 1, so the task zeros a 1-bit bundle.
+    expect(text).toContain("ece_in_bits = {1{1'b0}};");
+    expect(text).toContain(`localparam integer ECE_RESET_FRAME = ${String(RESET_FRAME_PERIOD)};`);
+  });
+
+  it('calls ece_harness_reset from the loop head on the reset-frame modulo, including step 0, with no separate pre-loop priming', () => {
+    const rendered = renderConsensusHarness(requestFor(COUNTER_INTERFACE));
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    const text = rendered.value.contents;
+    expect(text).toContain(`if ((step % ECE_RESET_FRAME) == 0) begin`);
+    const lines = text.split('\n');
+    const loopIndex = lines.findIndex((line) => line.includes('for (step = 0;'));
+    const cycleIndex = lines.findIndex((line) => line.includes('initial begin : ece_cycle'));
+    // Scoped to the sequential process only (between `ece_cycle` and the loop), so the TASK's
+    // own declaration (which textually contains the same call-shaped line inside its body) is
+    // excluded - this is the process body where a redundant pre-loop call/prime would appear.
+    const beforeLoop = lines.slice(cycleIndex, loopIndex).join('\n');
+    // No separate pre-loop call: the loop's own modulo check (0 % N == 0) is the only site in
+    // the sequential process that ever calls ece_harness_reset or primes ece_state.
+    expect(beforeLoop).not.toContain('ece_harness_reset;');
+    expect(beforeLoop).not.toContain("ece_state = ece_reset_state(1'b0);");
+  });
+
+  it('renders no task, no ECE_RESET_FRAME localparam, and a step==0 guard instead, for a no-reset interface', () => {
+    const moduleInterface = moduleInterfaceWith(
+      'adder',
+      [
+        { name: 'a', direction: 'input', width: 4 },
+        { name: 'sum', direction: 'output', width: 4 },
+      ],
+      COMBINATIONAL,
+    );
+    const rendered = renderConsensusHarness(requestFor(moduleInterface));
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    const text = rendered.value.contents;
+    expect(text).not.toContain('ece_harness_reset');
+    expect(text).not.toContain('ECE_RESET_FRAME');
+    expect(text).toContain('if (step == 0) begin');
+    expect(text).toContain("ece_state = ece_reset_state(1'b0);");
+  });
+
+  it('fires the reset check at steps 0, 256, 512, ... for a budget exceeding RESET_FRAME_PERIOD', () => {
+    const rendered = renderConsensusHarness(requestFor(COUNTER_INTERFACE, { sampleBudget: 600 }));
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    // The rendered check is a single modulo expression over the whole loop, not a per-step
+    // unrolled list, so the claim "fires at 0, 256, 512" is a property of the modulo arithmetic
+    // itself rather than of distinct rendered text per occurrence - checked here by confirming
+    // the exact expression renders once, and the arithmetic is independently exercised by this
+    // file's own fast-check property test (Property 7) for every budget/period combination.
+    const occurrences = (rendered.value.contents.match(/\(step % ECE_RESET_FRAME\) == 0/g) ?? [])
+      .length;
+    expect(occurrences).toBe(1);
+    expect([0, 256, 512].every((step) => step % RESET_FRAME_PERIOD === 0)).toBe(true);
+  });
+
+  it("still renders only the step-0 reset for a budget below RESET_FRAME_PERIOD, matching the pilot's old 64-step behaviour", () => {
+    const rendered = renderConsensusHarness(requestFor(COUNTER_INTERFACE, { sampleBudget: 64 }));
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    // At 64 steps the modulo check can only ever equal zero at step 0 within the rendered loop
+    // bound, so no mid-run reset fires - the SAME rendered text as the 600-step case above (one
+    // modulo expression), but a behavioural claim this file's property test exercises directly
+    // rather than by distinct rendered text.
+    expect(rendered.value.contents).toContain('if ((step % ECE_RESET_FRAME) == 0) begin');
+    expect(64).toBeLessThan(RESET_FRAME_PERIOD);
+  });
+
+  it("applies the declared reset polarity inside the task, matching the pre-loop block's own convention", () => {
+    const activeHigh = moduleInterfaceWith(
+      'counter_active_high',
+      [
+        { name: 'en', direction: 'input', width: 1 },
+        { name: 'q', direction: 'output', width: 4 },
+      ],
+      { clockName: 'clk', resetName: 'rst', resetActiveLow: true },
+    );
+    const rendered = renderConsensusHarness(requestFor(activeHigh));
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    const text = rendered.value.contents;
+    // resetActiveLow: true means the task asserts reset with ece_reset_drive = 0, then releases
+    // with ece_reset_drive = 1 - the opposite assignment order from the default-false fixture.
+    const taskStart = text.indexOf('task ece_harness_reset;');
+    const taskEnd = text.indexOf('endtask', taskStart);
+    const taskText = text.slice(taskStart, taskEnd);
+    expect(taskText.indexOf("ece_reset_drive = 1'b0;")).toBeLessThan(
+      taskText.indexOf("ece_reset_drive = 1'b1;"),
+    );
   });
 });

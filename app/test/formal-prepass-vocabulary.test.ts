@@ -72,14 +72,16 @@ import {
   type ClockPolarity,
   type CouldNotVerifyCause,
   type FormalPrepassDocument,
+  type PrepassTimingFinding,
+  type PrepassTimingRefusalCause,
   type SandboxJobKind,
 } from '@app/tools';
 
 /** The four-member `clockPolarity` count (Req 14.36). */
 const POLARITY_COUNT = 4;
 
-/** The four-member `SandboxJobKind` count, which task 16.1 widened from three. */
-const JOB_KIND_COUNT = 4;
+/** The five-member `SandboxJobKind` count, which structural-gate-toolchain task 1.1 widened from four. */
+const JOB_KIND_COUNT = 5;
 
 /** The cause an unreadable report, predicate, or polarity value must produce (Req 14.26, 14.37). */
 const UNREADABLE_REFUSAL: CouldNotVerifyCause = 'toolchain-unavailable';
@@ -99,6 +101,7 @@ const JOB_KINDS: Readonly<Record<SandboxJobKind, true>> = Object.freeze({
   synthesize: true,
   formal: true,
   formalPrepass: true,
+  lint: true,
 });
 
 /**
@@ -113,7 +116,21 @@ const JOB_KIND_NAMES = [
   'synthesize',
   'formal',
   'formalPrepass',
+  'lint',
 ] as const satisfies readonly SandboxJobKind[];
+
+/**
+ * The timing finding every document here carries, over one combinational output port.
+ *
+ * REQUIRED on the wire, and exercised by nothing in this file: these cases are about the clock and
+ * reset vocabularies. It is a derived finding rather than a refusal so no case below can pass for
+ * the wrong reason - a refused timing finding is still an ACCEPTED document, but a reader of these
+ * tests should not have to know that to trust them.
+ */
+const DERIVED_TIMING: PrepassTimingFinding = Object.freeze({
+  derived: true,
+  ports: [Object.freeze({ port: 'q', sources: ['a'], reachesState: false, undriven: false })],
+});
 
 /** A document carrying one clock finding, a refused reset, and a readable predicate. */
 function documentWithPolarity(
@@ -126,6 +143,7 @@ function documentWithPolarity(
       : { derived: false },
     clockPolarity,
     initialStatePredicate: FREE_INITIAL_STATE_PREDICATE,
+    timing: DERIVED_TIMING,
   };
 }
 
@@ -153,6 +171,7 @@ function documentTextWithEnable(resetEnable: unknown): string {
     reset,
     clockPolarity: 'posedge',
     initialStatePredicate: FREE_INITIAL_STATE_PREDICATE,
+    timing: DERIVED_TIMING,
   });
 }
 
@@ -243,7 +262,15 @@ describe('formal-property-oracle: the SandboxJobKind vocabulary is closed at fou
     expect(JOB_KINDS[kind]).toBe(true);
   });
 
-  it('holds exactly four distinct members and nothing else', () => {
+  it('names the lint kind, which structural-gate-toolchain added as its own kind rather than a synthesize flag', () => {
+    // SGT-Q03: a job that wants only the Lint_Engine's `check -assert` pass does not also pay for a
+    // Netlist_Stage, so lint is its own kind rather than a flag on `synthesize`.
+    const kind: SandboxJobKind = 'lint';
+    expect(JOB_KIND_NAMES).toContain(kind);
+    expect(JOB_KINDS[kind]).toBe(true);
+  });
+
+  it('holds exactly five distinct members and nothing else', () => {
     expect(JOB_KIND_NAMES).toHaveLength(JOB_KIND_COUNT);
     expect(new Set(JOB_KIND_NAMES).size).toBe(JOB_KIND_COUNT);
   });
@@ -354,6 +381,7 @@ describe('formal-property-oracle: the pre-pass names its single cases rather tha
       reset: { derived: false, resetName: 'Rst', resetActiveLow: true },
       clockPolarity: 'posedge',
       initialStatePredicate: FREE_INITIAL_STATE_PREDICATE,
+      timing: DERIVED_TIMING,
     });
     expect(parseFormalPrepassReport(guessing).ok).toBe(false);
     expect(readFormalPrepassReport(guessing)).toEqual({ ok: false, error: UNREADABLE_REFUSAL });
@@ -463,6 +491,7 @@ describe('formal-property-oracle: the pre-pass names its single cases rather tha
         reset: { derived: true, resetName: 'rst', resetActiveLow: false, resetKind: 'sync' },
         clockPolarity: value,
         initialStatePredicate: FREE_INITIAL_STATE_PREDICATE,
+        timing: DERIVED_TIMING,
       });
       const read = readFormalPrepassReport(text);
       expect({ value, read }).toEqual({ value, read: { ok: false, error: UNREADABLE_REFUSAL } });
@@ -502,5 +531,150 @@ describe('formal-property-oracle: the pre-pass names its single cases rather tha
     expect(derived.ok && derived.value.reset.derived && derived.value.reset.resetActiveLow).toBe(
       document.reset.derived && document.reset.resetActiveLow,
     );
+  });
+});
+
+// timing-contract-inference, task 4.1: the timing finding is a REQUIRED field of the same closed
+// document, and the formal gate reads one more field without reading it.
+//
+// WHY THESE ARE UNIT TESTS AND NOT A PROPERTY. Each one names a FIXED shape - the field present, the
+// field absent, an arm carrying the other arm's key - and the generated statement about the parse
+// over arbitrary documents is Property 8's (task 4.2), which is a different claim.
+//
+// **Validates: Requirements 1.13**
+describe('timing-contract-inference: the timing finding rides the same closed document', () => {
+  /** A document text carrying `timing` as given, with every other field in the ADMITTING shape. */
+  function documentTextWithTiming(timing: unknown): string {
+    return JSON.stringify({
+      reset: { derived: true, resetName: 'rst', resetActiveLow: false, resetKind: 'sync' },
+      clockPolarity: 'posedge',
+      initialStatePredicate: FREE_INITIAL_STATE_PREDICATE,
+      timing,
+    });
+  }
+
+  it('parses a document carrying either arm of the timing finding', () => {
+    // The derived arm first, over the facts the worker's walk actually produces: a port with sources,
+    // one reaching state, and one undriven. The parse must return the finding UNCHANGED, because the
+    // classifier downstream reads these facts and nothing re-derives them.
+    const derived = parseFormalPrepassReport(
+      documentTextWithTiming({
+        derived: true,
+        ports: [
+          { port: 'sum', sources: ['a', 'b'], reachesState: false, undriven: false },
+          { port: 'q', sources: [], reachesState: true, undriven: false },
+          { port: 'dangling', sources: [], reachesState: false, undriven: true },
+        ],
+      }),
+    );
+    expect(derived.ok && derived.value.timing).toEqual({
+      derived: true,
+      ports: [
+        { port: 'sum', sources: ['a', 'b'], reachesState: false, undriven: false },
+        { port: 'q', sources: [], reachesState: true, undriven: false },
+        { port: 'dangling', sources: [], reachesState: false, undriven: true },
+      ],
+    });
+
+    // An EMPTY port list is an accepted document rather than a refusal: a design declaring no output
+    // port has no cone to report, and that is an honest finding.
+    const empty = parseFormalPrepassReport(documentTextWithTiming({ derived: true, ports: [] }));
+    expect(empty.ok && empty.value.timing).toEqual({ derived: true, ports: [] });
+
+    // And the refused arm, over each of the worker's three structural causes. A refusal is an
+    // ACCEPTED document carrying a first-class outcome, exactly as a refused reset is - the walk
+    // looked and could not read the design, which is a different fact from no report at all.
+    const causes: readonly PrepassTimingRefusalCause[] = [
+      'module-instance',
+      'unrecognized-clocked-cell',
+      'cell-shape-unreadable',
+    ];
+    for (const cause of causes) {
+      const refused = parseFormalPrepassReport(documentTextWithTiming({ derived: false, cause }));
+      expect({ cause, timing: refused.ok ? refused.value.timing : null }).toEqual({
+        cause,
+        timing: { derived: false, cause },
+      });
+    }
+  });
+
+  it('rejects a document OMITTING timing rather than reading the absence as a finding', () => {
+    // REQUIRED for the reason `initialStatePredicate` is: `json.dumps` writes the key on every run,
+    // so an absent key is a document THIS SIDE DOES NOT RECOGNIZE rather than an honest absence.
+    // Both halves ship in one increment, so no old report meets this schema. Treating the absence as
+    // "no timing facts" would hand the classifier an empty cone for every port of a real design,
+    // which reads as sequential - a derived value nobody measured.
+    const omitted = JSON.stringify({
+      reset: { derived: true, resetName: 'rst', resetActiveLow: false, resetKind: 'sync' },
+      clockPolarity: 'posedge',
+      initialStatePredicate: FREE_INITIAL_STATE_PREDICATE,
+    });
+    const parsed = parseFormalPrepassReport(omitted);
+    expect({ ok: parsed.ok, reason: parsed.ok ? null : parsed.error.reason }).toEqual({
+      ok: false,
+      reason: 'schema-violation',
+    });
+    // And it reaches the gate as an INSTRUMENT FAULT rather than as a fact about the design.
+    expect(readFormalPrepassReport(omitted)).toEqual({ ok: false, error: UNREADABLE_REFUSAL });
+
+    // THE POSITIVE CONTROL: the same skeleton WITH the field yields a contract, so the rejection
+    // above is attributable to the missing key and not to a skeleton malformed some other way.
+    expect(readFormalPrepassReport(documentTextWithTiming(DERIVED_TIMING)).ok).toBe(true);
+  });
+
+  it('refuses a timing shape it does not recognize rather than reading half of one', () => {
+    // Each arm is INDEPENDENTLY CLOSED, which is what makes "a refusal carries no ports" a rule
+    // rather than a convention: a worker that refused and shipped the walk's answers anyway fails
+    // the parse instead of having them ignored. The booleans are the sharp ones - JavaScript reads
+    // the non-empty string `"0"` as TRUTHY, so a raw bit passed through where `reachesState` belongs
+    // would invert a combinational port into a sequential one.
+    const port = { port: 'q', sources: ['a'], reachesState: false, undriven: false };
+    const unreadable: readonly unknown[] = [
+      { derived: true, ports: [port], cause: 'module-instance' },
+      { derived: false, cause: 'module-instance', ports: [port] },
+      { derived: false },
+      { derived: true },
+      { derived: false, cause: 'MODULE-INSTANCE' },
+      { derived: false, cause: 'unreadable-cell' },
+      { derived: true, ports: [{ ...port, reachesState: '0' }] },
+      { derived: true, ports: [{ ...port, sources: 'a' }] },
+      { derived: true, ports: [{ port: 'q', sources: ['a'], reachesState: false }] },
+      { derived: true, ports: [{ ...port, width: 8 }] },
+      { derived: true, ports: port },
+      null,
+      'derived',
+    ];
+    for (const timing of unreadable) {
+      const text = documentTextWithTiming(timing);
+      const parsed = parseFormalPrepassReport(text);
+      expect({ timing, ok: parsed.ok, reason: parsed.ok ? null : parsed.error.reason }).toEqual({
+        timing,
+        ok: false,
+        reason: 'schema-violation',
+      });
+      expect({ timing, read: readFormalPrepassReport(text) }).toEqual({
+        timing,
+        read: { ok: false, error: UNREADABLE_REFUSAL },
+      });
+    }
+  });
+
+  it('leaves the formal gate path unchanged: one more field VALIDATED and none of it read', () => {
+    // The derivation's whole input is the reset, the clock, and the predicate. Two documents
+    // differing ONLY in `timing` - a derived finding against a refusal - must derive to the SAME
+    // contract, which is the runtime half of "the gate does not read it". Without this, a later edit
+    // could route a timing refusal into a `CouldNotVerifyCause` and the suite would not notice.
+    const refusedTiming: PrepassTimingFinding = { derived: false, cause: 'module-instance' };
+    const document = documentWithPolarity('posedge', true);
+    const withRefusedTiming: FormalPrepassDocument = { ...document, timing: refusedTiming };
+    expect(deriveFormalPrepassReport(withRefusedTiming)).toEqual(
+      deriveFormalPrepassReport(document),
+    );
+
+    // And `FormalPrepassReport` does not CARRY it: the derived shape is the reset contract and the
+    // clock polarity, so the timing consumer reads the field off the DOCUMENT rather than off a
+    // report that would then have two owners for one fact.
+    const derived = deriveFormalPrepassReport(withRefusedTiming);
+    expect(derived.ok && Object.keys(derived.value).sort()).toEqual(['clockPolarity', 'reset']);
   });
 });

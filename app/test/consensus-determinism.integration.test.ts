@@ -69,8 +69,8 @@ const COUNTER_INTERFACE: ModuleInterface = {
 const COUNTER_REFERENCE_MODEL: SourceFile = {
   path: 'refmodel.v',
   contents: [
-    'function automatic [0:0] ece_stimulus(input [31:0] step);',
-    "  ece_stimulus = 1'b1;",
+    'function automatic [127:0] ece_reset_state(input dummy);',
+    "  ece_reset_state = 128'd0;",
     'endfunction',
     'function automatic [127:0] ece_next_state(input [127:0] s, input [0:0] in);',
     "  ece_next_state = s + {127'd0, in};",
@@ -96,6 +96,7 @@ function renderHarnessFor(nonce: string): SourceFile {
     nonce,
     watchdogBudgetNs: 2_000_000,
     sampleBudget: 8,
+    roles: [],
   };
   const rendered = renderConsensusHarness(request);
   if (!rendered.ok) {
