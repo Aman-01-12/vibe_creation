@@ -22,9 +22,17 @@
 //   ones, which include the three (multi_16bit, accu, RAM) that Requirement 8.8 parked as a
 //   model-quality problem back when the oracle itself was broken - a parking worth re-testing.
 //
-// Run: `node app/eval/dist/scripts/timing-corpus-sweep.js [--sessions N] [--limit M]`. Paid.
+// SURVIVING A CRASH
+//   A multi-hour paid sweep must not lose finished designs to a network blip or a process death.
+//   Each design's Sessions are individually guarded, so one failure is logged and skipped rather
+//   than fatal, and results flush after every design. `--resume <dir>` then reads that directory's
+//   own `report.json`, skips every design already recorded in it, and continues appending - so a
+//   relaunch costs only the designs that had not finished.
+//
+// Run: `node app/eval/dist/scripts/timing-corpus-sweep.js [--sessions N] [--limit M] [--resume DIR]`.
+// Paid.
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -159,18 +167,35 @@ async function main(): Promise<void> {
     })
     .slice(0, limit);
 
-  const outDir = join(
-    REPOSITORY_ROOT,
-    '.eval-runs',
-    `timing-corpus-sweep-${new Date().toISOString().replace(/[:.]/gu, '-')}`,
-  );
+  // `--resume DIR` continues an interrupted sweep in place, keeping its finished designs.
+  const resumeAt = process.argv.indexOf('--resume');
+  const resumeDir = resumeAt === -1 ? null : resolve(process.argv[resumeAt + 1] ?? '');
+  const outDir =
+    resumeDir ??
+    join(
+      REPOSITORY_ROOT,
+      '.eval-runs',
+      `timing-corpus-sweep-${new Date().toISOString().replace(/[:.]/gu, '-')}`,
+    );
   await mkdir(outDir, { recursive: true });
-  console.log(
-    `sweep: ${String(ordered.length)} designs x ${String(perDesign)} sessions -> ${outDir}\n`,
-  );
 
   const results: DesignResult[] = [];
-  for (const [index, { problem, kind }] of ordered.entries()) {
+  if (resumeDir !== null) {
+    const existing = await readFile(join(resumeDir, 'report.json'), 'utf8').catch(() => null);
+    if (existing !== null) {
+      const parsed = JSON.parse(existing) as { readonly designs?: readonly DesignResult[] };
+      results.push(...(parsed.designs ?? []));
+    }
+  }
+  const done = new Set(results.map((result) => result.problemId));
+  const remaining = ordered.filter(({ problem }) => !done.has(problem.id));
+  console.log(
+    `sweep: ${String(remaining.length)} designs x ${String(perDesign)} sessions -> ${outDir}` +
+      (done.size === 0 ? '' : ` (resumed, ${String(done.size)} already done)`) +
+      '\n',
+  );
+
+  for (const [index, { problem, kind }] of remaining.entries()) {
     const rows: SessionRow[] = [];
     for (let s = 0; s < perDesign; s += 1) {
       try {
@@ -186,7 +211,7 @@ async function main(): Promise<void> {
     const result = reduceDesign(problem.id, kind, rows);
     results.push(result);
     console.log(
-      `[${String(index + 1)}/${String(ordered.length)}] ${result.problemId} (${kind}): ` +
+      `[${String(done.size + index + 1)}/${String(ordered.length)}] ${result.problemId} (${kind}): ` +
         `verified ${String(result.verified)}/${String(result.sessions)} | ` +
         `meanTrusted ${result.meanTrusted.toFixed(1)} | zeroTrusted ${String(result.zeroTrustedSessions)} | ` +
         `mutFail ${String(result.mutationFailedSessions)} | brokenPeer ${String(result.brokenPeerSessions)} | ` +
