@@ -13,12 +13,18 @@ import {
 } from './paired-contract-approval-gate.js';
 
 describe('checkPaidReRunApproval', () => {
-  it('refuses with the named cause when no approval file exists at the real spec-folder path', async () => {
+  // NOT PINNED TO EITHER ARM, DELIBERATELY. An earlier version of this test asserted the real
+  // spec-folder path is ABSENT, which coupled it to transient state: the moment the founder
+  // recorded approval (Req 8.9), the test failed while the gate was working exactly as designed.
+  // Both arms of the real behaviour are pinned deterministically against fixtures below; what
+  // the real path is checked for here is only that it resolves and answers in the declared shape.
+  it('answers for the real spec-folder path in the declared shape, whichever arm holds', async () => {
     const outcome = await checkPaidReRunApproval();
 
-    expect(outcome.approved).toBe(false);
-    if (outcome.approved) return;
-    expect(outcome.cause).toBe('no-recorded-approval');
+    expect(typeof outcome.approved).toBe('boolean');
+    if (!outcome.approved) {
+      expect(outcome.cause).toBe('no-recorded-approval');
+    }
   });
 
   it('names the exact path Req 8.9 requires, inside the spec folder', () => {
@@ -56,9 +62,13 @@ describe('checkPaidReRunApproval', () => {
 });
 
 describe('requirePaidReRunApproval', () => {
-  it('throws naming the cause and the requirement when no approval file exists', async () => {
-    await expect(requirePaidReRunApproval()).rejects.toThrow(/no-recorded-approval/);
-    await expect(requirePaidReRunApproval()).rejects.toThrow(/Requirement 8\.9/);
+  it('throws naming the cause and the requirement when the approval file is absent', async () => {
+    // A guaranteed-absent fixture path rather than the real one, for the reason the
+    // `checkPaidReRunApproval` block above gives: the real path's state is not a constant.
+    const absent = join(tmpdir(), 'paid-re-run-approval-absent', 'nothing-here.md');
+
+    await expect(requirePaidReRunApproval(absent)).rejects.toThrow(/no-recorded-approval/);
+    await expect(requirePaidReRunApproval(absent)).rejects.toThrow(/Requirement 8\.9/);
   });
 
   it('resolves once the founder-recorded approval file is present', async () => {
