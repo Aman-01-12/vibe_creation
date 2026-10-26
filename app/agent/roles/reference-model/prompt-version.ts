@@ -21,4 +21,11 @@
 //     ece_next_state and ece_expect are authored against that step count (Req 3.5); and
 //     ece_reset_state is stated as the state after EVERY reset, since reset is now asserted
 //     more than once over a run (Req 5.6).
-export const REFERENCE_MODEL_PROMPT_VERSION = 6;
+// 7 - teaches the registered-output case the single worked example could not show. Under 6, the
+//     only example was a Moore down counter, whose outputs are a function of `cnt` - the state
+//     itself - so nothing ever forced the author to decide to carry an output register in the
+//     state. On an input-dependent registered output that decision is forced and 0 of 8 draws
+//     made it: each wrote the pre-register expression over `in`, one edge early, and all 64
+//     design x testbench pairs mismatched. v7 adds a second worked example whose state carries
+//     the output register, and STATE_RULE now states that rule and names the failure.
+export const REFERENCE_MODEL_PROMPT_VERSION = 7;
