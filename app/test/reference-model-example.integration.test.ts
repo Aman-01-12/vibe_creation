@@ -7,6 +7,9 @@ import { makeTimingContract } from '@app/core';
 import type { ResourceLimits } from '@app/tools';
 
 import {
+  EXAMPLE2_DRAFT,
+  EXAMPLE2_INTERFACE,
+  EXAMPLE2_TIMING,
   EXAMPLE_DRAFT,
   EXAMPLE_INTERFACE,
   EXAMPLE_TIMING,
@@ -63,5 +66,68 @@ describe.skipIf(!PROBE.available)('the Reference_Model prompt example (Q-19)', (
     const verdict = await simulate(ZERO_RESET_RTL);
     expect(verdict.verdict).not.toBe('pass');
     expect(verdict.stdout).toMatch(new RegExp(`CHECK ${NONCE}_cnt FAIL`, 'u'));
+  }, 60_000);
+});
+
+// The second example teaches the one thing the first cannot: a registered output the input
+// determines, whose value now is a register the state has to carry. It is prompt text every draw
+// copies, so it is run against a matching RTL rather than asserted.
+const EXAMPLE2_RTL = `module ece_example_changed(input clk, input rst_n, input [1:0] d, output reg changed);
+  reg [1:0] d_prev;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) begin
+      d_prev <= 2'd0;
+      changed <= 1'b0;
+    end else begin
+      d_prev <= d;
+      changed <= (d != d_prev);
+    end
+endmodule
+`;
+
+/** The same design one edge early: `changed` combinational, which the example must not accept. */
+const EARLY_RTL = `module ece_example_changed(input clk, input rst_n, input [1:0] d, output changed);
+  reg [1:0] d_prev;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) d_prev <= 2'd0;
+    else d_prev <= d;
+  assign changed = (d != d_prev);
+endmodule
+`;
+
+describe.skipIf(!PROBE.available)('the second Reference_Model prompt example', () => {
+  const nonce = 'pexample02';
+  async function simulate(rtl: string) {
+    const harness = renderConsensusHarness({
+      moduleInterface: EXAMPLE2_INTERFACE,
+      timingContract: EXAMPLE2_TIMING,
+      nonce,
+      watchdogBudgetNs: 2_000_000,
+      sampleBudget: 32,
+      roles: EXAMPLE2_DRAFT.roles,
+    });
+    if (!harness.ok) throw new Error(`fixture defect: ${harness.error.code}`);
+    const refModel = renderRefModel(EXAMPLE2_INTERFACE, EXAMPLE2_DRAFT).file;
+    return realOracleAdapter().simulate(
+      [{ path: 'example2.v', contents: rtl }, refModel],
+      harness.value,
+      LIMITS,
+    );
+  }
+
+  it('declares a Timing_Contract the domain constructor accepts', () => {
+    expect(makeTimingContract(EXAMPLE2_INTERFACE, EXAMPLE2_TIMING.entries).ok).toBe(true);
+  });
+
+  it('passes its own RTL at every sampled step', async () => {
+    const verdict = await simulate(EXAMPLE2_RTL);
+    expect(verdict.verdict).toBe('pass');
+    expect(verdict.stdout).toContain(`ECE_SAMPLE_END ${nonce} 32`);
+  }, 60_000);
+
+  it('fails the same behaviour one edge early, so the registered timing is not vacuous', async () => {
+    const verdict = await simulate(EARLY_RTL);
+    expect(verdict.verdict).not.toBe('pass');
+    expect(verdict.stdout).toMatch(new RegExp(`CHECK ${nonce}_changed FAIL`, 'u'));
   }, 60_000);
 });

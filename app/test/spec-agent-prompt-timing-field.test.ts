@@ -154,7 +154,7 @@ describe('the Reference_Model prompt stays pinned unchanged by this feature (Req
     // still exists and still compares an assembled prompt against a frozen 64-hex digest, so
     // deleting or loosening it fails loudly rather than silently retiring Req 7.5's guard.
     const pinSource = readFileSync(new URL(REFERENCE_MODEL_PIN, import.meta.url), 'utf8');
-    expect(pinSource).toMatch(/const PINNED_DIGEST_V6 = '[0-9a-f]{64}';/u);
-    expect(pinSource).toMatch(/sha256Hex\(prompt\)\)\.resolves\.toBe\(PINNED_DIGEST_V6\)/u);
+    expect(pinSource).toMatch(/const PINNED_DIGEST_V\d+ = '[0-9a-f]{64}';/u);
+    expect(pinSource).toMatch(/sha256Hex\(prompt\)\)\.resolves\.toBe\(PINNED_DIGEST_V\d+\)/u);
   });
 });

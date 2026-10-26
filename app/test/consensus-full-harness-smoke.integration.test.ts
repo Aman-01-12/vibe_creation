@@ -220,17 +220,19 @@ const NO_RESET_COUNTER_INTERFACE: ModuleInterface = {
  * calls `ece_harness_reset` for this shape - state priming for this shape happens once, on
  * `step == 0`, from `ece_reset_state` alone.
  *
- * `ece_reset_state` must therefore predict the RTL's REAL value at step 0, not its
- * `initial` value: the harness's own pre-loop settle (`repeat (RESET_CYCLES)`, unchanged prior
- * behaviour for a clocked-but-resetless interface) drives 2 clock edges before step 0 with no
- * declared input port to gate on, and this counter free-runs on every edge - so by step 0 it has
- * already counted up twice, from 0 to 2.
+ * `ece_reset_state` returns the RTL's `initial` value, because step 0 is the design's first
+ * clock edge. This fixture used to return 2 instead, to absorb a pre-loop settle that clocked
+ * this free-running counter twice before step 0 - and in doing so it hid the defect from the one
+ * test that ran this shape. No generated Reference_Model could have matched it: predicting 2
+ * means knowing RESET_CYCLES, a harness internal the model is never told, which is the opposite
+ * of DQ-1's own bar that a draw measures whether a model can write a Reference_Model rather than
+ * whether it guessed a harness encoding.
  */
 const NO_RESET_COUNTER_REFERENCE_MODEL: SourceFile = {
   path: 'refmodel.v',
   contents: [
     'function automatic [127:0] ece_reset_state(input dummy);',
-    "  ece_reset_state = 128'd2;",
+    "  ece_reset_state = 128'd0;",
     'endfunction',
     'function automatic [127:0] ece_next_state(input [127:0] s, input [0:0] in);',
     "  ece_next_state = s + 128'd1;",

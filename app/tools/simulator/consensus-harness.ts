@@ -879,16 +879,14 @@ export function renderConsensusHarness(
   if (isClocked) {
     lines.push("    ece_clk = 1'b0;");
   }
-  if (resetName === null && isClocked) {
-    // No declared reset: still settle RESET_CYCLES edges before step 0, the unchanged prior
-    // behaviour for a clocked-but-resetless interface. A reset-bearing interface gets NO
-    // pre-loop settle here - ece_harness_reset below is the only reset-and-settle site, and the
-    // in-loop modulo check (0 % N == 0) reaches step 0 through that same site (Req 5.1, 5.7).
-    lines.push(`    repeat (${String(RESET_CYCLES)}) begin`);
-    lines.push("      #(ECE_PERIOD/2) ece_clk = 1'b1;");
-    lines.push("      #(ECE_PERIOD/2) ece_clk = 1'b0;");
-    lines.push('    end');
-  }
+  // A resetless clocked interface gets NO pre-loop clock edge. Earlier text settled RESET_CYCLES
+  // edges here, but with no reset to assert there is nothing to settle and the inputs are still
+  // x: each edge clocked an unknown into the design's registers and left it that many edges
+  // ahead of the Reference_Model's state for the whole run. Measured on `right_shifter`, whose
+  // designs initialise `q` exactly as its Spec asks: all 64 pairs mismatched.
+  // A reset-bearing interface gets none either - ece_harness_reset below is the only
+  // reset-and-settle site, and the in-loop modulo check (0 % N == 0) reaches step 0 through that
+  // same site (Req 5.1, 5.7).
   // Req 5.12: the state is primed inside the loop in BOTH branches below, not here - the
   // reset-bearing branch primes via its modulo check (which reaches step 0 too), and the
   // no-reset branch primes via its own `step == 0` guard, so neither interface shape gets a

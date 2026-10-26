@@ -14,11 +14,16 @@ import {
 
 import type { ModelRequest } from '../../model-router/index.js';
 import {
+  EXAMPLE2_DRAFT,
+  EXAMPLE2_GOAL,
+  EXAMPLE2_INTERFACE,
+  EXAMPLE2_TIMING,
   EXAMPLE_DRAFT,
   EXAMPLE_GOAL,
   EXAMPLE_INTERFACE,
   EXAMPLE_TIMING,
 } from './canonical-example.js';
+import type { ReferenceModelDraft } from './types.js';
 
 /** No minimum/maximum check count: a fixed count is wrong on 94-100% of failing designs. */
 const CHECK_COUNT_RULE =
@@ -32,6 +37,10 @@ const STATE_RULE = [
   'so ece_reset_state returns the state right after EVERY reset, including any register',
   'whose reset value is not zero. ece_next_state returns the state after one clock edge',
   'that consumes `in`.',
+  'A registered output is itself a register, so what it shows now is part of the state: carry',
+  'it in ece_state, compute its next value in ece_next_state, and read it back in ece_expect.',
+  'Writing the pre-register expression over `in` instead states the value one edge EARLY and',
+  'mismatches at every step.',
 ].join('\n');
 
 /** The closed Role_Vocabulary and what each member drives, named explicitly (Req 4.1, 4.2). */
@@ -179,20 +188,52 @@ function describeHeaders(moduleInterface: ModuleInterface): string {
   ].join('\n');
 }
 
-/** The worked example: its interface, then each header with its body (Q-19). */
-function describeExample(): string {
-  const headers = referenceModelFunctionHeaders(EXAMPLE_INTERFACE);
+/** One worked example: its interface, then each header with its body (Q-19). */
+function describeExample(example: {
+  readonly lead: string;
+  readonly goal: string;
+  readonly moduleInterface: ModuleInterface;
+  readonly timingContract: TimingContract;
+  readonly draft: ReferenceModelDraft;
+}): string {
+  const headers = referenceModelFunctionHeaders(example.moduleInterface);
   const functions = [
-    [headers.resetState, EXAMPLE_DRAFT.resetStateBody],
-    [headers.nextState, EXAMPLE_DRAFT.nextStateBody],
-    [headers.expect, EXAMPLE_DRAFT.expectBody],
+    [headers.resetState, example.draft.resetStateBody],
+    [headers.nextState, example.draft.nextStateBody],
+    [headers.expect, example.draft.expectBody],
   ].flatMap(([header, body]) => [header, body, 'endfunction']);
+  const roles = example.draft.roles
+    .map((role) => `{"port": "${role.portName}", "role": "${role.role}"}`)
+    .join(', ');
   return [
-    'Example, for a different design. It shows the encoding only, never your design:',
-    EXAMPLE_GOAL,
-    describeInterface(EXAMPLE_INTERFACE, EXAMPLE_TIMING),
+    example.lead,
+    example.goal,
+    describeInterface(example.moduleInterface, example.timingContract),
     ...functions,
-    'roles: [{"port": "en", "role": "enable"}]',
+    `roles: [${roles}]`,
+  ].join('\n');
+}
+
+/** Both worked examples: the Moore shape, then the one whose output register is in the state. */
+function describeExamples(): string {
+  return [
+    describeExample({
+      lead: 'Example, for a different design. It shows the encoding only, never your design:',
+      goal: EXAMPLE_GOAL,
+      moduleInterface: EXAMPLE_INTERFACE,
+      timingContract: EXAMPLE_TIMING,
+      draft: EXAMPLE_DRAFT,
+    }),
+    '',
+    describeExample({
+      lead:
+        'Second example, showing a registered output that the input determines. Its value now ' +
+        'is a register, so the state carries that register and ece_expect reads it from `s`:',
+      goal: EXAMPLE2_GOAL,
+      moduleInterface: EXAMPLE2_INTERFACE,
+      timingContract: EXAMPLE2_TIMING,
+      draft: EXAMPLE2_DRAFT,
+    }),
   ].join('\n');
 }
 
@@ -216,7 +257,7 @@ export function buildReferenceModelInput(spec: Spec): ModelRequest {
     '',
     REPLY_FORMAT_RULE,
     '',
-    describeExample(),
+    describeExamples(),
     '',
     'Spec goal:',
     spec.goal,
