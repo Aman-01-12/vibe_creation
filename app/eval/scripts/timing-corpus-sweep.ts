@@ -215,6 +215,17 @@ async function main(): Promise<void> {
       results.push(...(parsed.designs ?? []));
     }
   }
+  // A design whose every Session THREW was recorded with `sessions: 0`, which is not a
+  // measurement - an outage mid-sweep would otherwise be frozen into the report as a result and
+  // skipped by every later resume. Drop those and re-run them; the same rule the cohort filter
+  // applies when reading a prior report.
+  const unmeasured = results.filter((result) => result.sessions === 0).map((r) => r.problemId);
+  if (unmeasured.length > 0) {
+    console.log(
+      `resume: re-running ${String(unmeasured.length)} design(s) recorded with no Session`,
+    );
+    results.splice(0, results.length, ...results.filter((result) => result.sessions > 0));
+  }
   const done = new Set(results.map((result) => result.problemId));
   const remaining = ordered.filter(({ problem }) => !done.has(problem.id));
   console.log(
