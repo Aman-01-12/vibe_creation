@@ -29,7 +29,8 @@
 //   own `report.json`, skips every design already recorded in it, and continues appending - so a
 //   relaunch costs only the designs that had not finished.
 //
-// Run: `node app/eval/dist/scripts/timing-corpus-sweep.js [--sessions N] [--limit M] [--resume DIR]`.
+// Run: `node app/eval/dist/scripts/timing-corpus-sweep.js [--sessions N] [--limit M]
+//      [--resume DIR] [--never-verified-from REPORT]`.
 // Paid.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -147,6 +148,28 @@ function aggregate(results: readonly DesignResult[]) {
   };
 }
 
+/** The value after a flag, or null when the flag is absent. */
+function argAfter(flag: string): string | null {
+  const at = process.argv.indexOf(flag);
+  return at === -1 ? null : (process.argv[at + 1] ?? null);
+}
+
+/**
+ * The problem ids a prior sweep report never verified, or null to sweep the whole corpus.
+ *
+ * `sessions > 0` excludes a design whose every Session THREW: it was never measured, so it is
+ * not evidence of a verification failure and re-running it proves nothing about a fix.
+ */
+async function neverVerifiedCohort(reportPath: string | null): Promise<ReadonlySet<string> | null> {
+  if (reportPath === null) return null;
+  const parsed = JSON.parse(await readFile(resolve(reportPath), 'utf8')) as {
+    readonly designs?: readonly DesignResult[];
+  };
+  const designs = parsed.designs ?? [];
+  if (designs.length === 0) throw new Error(`${reportPath} lists no designs`);
+  return new Set(designs.filter((d) => d.verified === 0 && d.sessions > 0).map((d) => d.problemId));
+}
+
 async function main(): Promise<void> {
   await requirePaidReRunApproval();
   const sessionsAt = process.argv.indexOf('--sessions');
@@ -154,12 +177,17 @@ async function main(): Promise<void> {
   const limitAt = process.argv.indexOf('--limit');
   const limit =
     limitAt === -1 ? Number.POSITIVE_INFINITY : Number(process.argv[limitAt + 1] ?? '0');
+  // `--never-verified-from REPORT` re-measures exactly the designs a prior sweep never verified,
+  // read from that report rather than a hand-kept list, so the cohort cannot drift from the
+  // measurement it is being compared against.
+  const cohort = await neverVerifiedCohort(argAfter('--never-verified-from'));
 
   const corpus = await importRtllmCorpus(
     new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH),
     localTimingDerivation(),
   );
   const ordered = [...corpus.problems]
+    .filter((problem) => cohort === null || cohort.has(problem.id))
     .map((problem) => ({ problem, kind: kindOf(problem.spec) }))
     .sort((a, b) => {
       const byKind = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind);
