@@ -28,4 +28,15 @@
 //     made it: each wrote the pre-register expression over `in`, one edge early, and all 64
 //     design x testbench pairs mismatched. v7 adds a second worked example whose state carries
 //     the output register, and STATE_RULE now states that rule and names the failure.
-export const REFERENCE_MODEL_PROMPT_VERSION = 7;
+// 8 - names the indexed part-select. A model packing an ARRAY into ece_state reaches for
+//     `s[i*W+W-1 : i*W]`, which does not compile because part-select bounds must be constant,
+//     and that one error killed 3 of the 4 non-compiling pool testbenches measured across
+//     autopsies of RAM (2 of 8 testbenches), LIFObuffer (1 of 8) and instr_reg. A testbench that
+//     does not compile can never be trusted, so each one shrinks the pool a strict majority is
+//     counted over.
+// 9 - completes v8's part-select rule. v8 cleared RAM's build failures outright (16 of 64 cells
+//     to 0) but a LIFObuffer draw then wrote `s[111 - i*16 +: 16][3:0]`: the indexed part-select
+//     v8 asked for, with a second range chained onto it, which iverilog also rejects since only
+//     the last index in a chain may be a range. Naming one half of the gotcha moved the error
+//     rather than removing it, so v9 names both and says to narrow via a local reg.
+export const REFERENCE_MODEL_PROMPT_VERSION = 9;

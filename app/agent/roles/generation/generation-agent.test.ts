@@ -45,6 +45,7 @@ import {
 } from '../../model-router/index.js';
 
 import { GenerationAgent } from './generation-agent.js';
+import { buildGenerationPrompt } from './prompt.js';
 import { SimulatorCandidateCompiler } from './candidate-compiler.js';
 import { parseCandidateRtl } from './model-output.js';
 import type { CandidateCompiler, CompileOutcome, GenerationProgressEvent } from './types.js';
@@ -427,5 +428,43 @@ describe('GenerationAgent.run - compiler seam over the Simulator + FakeSandboxRu
     expect(outcome.iterations).toBe(2);
     expect(router.calls[1]?.task).toBe('repair');
     expect(router.calls[1]?.prompt).toContain('syntax error');
+  });
+});
+
+// A clocked interface with no reset port has no edge at which a starting state is established,
+// so an uninitialised register holds x and no oracle can check the output. The rule is scoped to
+// that one shape: asserting its ABSENCE on the reset-bearing and clockless shapes is what keeps
+// it from silently becoming advice every design gets.
+describe('the generation prompt states the initial-state rule only where nothing else sets state', () => {
+  const RULE = 'declares a clock but NO reset port';
+
+  it('states it for a clocked interface that declares no reset port', () => {
+    const spec = approvedSpec();
+    const noReset: Spec = {
+      ...spec,
+      moduleInterface: {
+        ...spec.moduleInterface,
+        clocking: { clockName: 'clk', resetName: null, resetActiveLow: false },
+      },
+    };
+
+    expect(buildGenerationPrompt(inputFor(noReset))).toContain(RULE);
+  });
+
+  it('omits it when a reset port is declared, since the reset establishes the state', () => {
+    expect(buildGenerationPrompt(inputFor(approvedSpec()))).not.toContain(RULE);
+  });
+
+  it('omits it for a clockless interface, which has no register to initialise', () => {
+    const spec = approvedSpec();
+    const clockless: Spec = {
+      ...spec,
+      moduleInterface: {
+        ...spec.moduleInterface,
+        clocking: { clockName: null, resetName: null, resetActiveLow: false },
+      },
+    };
+
+    expect(buildGenerationPrompt(inputFor(clockless))).not.toContain(RULE);
   });
 });

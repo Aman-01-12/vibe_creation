@@ -430,7 +430,7 @@ describe('the constants reference-model-rendered-stimulus adds or moves, each as
     expect(SAMPLE_BUDGET).toBe(2048);
     expect(CONSENSUS_HARNESS_VERSION).toBe(3);
     expect(AUTHORING_CONTRACT_VERSION).toBe(2);
-    expect(REFERENCE_MODEL_PROMPT_VERSION).toBe(7);
+    expect(REFERENCE_MODEL_PROMPT_VERSION).toBe(9);
   });
 
   it('pins the rendered Stimulus_Mixer text: the additive constant, both multipliers, and the three shift amounts in order', () => {

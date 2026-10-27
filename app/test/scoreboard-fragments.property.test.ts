@@ -284,27 +284,29 @@ const MUTATIONS: readonly Mutation[] = [
 ];
 
 describe(PROPERTY_9, () => {
+  // Every mutation is applied to every drawn reply rather than sampled alongside it. Drawing a
+  // mutation uniformly left coverage probabilistic - 28 mutations over 280 runs miss one about
+  // 0.1% of the time, which the `seen.size` non-vacuity check then failed on. The mutation set
+  // is a fixed enumerable list, so iterating it makes the coverage structural instead.
   it('refuses each mutation of an accepted reply under the criterion it breaks', () => {
-    const seen = new Set<string>();
     fc.assert(
-      fc.property(arbAcceptedReply, fc.constantFrom(...MUTATIONS), (reply, mutation) => {
-        seen.add(mutation.name);
-        const parsed = parseFragmentReply(JSON.stringify(mutation.apply(reply)), TARGETS);
-        expect(parsed.ok).toBe(false);
-        if (parsed.ok) {
-          return;
+      fc.property(arbAcceptedReply, (reply) => {
+        for (const mutation of MUTATIONS) {
+          const parsed = parseFragmentReply(JSON.stringify(mutation.apply(reply)), TARGETS);
+          expect(parsed.ok).toBe(false);
+          if (parsed.ok) {
+            continue;
+          }
+          // An earlier key can refuse first only when it is the same fragment the mutation hit.
+          expect({ fragment: parsed.error.fragment, criterion: parsed.error.criterion }).toEqual({
+            fragment: mutation.fragment,
+            criterion: mutation.criterion,
+          });
+          expect(parsed.error.construct).toMatch(/^[ -~]{1,32}$/);
         }
-        // An earlier key can refuse first only when it is the same fragment the mutation hit.
-        expect({ fragment: parsed.error.fragment, criterion: parsed.error.criterion }).toEqual({
-          fragment: mutation.fragment,
-          criterion: mutation.criterion,
-        });
-        expect(parsed.error.construct).toMatch(/^[ -~]{1,32}$/);
       }),
-      propertyParameters({ numRuns: MUTATIONS.length * 10 }),
+      propertyParameters(),
     );
-    // Non-vacuity: every mutation was actually drawn.
-    expect(seen.size).toBe(MUTATIONS.length);
   });
 
   it('returns a result and never throws for any text', () => {
