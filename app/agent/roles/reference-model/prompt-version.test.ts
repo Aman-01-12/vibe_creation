@@ -93,13 +93,13 @@ function counterSpec(): Spec {
   };
 }
 
-const PINNED_DIGEST_V7 = '3ab50d336bee656c900bb0e0c8018ffbf006215a5aa49f15fefbe4adb8cb7b9d';
+const PINNED_DIGEST_V9 = '76dc061a0be483802b819f9e6ab7041b12bc3261bcd00c1073f257a056463901';
 
 describe('Reference_Model prompt is pinned to the prompt version (Req 5.1, 5.4-5.7)', () => {
-  it('given the counter fixture when the prompt is assembled at version 7 then its digest matches the pin', async () => {
-    expect(REFERENCE_MODEL_PROMPT_VERSION).toBe(7);
+  it('given the counter fixture when the prompt is assembled at version 9 then its digest matches the pin', async () => {
+    expect(REFERENCE_MODEL_PROMPT_VERSION).toBe(9);
     const prompt = buildReferenceModelInput(counterSpec()).prompt;
-    await expect(sha256Hex(prompt)).resolves.toBe(PINNED_DIGEST_V7);
+    await expect(sha256Hex(prompt)).resolves.toBe(PINNED_DIGEST_V9);
   });
 
   it('given no minimum/maximum check count language when the prompt is rendered then it names none', () => {

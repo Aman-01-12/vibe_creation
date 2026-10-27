@@ -41,6 +41,10 @@ const STATE_RULE = [
   'it in ece_state, compute its next value in ece_next_state, and read it back in ece_expect.',
   'Writing the pre-register expression over `in` instead states the value one edge EARLY and',
   'mismatches at every step.',
+  'To index a packed array in those bits, write the indexed part-select s[i*W +: W], taking',
+  'exactly the width you need. s[i*W+W-1 : i*W] does not compile, because part-select bounds',
+  'must be constant, and neither does s[i*W +: W][3:0], because only the last index in a',
+  'chain may be a range - assign the part-select to a local reg first if you must narrow it.',
 ].join('\n');
 
 /** The closed Role_Vocabulary and what each member drives, named explicitly (Req 4.1, 4.2). */

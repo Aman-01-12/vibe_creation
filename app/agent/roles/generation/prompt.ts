@@ -33,6 +33,29 @@ function interfaceContract(input: GenerationInput): string {
   ].join('\n');
 }
 
+/**
+ * The initial-state rule, stated ONLY for a clocked interface that declares no reset port.
+ *
+ * With no reset there is no edge at which a starting state is established, so a register the
+ * module never initialises holds `x` for the whole run and no oracle can check the output: `x`
+ * compares equal to nothing. Measured on `square_wave`, whose Spec asks for no reset and never
+ * names a starting value: 6 of 8 candidates omitted any initialisation and passed 0 of 8
+ * testbenches, while the 2 that initialised were the only ones to pass anything - and RTLLM's
+ * own verified reference opens with `initial begin wave_out = 0; count = 0; end`.
+ *
+ * Every other interface shape renders byte-identically, so a reset-bearing design is unaffected.
+ */
+function initialStateRule(input: GenerationInput): string {
+  const { clocking } = input.spec.moduleInterface;
+  if (clocking.clockName === null || clocking.resetName !== null) return '';
+  return [
+    'This interface declares a clock but NO reset port, so nothing establishes a starting',
+    'state for you: give every register an initial value, or it holds x for the whole run',
+    'and the module cannot be checked. Use the value the Spec implies, and 0 where it',
+    'implies none.',
+  ].join('\n');
+}
+
 /** Build the first-attempt generation prompt from the approved Spec (Req 6.1, 6.4). */
 export function buildGenerationPrompt(input: GenerationInput): string {
   const { spec } = input;
@@ -47,6 +70,7 @@ export function buildGenerationPrompt(input: GenerationInput): string {
       : '',
     spec.architecture.trim().length > 0 ? `Architecture notes: ${spec.architecture}` : '',
     '',
+    initialStateRule(input),
     'The module must compile with a standard Verilog compiler. Do not introduce ports',
     'that are absent from the interface above.',
     '',
