@@ -162,6 +162,21 @@ export {
 } from './stage0-quarantine.js';
 export { RTLLM_VALIDITY_OUTPUTS, validityOutputFor } from './validity-outputs.js';
 
+// The Legacy_Byte_Identity_Check's shared render logic (C7, task 1.1): the one request
+// builder both the capture CLI and the future byte comparison (task 5.1) import, so neither
+// can drift from the other.
+export {
+  legacyGoldenFileName,
+  legacyRoleDeclarationFor,
+  legacyGoldenRequestFor,
+  LEGACY_GOLDEN_NONCE,
+  LEGACY_GOLDEN_WATCHDOG_BUDGET_NS,
+  renderLegacyGoldenCorpus,
+  renderLegacyGoldenDesign,
+  type LegacyGoldenDesign,
+} from './legacy-byte-identity.js';
+export { LEGACY_GOLDEN_FIXTURE_DIR, runLegacyGoldenCapture } from './legacy-golden-capture-cli.js';
+
 // The five named populations of the timing derivation, every size computed from
 // membership so no count can double-subtract an already-excluded design.
 export {

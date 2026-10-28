@@ -33,6 +33,7 @@
     "eval:property-only": "node app/eval/dist/property-only/cli.js",
     "eval:consensus-regression": "node app/eval/dist/consensus-regression/cli.js",
     "corpus:fetch": "node app/eval/dist/corpus/fetch-cli.js",
+    "corpus:capture-legacy-golden": "node app/eval/dist/corpus/legacy-golden-capture-cli.js",
     "formal:anchors": "node app/test/dist/formal-anchor-measurement.js",
     "vault:manifest": "node scripts/vault-manifest.mjs",
     "vault:check": "node scripts/vault-manifest.mjs --check",
