@@ -305,10 +305,10 @@ describe(PROPERTY, () => {
     expect({ sawOneBitPort, sawWideBundle }).toEqual({ sawOneBitPort: true, sawWideBundle: true });
   });
 
-  // Explicit 20s timeout, well above the ~2.4s this takes in isolation: a full-bundle draw
-  // evaluates every bit position's whole SAMPLE_BUDGET sequence (up to 129 positions x 2048
-  // steps per fast-check run), which is CPU-bound enough that vitest's 5s default times out
-  // under full-suite worker contention even though the computation itself is not hanging.
+  // The suite's heaviest single test (5267ms measured under full-tier contention): a full-bundle
+  // draw evaluates every bit position's whole SAMPLE_BUDGET sequence (up to 129 positions x 2048
+  // steps per fast-check run). It is CPU-bound, not hanging. The timeout it needs is the global
+  // `testTimeout` in `vitest.config.ts`, which this test's measurement is what calibrates.
   it('a port carrying every bit as data is itself exercised (no enable ever narrows the population to nothing)', () => {
     fc.assert(
       fc.property(allDataBundleArbitrary(), (bundle) => {
@@ -323,7 +323,7 @@ describe(PROPERTY, () => {
       }),
       propertyParameters(),
     );
-  }, 20_000);
+  });
 
   // Constructed draws are a closed, frozen pair, exhausted directly rather than left to the
   // weighted `fc.oneof` above: chipAgent/_inbox/gotcha-a-closed-union-non-vacuity-row-should-be-exhausted-not-sampled.md
