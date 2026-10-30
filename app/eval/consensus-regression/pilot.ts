@@ -37,13 +37,18 @@ import {
   type Spec,
 } from '@app/core';
 import {
+  ENABLE_FRAME_PERIOD,
+  HOLD_FRAME_PERIOD,
   IcarusSimulatorAdapter,
   LocalWorkerRuntime,
   referenceModelFunctionHeaders,
   renderConsensusHarness,
   SAMPLE_BUDGET,
   SandboxToolRunner,
+  STROBE_PERIOD,
+  type InputRole,
   type ResourceLimits,
+  type RoleDeclaration,
   type SimulatorAdapter,
   type SourceFile,
 } from '@app/tools';
@@ -273,6 +278,237 @@ export async function judgeReply(
     failingSteps: located.failingSteps,
     sampledSteps: located.sampledSteps,
   };
+}
+
+// C16: the re-baselined mutation kill-rate comparison (Req 6.3, 6.4, 6.5, 6.7, 6.8). Free - both
+// arms are measured by the same probe over the same mutant set, through `judgeReply` above,
+// which takes no budget argument of its own and always renders at the shared SAMPLE_BUDGET.
+// `compareKillRates` still takes a budget per arm, so the withhold branch below has something
+// to be exercised against in a test, even though one constant feeding both arms means the two
+// can never actually differ in production.
+
+/**
+ * The one member a declaration is measured against. Typed as `InputRole` rather than left a bare
+ * string, so this single site fails to compile if `data` ever leaves the Role_Vocabulary.
+ */
+const DATA_ROLE: InputRole = 'data';
+
+/**
+ * Req 6.3: whether this design's Total_Role_Declaration obliges the kill-rate comparison, which
+ * it does once any input port carries a role other than `data`.
+ *
+ * Testing for a Strobe or a Held_Input instead would drop `multi_16bit`'s all-`enable`
+ * declaration - the one declaration this feature is judged on - out of the guardrail. Testing
+ * "not a Legacy_Role_Set" would drop it too, since `{data, enable}` IS that set.
+ */
+export function comparisonIsObliged(roles: RoleDeclaration): boolean {
+  return roles.some((entry) => entry.role !== DATA_ROLE);
+}
+
+/** One arm's kill rate (a 0-1 fraction) at the step budget it was measured at. */
+export interface KillRateReading {
+  readonly killRate: number;
+  readonly sampleBudget: number;
+}
+
+/** A reading stamped with the live SAMPLE_BUDGET, rather than a budget copied in by hand. */
+export function sharedBudgetReading(killRate: number): KillRateReading {
+  return { killRate, sampleBudget: SAMPLE_BUDGET };
+}
+
+/** Req 6.8: the two arms were measured at different step budgets, so no comparison is drawn. */
+export interface WithheldKillRateComparison {
+  readonly kind: 'withheld';
+  readonly probed: KillRateReading;
+  readonly baseline: KillRateReading;
+}
+
+/** Req 6.3, 6.4: both arms shared one Sample_Budget, so the comparison is meaningful. */
+export interface MutationKillRateComparison {
+  readonly kind: 'compared';
+  readonly sampleBudget: number;
+  readonly probed: KillRateReading;
+  readonly baseline: KillRateReading;
+  /** Req 6.4: whether the probed design's kill rate met or exceeded its re-measured baseline. */
+  readonly passed: boolean;
+}
+
+export type KillRateComparisonReport = WithheldKillRateComparison | MutationKillRateComparison;
+
+/**
+ * Compare a probed design's mutation kill rate against its own all-`data` kill rate,
+ * re-measured by the same probe over the same mutant set. Withholds the comparison (Req 6.8)
+ * when the two readings carry different budgets, rather than ever printing a comparison
+ * across two regimes.
+ */
+export function compareKillRates(
+  probed: KillRateReading,
+  baseline: KillRateReading,
+): KillRateComparisonReport {
+  if (probed.sampleBudget !== baseline.sampleBudget) {
+    return { kind: 'withheld', probed, baseline };
+  }
+  return {
+    kind: 'compared',
+    sampleBudget: probed.sampleBudget,
+    probed,
+    baseline,
+    passed: probed.killRate >= baseline.killRate,
+  };
+}
+
+/**
+ * Task 12.5's free hand-crafted reading (Req 6.3, 6.4): `compareKillRates` over the four
+ * `.eval-runs/handwritten-refmodels/probe-stimulus-transaction.mjs` designs, each probed with
+ * one hand-picked Strobe/Held_Input role against that same design's all-`data` kill rate,
+ * re-measured by the identical probe over the identical 24-mutant set, both at the shared
+ * `SAMPLE_BUDGET` of 2048 this constant reads live. This is the free exploratory reading, not
+ * the paid Acceptance_Measurement of task 14.4, which draws its own role declaration from a
+ * real Reference_Model rather than a role picked by hand.
+ *
+ * Role chosen per design, from reading each reply's own `ece_next_state` body:
+ * - `multi_16bit`: `start` (`in[0]`) is `strobe`, `ain`/`bin` are `hold`. `start` gates the
+ *   17-cycle shift-add multiply and `ain`/`bin` are the operands it consumes across those
+ *   cycles - the canonical pattern this feature was designed around.
+ * - `accu`: `valid_in` is `strobe`. It gates whether a new 4-sample accumulation BEGINS,
+ *   the same one-cycle-to-start role `start` plays in `multi_16bit`.
+ * - `RAM`: `write_data` is `hold`, as its main data input (no multi-step operation to gate).
+ * - `sequence_detector`: `data_in` is `hold`, its only port.
+ *
+ * Measured result (24 mutants, SAMPLE_BUDGET 2048, both arms through the same `judgeReply`):
+ *
+ * | design             | baseline (all-`data`) | probed | criterion 6.4 |
+ * |---------------------|-----------------------|--------|---------------|
+ * | `multi_16bit`       | 62.5%                 | 29.2%  | FAIL          |
+ * | `accu`              | 70.8%                 | 70.8%  | PASS (tie)    |
+ * | `RAM`               | 100.0%                | 100.0% | PASS, but see caveat below |
+ * | `sequence_detector` | 80.0%                 | 20.0%  | FAIL          |
+ *
+ * `multi_16bit` and `sequence_detector` fail criterion 6.4's bar: a Strobe pulses a port for
+ * one step per `STROBE_PERIOD` and zero the rest, which is vacuous for a gate that the design
+ * needs held HIGH for several cycles to complete an operation, and a Hold on a serial FSM's
+ * only input drives it to a fixed point in one or two cycles and keeps it there for the rest
+ * of the window, so the states reachable only by an alternating input are barely visited. Both
+ * are real findings about the mechanism, not a probe defect; see the two `chipAgent/_inbox`
+ * gotcha notes this task filed for the full account.
+ *
+ * `RAM`'s golden (unmutated) run no longer passes `judgeReply` at SAMPLE_BUDGET 2048, on the
+ * literal already-committed all-`data` reply, with no role change involved: its hand-written
+ * `ece_reset_state` assumes memory resets to zero, and the real RTL leaves an unwritten word at
+ * Verilog's X state, diverging once the longer run reads an address never written. Both arms
+ * read 100% because the model already disagrees with the correct golden behavior before any
+ * mutation is applied, so this pair is not a meaningful measurement of mutation sensitivity -
+ * `multi_16bit` is the one design of this feature's two judged designs this reading actually
+ * speaks to. `accu` is the one design where every port's chosen role left the kill rate
+ * unchanged.
+ *
+ * Task 16.1's validating probe (Req 6.3, 6.4, 8.9, 8.10), same script, same 24-mutant set, same
+ * shared `SAMPLE_BUDGET` of 2048, with each design's all-`data` arm re-measured in the same run.
+ * Each row declares ONE port with ONE role and leaves every other input port `data`, so the two
+ * arms differ in exactly one role declaration. The role per design is read off that design's
+ * GOLDEN RTL rather than off the reply, which is what separates this reading from 12.5's:
+ *
+ * | design            | role tested      | baseline (all-`data`) | probed | Enable_Frame_Period |
+ * |-------------------|------------------|-----------------------|--------|---------------------|
+ * | `multi_16bit`     | `start`=`enable` | 62.5%                 | 83.3%  | 20                  |
+ * | `serial2parallel` | `din_valid`=`enable` | NOT TAKEN         | -      | -                   |
+ * | `square_wave`     | `freq`=`hold`    | NOT TAKEN             | -      | -                   |
+ *
+ * `multi_16bit` clears criterion 6.4's bar by 20.8 points, and its baseline arm re-measured to
+ * the same 62.5% task 12.5 recorded. Its golden (unmutated) run passes on BOTH arms, so unlike
+ * `RAM` above this pair does measure mutation sensitivity. `start` as `enable` is asserted on
+ * every step of a 20-step frame but one, which is the sustained level `else if (!start) i <= 5'd0;`
+ * needs, where 12.5's one-step-per-67 `strobe` abandoned the multiply at 29.2%. This is the
+ * measurement criterion 8.9's retarget to the `enable` member rests on.
+ *
+ * The decision record's contingency - sweep the Enable_Frame_Period over 20, 24 and 32 should
+ * this land at or below baseline - did not fire and was not run, so the constant is untouched
+ * and 19 asserted steps per frame are empirically enough for the roughly 18 this design needs.
+ *
+ * The two witness rows could not be measured: neither `serial2parallel` nor `square_wave` has a
+ * hand-written reference reply under `.eval-runs/handwritten-refmodels/replies/`, and authoring
+ * one is a different task's work and a different kind of artifact. Criterion 8.10's `hold` target
+ * therefore still rests on the golden-RTL reading (`count == freq - 1` against a running counter)
+ * rather than on a kill-rate measurement, and the `enable` class is confirmed on one design, not
+ * two. Both rows are reported as not taken rather than estimated.
+ */
+
+/** Req 6.7's four recorded figures: 64-step readings, not comparable with either arm here. */
+export const HISTORICAL_KILL_RATE_FIGURES: readonly {
+  readonly designId: string;
+  readonly killRatePercent: number;
+}[] = [
+  { designId: 'multi_16bit', killRatePercent: 66.7 },
+  { designId: 'accu', killRatePercent: 70.8 },
+  { designId: 'RAM', killRatePercent: 47.8 },
+  { designId: 'sequence_detector', killRatePercent: 80.0 },
+];
+
+function formatPercent(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`;
+}
+
+/** Req 6.7: the four historical figures, stated as 64-step and not comparable here. */
+function renderHistoricalKillRateFigures(): string {
+  const figures = HISTORICAL_KILL_RATE_FIGURES.map(
+    (figure) => `${figure.killRatePercent.toFixed(1)}% for ${figure.designId}`,
+  ).join(', ');
+  return (
+    `The previously recorded figures of ${figures} were measured at a 64-step probe budget ` +
+    'and are not comparable with either arm of this comparison.'
+  );
+}
+
+/** One arm's reading as `<percent> (<budget> steps)`, for the withheld report. */
+function renderReading(reading: KillRateReading): string {
+  return `${formatPercent(reading.killRate)} (${String(reading.sampleBudget)} steps)`;
+}
+
+/**
+ * Req 6.5: below baseline, name the constant responsible rather than leaving it inferred - the
+ * Strobe_Period, the Hold_Frame_Period, the Enable_Frame_Period, the Distinct_Hold_Value_Count
+ * and the Sample_Budget both readings share. The Enable_Frame_Period is the constant responsible
+ * for a below-baseline `enable` reading, and at one released step per frame it is the first
+ * suspect for one. The count is the regime's own ceiling (30 whole Hold_Windows at the live
+ * SAMPLE_BUDGET and HOLD_FRAME_PERIOD), a fact about the Session both arms ran under, not a
+ * figure threaded through either arm's `KillRateReading`.
+ */
+function renderBelowBaselineDiagnostic(sampleBudget: number): string {
+  const distinctHoldValueCount = Math.floor(SAMPLE_BUDGET / HOLD_FRAME_PERIOD);
+  return (
+    `Below baseline: the regime both readings share is a Strobe_Period of ` +
+    `${String(STROBE_PERIOD)}, a Hold_Frame_Period of ${String(HOLD_FRAME_PERIOD)}, an ` +
+    `Enable_Frame_Period of ${String(ENABLE_FRAME_PERIOD)}, a Distinct_Hold_Value_Count ` +
+    `bounded by ${String(distinctHoldValueCount)}, and a Sample_Budget of ` +
+    `${String(sampleBudget)} steps.`
+  );
+}
+
+/**
+ * Render one design's kill-rate comparison as plain text (Req 6.3, 6.4, 6.5, 6.7, 6.8): the
+ * Sample_Budget statement with the pass/fail verdict, the below-baseline regime diagnostic when
+ * the probed reading fails, or both withheld readings with the budget each was taken at,
+ * followed by the four historical figures on every call regardless of outcome.
+ */
+export function renderKillRateComparison(
+  designId: string,
+  report: KillRateComparisonReport,
+): string {
+  const verdictLine =
+    report.kind === 'withheld'
+      ? `${designId}: comparison withheld - the two arms were measured at different step ` +
+        `budgets (probed ${renderReading(report.probed)}, baseline ` +
+        `${renderReading(report.baseline)}).`
+      : `${designId}: ${report.passed ? 'PASS' : 'FAIL'} - probed ` +
+        `${formatPercent(report.probed.killRate)} against re-measured all-\`data\` baseline ` +
+        `${formatPercent(report.baseline.killRate)}, both at a Sample_Budget of ` +
+        `${String(report.sampleBudget)} steps.`;
+  const lines = [verdictLine];
+  if (report.kind === 'compared' && !report.passed) {
+    lines.push(renderBelowBaselineDiagnostic(report.sampleBudget));
+  }
+  lines.push(renderHistoricalKillRateFigures());
+  return lines.join('\n');
 }
 
 function buildRouter(modelId: string): ModelRouter {

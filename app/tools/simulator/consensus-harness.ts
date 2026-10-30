@@ -134,8 +134,14 @@ import {
 
 import type { SourceFile } from '../sandbox/contract.js';
 
-/** Moves whenever the harness text, the clock period, the skew, or the Sample_Budget moves. */
-export const CONSENSUS_HARNESS_VERSION = 3;
+/**
+ * Moves whenever the harness text, the clock period, the skew, the Sample_Budget, or the
+ * Role_Vocabulary the renderer reads moves. 4: the Role_Vocabulary gained `strobe` and `hold`
+ * (Req 9.1). The value moves for EVERY Declared_Interface, including a Legacy_Interface whose
+ * rendered text is byte-identical, because the identity covers the renderer's inputs and not
+ * only its output text (Req 9.3). It is never rendered into harness text (Req 9.7).
+ */
+export const CONSENSUS_HARNESS_VERSION = 4;
 
 /** A hyphenated path, so no identifier-derived RTL or testbench path can collide with it. */
 export const CONSENSUS_HARNESS_PATH = 'ece-consensus-harness.v';
@@ -149,8 +155,8 @@ export const SAMPLE_SKEW_NS = 1;
 /** The cap on Sample_Points per run, which bounds the stdout stream by construction. */
 export const SAMPLE_BUDGET = 2048;
 
-/** The closed Role_Vocabulary; no Spec, Session, reply, or sweep argument extends it (Req 1.2, 1.9). */
-export const INPUT_ROLES = ['data', 'enable'] as const;
+/** The closed Role_Vocabulary; no Spec, Session, reply, or sweep argument extends it (Req 1.4, 1.5). */
+export const INPUT_ROLES = ['data', 'enable', 'strobe', 'hold'] as const;
 
 export type InputRole = (typeof INPUT_ROLES)[number];
 
@@ -182,6 +188,53 @@ export const ENABLE_FRAME_PERIOD = 20;
  * its own Degenerate_Constant_Control means lower it.
  */
 export const RESET_FRAME_PERIOD = 256;
+
+/**
+ * Steps between two consecutive Strobe assertions (Req 3.4-3.7). CHOSEN, not measured for kill
+ * rate: 67 is the smallest value satisfying all four constraints of `periodConstraintFault`
+ * with gcd(67, 20) = 1, so assertions visit all 20 enable-frame phases, and with
+ * lcm(67, 256) = 17152, so no mid-run reset assertion coincides with an assertion inside a
+ * 2048-step run. Prime, so it cannot alias with a future period constant either. Every round
+ * value in range FAILS: 64 and 128 divide 256, and 80, 100 and 120 are multiples of 20.
+ *
+ * Req 3.12: the floor this constant sets is headroom over the bounded operations in the corpus,
+ * not a completion guarantee - `radix2_div` requires `res_ready` before it releases a result, so
+ * no period carries a completion guarantee for it, and nothing here claims one.
+ */
+export const STROBE_PERIOD = 67;
+
+/**
+ * Steps between two Hold_Window boundaries when no Strobe is declared (Req 4.6, 4.9). Equal to
+ * STROBE_PERIOD by choice, so a Hold_Window is one length in both cases and the two cases'
+ * figures are comparable; an independent literal rather than an alias, because the two govern
+ * disjoint cases and a later measurement may move one without the other.
+ */
+export const HOLD_FRAME_PERIOD = 67;
+
+/** The ordered criteria `periodConstraintFault` checks, 3.4 before 3.5 before 3.6 (Req 3.11). */
+export type PeriodConstraintFault = '3.4' | '3.5' | '3.6';
+
+/**
+ * The first of criteria 3.4, 3.5, 3.6 that `period` fails, in that fixed order, or null (Req
+ * 3.11). Criterion 6.2's 128-step ceiling is folded into the 3.4 arm, because 6.2 is the reason
+ * 128 is the ceiling and a separate arm would leave it unenforced.
+ */
+export function periodConstraintFault(period: number): PeriodConstraintFault | null {
+  // Req 3.4, 6.2: at least 64 steps of operation headroom, and at most the 128-step ceiling that
+  // keeps 16 whole Hold_Windows inside one Sample_Budget.
+  if (!(period >= 64 && Math.floor(SAMPLE_BUDGET / period) >= 16)) {
+    return '3.4';
+  }
+  // Req 3.5: do not land on one fixed Enable_Frame_Period phase on every period.
+  if (period % ENABLE_FRAME_PERIOD === 0) {
+    return '3.5';
+  }
+  // Req 3.6: do not coincide with every mid-run Reset_Frame_Period assertion.
+  if (RESET_FRAME_PERIOD % period === 0) {
+    return '3.6';
+  }
+  return null;
+}
 
 /**
  * The sandbox worker's stdout retention ceiling, mirrored from `MAX_CAPTURED_STDOUT_BYTES`
@@ -430,7 +483,7 @@ export interface ConsensusHarnessRequest {
 }
 
 /** Refuse a value that would reach Verilog text as anything but a positive integer literal. */
-function requirePositiveSafeInteger(
+export function requirePositiveSafeInteger(
   fieldLabel: string,
   value: number,
   max: number,
@@ -446,7 +499,7 @@ function requirePositiveSafeInteger(
 }
 
 /** Refuse `name` unless it is a bounded plain Verilog identifier that is not a reserved keyword. */
-function requireVerilogIdentifier(fieldLabel: string, name: string): DomainError | null {
+export function requireVerilogIdentifier(fieldLabel: string, name: string): DomainError | null {
   if (
     name.length === 0 ||
     name.length > MAX_IDENTIFIER_LENGTH ||
@@ -565,31 +618,108 @@ export function packedPortSlices(
   return ports.map((port, index) => ({ name: port.name, ...inputBundleSlice(ports, index) }));
 }
 
+/** The ceiling a refusal reason's quoted port name or role text is bounded to (Req 2.11, 2.12). */
+const MAX_REFUSAL_TEXT_LENGTH = 64;
+
+/** Bound `text` to `MAX_REFUSAL_TEXT_LENGTH`, so an unbounded role or port name string reaching
+ * this function cannot grow the refusal reason without bound. */
+function boundedRefusalText(text: string): string {
+  return text.slice(0, MAX_REFUSAL_TEXT_LENGTH);
+}
+
 /**
- * Refuse `roles` unless it names every one of `inputPorts` exactly once, with no unknown port.
+ * Refuse the first `roles` entry naming a role outside `INPUT_ROLES` (Req 2.2 via 2.7). `PortRole
+ * .role` is typed as `InputRole`, so this branch is unreachable through the typed path - it
+ * exists anyway because criterion 2.7 requires the Harness_Renderer's own independent check,
+ * whether or not the type system also forbids the value (only a cast past `InputRole` reaches
+ * it, e.g. from an upstream regression).
+ */
+function requireRoleVocabularyMembership(roles: RoleDeclaration): DomainError | null {
+  const outsideVocabulary = roles.find((entry) => !INPUT_ROLES.includes(entry.role));
+  if (outsideVocabulary === undefined) {
+    return null;
+  }
+  return domainError(
+    'ROLE_OUTSIDE_VOCABULARY',
+    `role "${boundedRefusalText(outsideVocabulary.role)}" for port "${boundedRefusalText(outsideVocabulary.portName)}" is not a member of the Role_Vocabulary`,
+    'roles',
+  );
+}
+
+/** Refuse the first input port that `roles` names more than once (Req 2.3 via 2.7). */
+function requireNoDuplicateRolePort(roles: RoleDeclaration): DomainError | null {
+  const seen = new Set<string>();
+  for (const entry of roles) {
+    if (seen.has(entry.portName)) {
+      return domainError(
+        'INCOMPLETE_ROLE_DECLARATION',
+        `roles names input port "${boundedRefusalText(entry.portName)}" more than once`,
+        'roles',
+      );
+    }
+    seen.add(entry.portName);
+  }
+  return null;
+}
+
+/** Refuse the first `roles` entry naming a port `inputPorts` does not declare (Req 2.5 via 2.7). */
+function requireRolePortsDeclared(
+  inputPorts: readonly { readonly name: string }[],
+  roles: RoleDeclaration,
+): DomainError | null {
+  const inputNames = new Set(inputPorts.map((port) => port.name));
+  const undeclared = roles.find((entry) => !inputNames.has(entry.portName));
+  if (undeclared === undefined) {
+    return null;
+  }
+  return domainError(
+    'INCOMPLETE_ROLE_DECLARATION',
+    `roles names port "${boundedRefusalText(undeclared.portName)}", which is not a declared input port`,
+    'roles',
+  );
+}
+
+/** Refuse the first declared input port that `roles` omits (Req 2.4 via 2.7). */
+function requireEveryInputPortDeclared(
+  inputPorts: readonly { readonly name: string }[],
+  roles: RoleDeclaration,
+): DomainError | null {
+  const declaredNames = new Set(roles.map((entry) => entry.portName));
+  const omitted = inputPorts.find((port) => !declaredNames.has(port.name));
+  if (omitted === undefined) {
+    return null;
+  }
+  return domainError(
+    'INCOMPLETE_ROLE_DECLARATION',
+    `roles omits input port "${boundedRefusalText(omitted.name)}", so the declaration is not total`,
+    'roles',
+  );
+}
+
+/**
+ * Refuse `roles` unless it names a Role_Vocabulary member for every one of `inputPorts` exactly
+ * once, with no unknown port (Req 2.2, 2.3, 2.4, 2.5 via 2.7). Four independent fault classes,
+ * checked in this fixed order, each refused with its own reason naming exactly one class and the
+ * responsible port or role text (Req 2.11, 2.12) - the same shape criterion 2.11 already asks of
+ * the Role_Parser's own refusal reason. Reads only `inputPorts` and `roles`, no Role_Parser
+ * result, record, or refusal reason, which is what makes this the renderer's own independent
+ * re-derivation of the parser's answer rather than a read of a flag the parser set.
+ *
  * Re-checked here even though a parser upstream already checks it (C5): two mechanisms reaching
  * the same answer is the discipline this renderer already applies to the Sample_Budget. A silent
  * default for an unnamed port would turn an unnoticed parser regression into weaker stimulus in
  * every Session at once, so this refuses rather than defaults.
  */
-function requireTotalRoleDeclaration(
+export function requireTotalRoleDeclaration(
   inputPorts: readonly { readonly name: string }[],
   roles: RoleDeclaration,
 ): DomainError | null {
-  const declaredNames = roles.map((role) => role.portName);
-  const inputNames = new Set(inputPorts.map((port) => port.name));
-  const isTotal =
-    declaredNames.length === inputNames.size &&
-    new Set(declaredNames).size === declaredNames.length &&
-    declaredNames.every((name) => inputNames.has(name));
-  if (!isTotal) {
-    return domainError(
-      'INCOMPLETE_ROLE_DECLARATION',
-      'roles must name every input port of moduleInterface exactly once, with no unknown port',
-      'roles',
-    );
-  }
-  return null;
+  return (
+    requireRoleVocabularyMembership(roles) ??
+    requireNoDuplicateRolePort(roles) ??
+    requireRolePortsDeclared(inputPorts, roles) ??
+    requireEveryInputPortDeclared(inputPorts, roles)
+  );
 }
 
 /** `roles`'s role for `portName`, or `'data'` when `roles` carries no entry for it. */
@@ -602,7 +732,7 @@ function roleOf(roles: RoleDeclaration, portName: string): InputRole {
  * 2.12, 2.13). The statement sequence is verbatim from the probe that produced every splitmix
  * figure in the requirements, so it is copied rather than re-derived (C4).
  */
-function renderStimulusMixer(): readonly string[] {
+export function renderStimulusMixer(): readonly string[] {
   return [
     '// Stimulus_Mixer: the splitmix64 finalizer (Req 2.12, 2.13). `lane` keys the 64-bit slice',
     '// of a bundle wider than 64 bits; lane 0 is the expression the probe measured.',
@@ -623,10 +753,15 @@ function renderStimulusMixer(): readonly string[] {
 
 /**
  * Render `ece_stimulus`, the Stimulus_Function, over `inputPorts` and `roles` (Req 2.1 through
- * 2.8, 2.11 through 2.14; C5). One lane assignment per 64 bits of the input bundle, then one
- * overwrite per `enable`-role port over its own `packedPortSlices` slice, then the return.
+ * 2.8, 2.11 through 2.14, 3.1-3.3, 3.8-3.10, 4.1-4.5, 4.7, 4.8, 4.10; C3, C5). One lane assignment
+ * per 64 bits of the input bundle, then (only when a `hold`-role port is declared) one `v_hold`
+ * lane assignment per 64 bits keyed on the Hold_Window index in place of `step`, then one
+ * overwrite per `enable`/`strobe`/`hold`-role port over its own `packedPortSlices` slice, then
+ * the return. Each of the three role branches is a guarded emission site: a role absent from
+ * `roles` contributes zero characters, which is what keeps a Legacy_Interface's render
+ * Byte_Identical (Req 5.2, 5.4, 5.5).
  */
-function renderStimulusFunction(
+export function renderStimulusFunction(
   inputPorts: readonly { readonly name: string; readonly width: number }[],
   inputBundleWidth: number,
   roles: RoleDeclaration,
@@ -637,23 +772,53 @@ function renderStimulusFunction(
     '// enable-role port owns it.',
     `function automatic [${String(inputBundleWidth - 1)}:0] ece_stimulus(input [31:0] step);`,
     `  reg [${String(inputBundleWidth - 1)}:0] v;`,
-    '  begin',
   ];
+  const hasStrobe = inputPorts.some((port) => roleOf(roles, port.name) === 'strobe');
+  const hasHold = inputPorts.some((port) => roleOf(roles, port.name) === 'hold');
+  // Req 4.2, 4.3, 4.7: a Hold_Window is the Strobe_Period when a Strobe is declared too, so one
+  // Transaction is one Hold_Window; with no Strobe it is the independent Hold_Frame_Period.
+  const holdWindowPeriod = hasStrobe ? STROBE_PERIOD : HOLD_FRAME_PERIOD;
+  if (hasHold) {
+    lines.push(`  reg [${String(inputBundleWidth - 1)}:0] v_hold;`);
+  }
+  lines.push('  begin');
   const laneCount = Math.ceil(inputBundleWidth / 64);
   for (let lane = 0; lane < laneCount; lane += 1) {
     const low = lane * 64;
     const high = Math.min(inputBundleWidth, 64 * (lane + 1)) - 1;
     lines.push(`    v[${String(high)}:${String(low)}] = ece_mix(32'd${String(lane)}, step);`);
   }
-  for (const { name, high, low } of packedPortSlices(inputPorts)) {
-    if (roleOf(roles, name) !== 'enable') {
-      continue;
+  if (hasHold) {
+    // Req 4.1, 4.5: the held bundle is drawn from the same mixer, keyed on the Hold_Window index
+    // (step / holdWindowPeriod) rather than on step, so every held port's next value is drawn at
+    // the same window boundary from the same call (Req 4.4).
+    for (let lane = 0; lane < laneCount; lane += 1) {
+      const low = lane * 64;
+      const high = Math.min(inputBundleWidth, 64 * (lane + 1)) - 1;
+      lines.push(
+        `    v_hold[${String(high)}:${String(low)}] = ece_mix(32'd${String(lane)}, step / ${String(holdWindowPeriod)});`,
+      );
     }
+  }
+  for (const { name, high, low } of packedPortSlices(inputPorts)) {
+    const role = roleOf(roles, name);
     const width = high - low + 1;
-    // Req 2.6, 2.7: released one step in every ENABLE_FRAME_PERIOD, held asserted otherwise.
-    lines.push(
-      `    v[${String(high)}:${String(low)}] = {${String(width)}{(step % ${String(ENABLE_FRAME_PERIOD)}) != 0}};`,
-    );
+    if (role === 'enable') {
+      // Req 2.6, 2.7: released one step in every ENABLE_FRAME_PERIOD, held asserted otherwise.
+      lines.push(
+        `    v[${String(high)}:${String(low)}] = {${String(width)}{(step % ${String(ENABLE_FRAME_PERIOD)}) != 0}};`,
+      );
+    } else if (role === 'strobe') {
+      // Req 3.1-3.3: the exact inverse of the enable line above - asserted on exactly one step
+      // of every Strobe_Period, at one common value so a multi-bit Strobe reads as a level.
+      lines.push(
+        `    v[${String(high)}:${String(low)}] = {${String(width)}{(step % ${String(STROBE_PERIOD)}) == 0}};`,
+      );
+    } else if (role === 'hold') {
+      // Req 4.5: each Held_Input port reads its OWN slice of the shared held bundle, at the
+      // same bit positions it occupies in the input bundle.
+      lines.push(`    v[${String(high)}:${String(low)}] = v_hold[${String(high)}:${String(low)}];`);
+    }
   }
   lines.push('    ece_stimulus = v;', '  end', 'endfunction');
   return lines;

@@ -36,11 +36,15 @@ export {
   CONSENSUS_HARNESS_PATH,
   CONSENSUS_HARNESS_VERSION,
   ECE_STATE_W,
+  ENABLE_FRAME_PERIOD,
+  HOLD_FRAME_PERIOD,
   INPUT_ROLES,
+  RESET_FRAME_PERIOD,
   SAMPLE_BUDGET,
   SAMPLE_END_PREFIX,
   SAMPLE_LINE_PREFIX,
   SAMPLE_SKEW_NS,
+  STROBE_PERIOD,
   packedPortSlices,
   referenceModelFunctionHeaders,
   renderConsensusHarness,
@@ -52,3 +56,18 @@ export type {
   PortRole,
   RoleDeclaration,
 } from './consensus-harness.js';
+export {
+  NON_VACUITY_PROBE_PATH,
+  renderNonVacuityProbe,
+  STIM_END_PREFIX,
+  STIM_LINE_PREFIX,
+} from './non-vacuity-probe.js';
+export type { NonVacuityProbeRequest } from './non-vacuity-probe.js';
+export { readNonVacuity } from './non-vacuity-check.js';
+export type {
+  HoldWindowReading,
+  IncompleteNonVacuityReading,
+  NonVacuityOutcome,
+  NonVacuityReport,
+  StrobePeriodReading,
+} from './non-vacuity-check.js';

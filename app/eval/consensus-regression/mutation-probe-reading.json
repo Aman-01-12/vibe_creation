@@ -1,0 +1,22 @@
+[
+  {
+    "designId": "multi_16bit",
+    "probed": { "killRate": 0.833, "sampleBudget": 2048 },
+    "baseline": { "killRate": 0.625, "sampleBudget": 2048 }
+  },
+  {
+    "designId": "accu",
+    "probed": { "killRate": 0.708, "sampleBudget": 2048 },
+    "baseline": { "killRate": 0.708, "sampleBudget": 2048 }
+  },
+  {
+    "designId": "RAM",
+    "probed": { "killRate": 1.0, "sampleBudget": 2048 },
+    "baseline": { "killRate": 1.0, "sampleBudget": 2048 }
+  },
+  {
+    "designId": "sequence_detector",
+    "probed": { "killRate": 0.2, "sampleBudget": 2048 },
+    "baseline": { "killRate": 0.8, "sampleBudget": 2048 }
+  }
+]

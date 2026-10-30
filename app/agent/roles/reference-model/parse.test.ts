@@ -109,18 +109,52 @@ describe('parseReferenceModelDraft', () => {
   });
 
   it('given a role outside the vocabulary when parsed then it refuses with the vocabulary reason', () => {
-    const result = parse(VALID, [{ port: 'en', role: 'strobe' }]);
+    // Not 'strobe': that name joined the Role_Vocabulary itself, so a hardcoded guess here would
+    // stop being outside it the moment the vocabulary widened to include it.
+    const result = parse(VALID, [{ port: 'en', role: 'not_a_real_role' }]);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.reason).toBe('model output named a role outside {data, enable}');
+      expect(result.error.reason).toBe(
+        'model output named a role outside {data, enable, strobe, hold}',
+      );
+    }
+  });
+
+  it('given an empty port name when parsed then it refuses at the envelope step, not as an undeclared port', () => {
+    const result = parse(VALID, [{ port: '', role: 'data' }]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe('model output named an empty port name for role "data"');
+    }
+  });
+
+  it('given more role entries than the interface declares input ports when parsed then it refuses, even though every entry is otherwise well-formed', () => {
+    const result = parse(VALID, [
+      { port: 'en', role: 'data' },
+      { port: 'extra', role: 'data' },
+    ]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe(
+        'model output carried more role entries than the interface declares input ports',
+      );
     }
   });
 
   it('given one input port named twice when parsed then it refuses with the duplicate reason', () => {
-    const result = parse(VALID, [
-      { port: 'en', role: 'data' },
-      { port: 'en', role: 'enable' },
-    ]);
+    // Two input ports declared, so two entries is not ALSO a too-many-entries fault - this
+    // isolates the duplicate-port check from the entry-count check added for criterion 2.10.
+    const twoInputInterface: ModuleInterface = {
+      ...MODULE_INTERFACE,
+      ports: [...MODULE_INTERFACE.ports, { name: 'en2', direction: 'input', width: 1 }],
+    };
+    const result = parseReferenceModelDraft(
+      reply(VALID, [
+        { port: 'en', role: 'data' },
+        { port: 'en', role: 'enable' },
+      ]),
+      twoInputInterface,
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.reason).toBe('model output named one input port twice');

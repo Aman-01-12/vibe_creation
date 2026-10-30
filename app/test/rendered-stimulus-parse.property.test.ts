@@ -155,6 +155,13 @@ function caseNearMissOf(role: InputRole): string {
 }
 
 /**
+ * Outside the Role_Vocabulary no matter how many members it grows to: a hardcoded guess (e.g.
+ * `strobe`) stops being out-of-vocabulary the moment that guess becomes a real member, which is
+ * exactly what happened when this vocabulary widened past `{data, enable}`.
+ */
+const OUT_OF_VOCABULARY_ROLE = `${INPUT_ROLES.join('-')}-not-a-role`;
+
+/**
  * Every closed defect kind Property 1 states for the Role_Declaration, over `moduleInterface`'s
  * own input ports.
  *
@@ -195,7 +202,7 @@ function rolesCasesFor(moduleInterface: ModuleInterface): RolesCase[] {
     },
     {
       kind: 'out-of-vocabulary-role',
-      value: [{ port: firstInputName, role: 'strobe' }, ...restAsData],
+      value: [{ port: firstInputName, role: OUT_OF_VOCABULARY_ROLE }, ...restAsData],
       ok: false,
     },
     {

@@ -4,6 +4,8 @@
 // DomainError; a module name that is a Verilog keyword refuses; two renders of one request are
 // byte-identical.
 
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import { makeTimingContract } from '@app/core';
@@ -13,11 +15,15 @@ import {
   CONSENSUS_HARNESS_PATH,
   CONSENSUS_HARNESS_VERSION,
   ENABLE_FRAME_PERIOD,
+  HOLD_FRAME_PERIOD,
+  INPUT_ROLES,
   packedPortSlices,
+  periodConstraintFault,
   renderConsensusHarness,
   RESET_FRAME_PERIOD,
   SAMPLE_BUDGET,
   sizedSampleBudget,
+  STROBE_PERIOD,
   type ConsensusHarnessRequest,
   type RoleDeclaration,
 } from './consensus-harness.js';
@@ -86,8 +92,8 @@ function moduleDeclarationCount(text: string): number {
 }
 
 describe('renderConsensusHarness', () => {
-  it('is at version 3', () => {
-    expect(CONSENSUS_HARNESS_VERSION).toBe(3);
+  it('is at version 4', () => {
+    expect(CONSENSUS_HARNESS_VERSION).toBe(4);
   });
 
   it('renders text declaring exactly one top module', () => {
@@ -616,5 +622,101 @@ describe('the mid-run reset (C6)', () => {
     expect(taskText.indexOf("ece_reset_drive = 1'b0;")).toBeLessThan(
       taskText.indexOf("ece_reset_drive = 1'b1;"),
     );
+  });
+});
+
+describe('STROBE_PERIOD, HOLD_FRAME_PERIOD, and periodConstraintFault (Req 3.4-3.7, 3.11, 3.12, 4.6, 4.9, 6.2, 6.9)', () => {
+  it('pins both periods at 67, the smallest value satisfying all four constraints at once', () => {
+    expect(STROBE_PERIOD).toBe(67);
+    expect(HOLD_FRAME_PERIOD).toBe(67);
+    expect(periodConstraintFault(STROBE_PERIOD)).toBeNull();
+    expect(periodConstraintFault(HOLD_FRAME_PERIOD)).toBeNull();
+  });
+
+  it('refuses a period below the 64-step floor or above the 16-window ceiling, naming 3.4', () => {
+    expect(periodConstraintFault(63)).toBe('3.4');
+    expect(periodConstraintFault(129)).toBe('3.4');
+  });
+
+  // design.md's own enumerated claim, C2: "Every round value in range FAILS: 64 and 128 divide
+  // 256, and 80, 100 and 120 are multiples of 20." Pinned here so rounding either period back to
+  // one of these five re-breaks the criterion loudly instead of silently.
+  it.each([
+    [64, '3.6'],
+    [128, '3.6'],
+    [80, '3.5'],
+    [100, '3.5'],
+    [120, '3.5'],
+  ] as const)(
+    'refuses the round period %i, naming %s in the fixed 3.4, 3.5, 3.6 order',
+    (period, fault) => {
+      expect(periodConstraintFault(period)).toBe(fault);
+    },
+  );
+});
+
+// Task 2.2 (C1; Req 1.4, 1.10): INPUT_ROLES is the Role_Vocabulary's one declared site. The
+// design classifies the frozen-set assertion below as an EXAMPLE rather than a property, so this
+// is a unit test. The renderer already reads that one site (task 2.1); the Role_Parser's refusal
+// reason (task 7.4) and the Reference_Model_Prompt's ROLE_RULE/REPLY_FORMAT_RULE (task 10.1)
+// still restate a member's spelling as literal text instead, so criterion 1.10 is only fully
+// satisfied once those two tasks land. The scan below covers all three sites now, on purpose
+// finding the latter two until then.
+describe("INPUT_ROLES is the Role_Vocabulary's one site; no other site restates a member (Req 1.4, 1.10)", () => {
+  it('pins the four members in order: data, enable, strobe, hold', () => {
+    expect(INPUT_ROLES).toEqual(['data', 'enable', 'strobe', 'hold']);
+  });
+
+  /**
+   * Two distinct Role_Vocabulary members joined directly by a comma, "or", or "|" - the shape a
+   * hardcoded listing takes (`{data, enable}`, "`data` or `enable`", `"data" | "enable"`) -
+   * rather than read from INPUT_ROLES. The join must be direct so a sentence that states one
+   * role per clause (ROLE_RULE's own "`data` may change... `enable` is held...") is not swept in.
+   */
+  const RESTATED_VOCABULARY_PATTERN =
+    /\b(?:data|enable|strobe|hold)\b['"`]?\s*(?:,|\bor\b|\|)\s*['"`]?\b(?:data|enable|strobe|hold)\b/gi;
+
+  /** Every restated-vocabulary match in `source`, with INPUT_ROLES's own definition excluded. */
+  function restatedVocabularyIn(source: string): readonly string[] {
+    const withoutDefinition = source
+      .split('\n')
+      .filter((line) => !line.includes('INPUT_ROLES ='))
+      .join('\n');
+    return [...withoutDefinition.matchAll(RESTATED_VOCABULARY_PATTERN)].map((match) => match[0]);
+  }
+
+  it('catches a synthetic restated pair, so the pattern above is not one that would pass on nothing', () => {
+    expect(restatedVocabularyIn('refused: role must be data or enable')).toEqual([
+      'data or enable',
+    ]);
+  });
+
+  it('finds no restated member spelling in the renderer, which already reads the one site (task 2.1)', () => {
+    const rendererSource = readFileSync(new URL('./consensus-harness.ts', import.meta.url), 'utf8');
+    expect(restatedVocabularyIn(rendererSource)).toEqual([]);
+  });
+
+  // EXPECTED TO FAIL until task 7.4 lands: the refusal reason hardcodes "{data, enable}" instead
+  // of reading INPUT_ROLES (criterion 1.10 is not yet satisfied at this site). Task 7.4 removes
+  // the literal; once it does, this assertion starts passing on its own and should be folded into
+  // a plain, uncommented expectation rather than left here.
+  it("finds the parser's refusal reason restating the vocabulary as '{data, enable}' (closed by task 7.4)", () => {
+    const parserSource = readFileSync(
+      new URL('../../agent/roles/reference-model/parse.ts', import.meta.url),
+      'utf8',
+    );
+    expect(restatedVocabularyIn(parserSource)).toEqual([]);
+  });
+
+  // EXPECTED TO FAIL until task 10.1 lands: ROLE_RULE states "`data` or `enable`" and
+  // REPLY_FORMAT_RULE states `"data" | "enable"`, both hardcoded instead of interpolated from
+  // INPUT_ROLES. Task 10.1 replaces both; once it does, this assertion starts passing on its own
+  // and should be folded into a plain, uncommented expectation rather than left here.
+  it("finds the prompt's ROLE_RULE and REPLY_FORMAT_RULE restating the vocabulary (closed by task 10.1)", () => {
+    const promptSource = readFileSync(
+      new URL('../../agent/roles/reference-model/prompt.ts', import.meta.url),
+      'utf8',
+    );
+    expect(restatedVocabularyIn(promptSource)).toEqual([]);
   });
 });

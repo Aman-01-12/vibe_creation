@@ -1,0 +1,85 @@
+{
+  "designs": [
+    {
+      "problemId": "rtllm/arithmetic/adder_16bit",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/arithmetic/adder_8bit",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/arithmetic/adder_bcd",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/arithmetic/comparator_3bit",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/arithmetic/comparator_4bit",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/arithmetic/multi_8bit",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/arithmetic/sub_64bit",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/control/JC_counter",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/control/counter_12",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/control/ring_counter",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/control/up_down_counter",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/memory/LFSR",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/memory/right_shifter",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/miscellaneous/calendar",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/miscellaneous/edge_detect",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/miscellaneous/freq_div",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/miscellaneous/freq_divbyeven",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/miscellaneous/parallel2serial",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/miscellaneous/pe",
+      "sessionCount": 3
+    },
+    {
+      "problemId": "rtllm/miscellaneous/signal_generator",
+      "sessionCount": 3
+    }
+  ],
+  "citedFrom": "chipAgent/_inbox/decision-the-always-verified-set-reconciles-to-these-20-exact-design-ids-from-the-prior-sweep-and-the-fix-resweep-combined.md"
+}

@@ -1208,6 +1208,45 @@ function recordedCriterion(manifestText: string | null): unknown {
   }
 }
 
+/**
+ * The distinct `configHash` identities present among `records`, in first-seen order.
+ *
+ * Reads the SAME field the existing per-run filters already compare on (`record.configHash`,
+ * see `campaignLines`'s `own` above and `summarizeRecords`'s own `scoped`), so this cannot end
+ * up deciding "same experiment" by a different rule than the filters it sits beside (Req 9.8).
+ */
+export function distinctConfigHashes(records: readonly SweepSampleRecord[]): readonly string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const record of records) {
+    if (!seen.has(record.configHash)) {
+      seen.add(record.configHash);
+      ordered.push(record.configHash);
+    }
+  }
+  return ordered;
+}
+
+/** The fixed label criterion 9.8's pooling refusal is printed under. */
+export const POOLED_IDENTITY_REFUSAL_LABEL = 'eval sweep: refusing to pool figures' as const;
+
+/**
+ * Criterion 9.8's refusal (Req 9.8): when `identities` holds more than one distinct
+ * `configHash`, no pooled figure may be reported over the records they were read from. This
+ * is the half criterion 9.5's comparability sentence does not cover on its own - a sentence
+ * is only printed, this is enforced - and it is named rather than silently dropped, so an
+ * operator can split the results log instead of guessing why summarizing it was refused.
+ */
+export function pooledIdentityRefusalLines(identities: readonly string[]): readonly string[] {
+  return [
+    POOLED_IDENTITY_REFUSAL_LABEL,
+    `${String(identities.length)} distinct configuration identities were found in this ` +
+      'results log, so no pooled figure is reported over them: a results log must hold one ' +
+      'experiment to be summarized.',
+    `identities present: ${[...identities].sort().join(', ')}`,
+  ];
+}
+
 /** Aggregate and persist the summary for a run directory. */
 async function writeSummary(
   outputDir: string,
@@ -1374,8 +1413,16 @@ export async function summarizeSweepRun(runDir: string): Promise<SweepCliResult>
   if (text.trim().length === 0) {
     return { exitCode: 1, lines: ['eval sweep: no results log found in that directory'] };
   }
-  const ks = await ksFromManifest(runDir);
   const parsed = parseResultsLog(text);
+  // Enforced here rather than only in the printed sentence (Req 9.8): this is the one path
+  // that summarizes with `configHash: null`, which is `summarizeRecords`'s own "pool
+  // everything present" mode - the exact mode a results log holding two experiments must
+  // never be allowed to reach.
+  const identities = distinctConfigHashes(parsed.records);
+  if (identities.length > 1) {
+    return { exitCode: 1, lines: pooledIdentityRefusalLines(identities) };
+  }
+  const ks = await ksFromManifest(runDir);
   const summary = summarizeRecords(parsed.records, ks ?? [1], null, parsed);
   const note =
     ks === null ? ['note: the run manifest was unreadable, so only pass@1 is reported'] : [];

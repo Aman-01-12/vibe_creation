@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -30,7 +31,9 @@ import {
   artifactStoreDeps,
   AuthFailureWatch,
   buildPropertySetGate,
+  distinctConfigHashes,
   parseSweepArgs,
+  pooledIdentityRefusalLines,
   runExitStatus,
   runSweep,
   runSweepCli,
@@ -41,7 +44,7 @@ import {
 import type { SweepArmConfig, SweepConfig } from './config.js';
 import { parseSweepConfig } from './config-parse.js';
 import type { SweepPropertySetGate, SweepRunResult } from './runner.js';
-import type { ResultsLogPort } from './results-log.js';
+import type { ResultsLogPort, SweepSampleRecord } from './results-log.js';
 import {
   checkCorpus,
   checkCredential,
@@ -523,6 +526,93 @@ describe('summarizeSweepRun', () => {
     expect(result.lines.join('\n')).toContain('no results log');
   });
 });
+
+describe('distinctConfigHashes and the pooling guard (Req 9.8)', () => {
+  /** A record for a helper that reads only `configHash`; every other field is irrelevant. */
+  function withIdentity(configHash: string): SweepSampleRecord {
+    return { configHash } as unknown as SweepSampleRecord;
+  }
+
+  it('returns one identity when every record shares it', () => {
+    const records = [withIdentity('a'), withIdentity('a'), withIdentity('a')];
+
+    expect(distinctConfigHashes(records)).toEqual(['a']);
+  });
+
+  it('names every distinct identity present, in first-seen order, with no duplicate', () => {
+    const records = [withIdentity('b'), withIdentity('a'), withIdentity('b')];
+
+    expect(distinctConfigHashes(records)).toEqual(['b', 'a']);
+  });
+
+  it('returns nothing for an empty population, which is not a pooling violation', () => {
+    expect(distinctConfigHashes([])).toEqual([]);
+  });
+
+  it('names every identity present when more than one was found', () => {
+    const lines = pooledIdentityRefusalLines(['b', 'a']);
+
+    expect(lines.join('\n')).toContain('a, b');
+    expect(lines.join('\n')).toContain('2');
+  });
+});
+
+describe(
+  'Feature: stimulus-transaction-structure, Property 23: A pooled figure exists only ' +
+    'under one identity',
+  () => {
+    /** A record for the guard, which reads only `configHash`; every other field is irrelevant. */
+    function withIdentity(configHash: string): SweepSampleRecord {
+      return { configHash } as unknown as SweepSampleRecord;
+    }
+
+    /**
+     * A hex-digest-shaped identity: long enough that it cannot coincidentally appear as a
+     * substring of the refusal's fixed English sentence, the same needle-collision gotcha
+     * `rendered-stimulus-layout.property.test.ts` guards against for a different renderer.
+     */
+    function identityArbitrary(): fc.Arbitrary<string> {
+      return fc
+        .array(fc.constantFrom(...'0123456789abcdef'.split('')), { minLength: 8, maxLength: 16 })
+        .map((chars) => chars.join(''));
+    }
+
+    it('reports a pooled figure iff exactly one identity is present, naming every identity otherwise (Req 9.8)', () => {
+      fc.assert(
+        fc.property(
+          fc.uniqueArray(identityArbitrary(), { minLength: 1, maxLength: 6 }),
+          fc.integer({ min: 1, max: 4 }),
+          (identities, repeats) => {
+            // The distinct population, repeated whole `repeats` times, so dedup is exercised
+            // against real noise rather than merely assumed.
+            const records = Array.from({ length: repeats }, () => identities)
+              .flat()
+              .map(withIdentity);
+            const found = distinctConfigHashes(records);
+            const exactlyOneIdentity = identities.length === 1;
+
+            // Dedup is faithful to the distinct population drawn, regardless of the repeats.
+            expect(found).toEqual(identities);
+
+            // Both directions of the if-and-only-if: `summarizeSweepRun`'s guard
+            // (`identities.length > 1`) does not fire exactly when one identity is present,
+            // which is exactly when a pooled figure is reported rather than refused.
+            expect(found.length === 1).toBe(exactlyOneIdentity);
+
+            if (!exactlyOneIdentity) {
+              // More than one identity: no pooled figure, and every identity present is
+              // named in the refusal.
+              const refusalText = pooledIdentityRefusalLines(found).join('\n');
+              for (const identity of identities) {
+                expect(refusalText).toContain(identity);
+              }
+            }
+          },
+        ),
+      );
+    });
+  },
+);
 
 describe('runSweepCli', () => {
   it('prints usage and exits non-zero for a malformed invocation', async () => {
