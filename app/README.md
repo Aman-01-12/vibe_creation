@@ -56,6 +56,7 @@ app/
   web/         # Editor, Display_Layer, Waveform_Viewer, Schematic_View, Live_Run
   eval/        # Eval_Harness + the eval corpora
     corpus/    # RTLLM import (pinned fetch) + the independent golden-testbench judge
+    sweep/     # the sweep runner: campaign configs, pass@k aggregation, transport throttling
     gate/      # the ratcheting pass@k CI gate
   test/        # shared property generators + integration fixtures
 ```
