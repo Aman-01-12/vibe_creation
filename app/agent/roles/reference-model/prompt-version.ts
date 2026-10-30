@@ -39,4 +39,21 @@
 //     v8 asked for, with a second range chained onto it, which iverilog also rejects since only
 //     the last index in a chain may be a range. Naming one half of the gotcha moved the error
 //     rather than removing it, so v9 names both and says to narrow via a local reg.
-export const REFERENCE_MODEL_PROMPT_VERSION = 9;
+// 10 - widens the Role_Vocabulary to four members and restates ROLE_RULE as one flat list.
+//      Under 9 the rule named two members inside a prose sentence and restricted `enable` with
+//      an `only when` qualifier in the rule's last position; 0 of 8 draws on multi_16bit
+//      declared any port `enable`, so a measured member went unused. v10 gives all four members
+//      the same three-part statement - name, driven step pattern, selecting port behaviour -
+//      with no member described as an exception, and names `strobe` for a port whose assertion
+//      begins a multi-step operation and `hold` for a port such an operation consumes.
+// 11 - names the mechanism that separates `strobe` from `enable`. v10 selected `strobe` on "an
+//      operation the Spec describes as taking more than one step to complete", which is equally
+//      true of a port whose deassertion ABANDONS that operation: multi_16bit's `start` and
+//      serial2parallel's `din_valid` both reset their operation when the port drops
+//      (`else if (!start) i <= 5'd0;` in the golden RTL). The free probe measured multi_16bit's
+//      `start` at 29.2% as `strobe`, 62.5% as `data` and 83.3% as `enable`, so v10's wording
+//      steered toward the worst of the three. v11 adds the discriminating clause to both
+//      entries: `strobe` now also requires the operation to run to completion without the port
+//      staying asserted, and `enable` now also covers a port the Spec requires asserted for a
+//      whole multi-step operation.
+export const REFERENCE_MODEL_PROMPT_VERSION = 11;

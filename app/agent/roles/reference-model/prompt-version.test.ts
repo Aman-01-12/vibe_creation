@@ -10,6 +10,7 @@ import {
   type Spec,
   type TimingContract,
 } from '@app/core';
+import { INPUT_ROLES } from '@app/tools';
 
 import { checkAuthoringContract } from './authoring-contract.js';
 import { EXAMPLE_DRAFT } from './canonical-example.js';
@@ -93,13 +94,13 @@ function counterSpec(): Spec {
   };
 }
 
-const PINNED_DIGEST_V9 = '76dc061a0be483802b819f9e6ab7041b12bc3261bcd00c1073f257a056463901';
+const PINNED_DIGEST_V11 = '4be070b4768e37b6cc678a1ea85ee437791d6602d330f7f71729a082a053ff83';
 
 describe('Reference_Model prompt is pinned to the prompt version (Req 5.1, 5.4-5.7)', () => {
-  it('given the counter fixture when the prompt is assembled at version 9 then its digest matches the pin', async () => {
-    expect(REFERENCE_MODEL_PROMPT_VERSION).toBe(9);
+  it('given the counter fixture when the prompt is assembled at version 11 then its digest matches the pin', async () => {
+    expect(REFERENCE_MODEL_PROMPT_VERSION).toBe(11);
     const prompt = buildReferenceModelInput(counterSpec()).prompt;
-    await expect(sha256Hex(prompt)).resolves.toBe(PINNED_DIGEST_V9);
+    await expect(sha256Hex(prompt)).resolves.toBe(PINNED_DIGEST_V11);
   });
 
   it('given no minimum/maximum check count language when the prompt is rendered then it names none', () => {
@@ -119,7 +120,9 @@ describe('Reference_Model prompt is pinned to the prompt version (Req 5.1, 5.4-5
 
   it('given the counter fixture when the prompt is rendered then it states the roles vocabulary and the Sample_Budget', () => {
     const prompt = buildReferenceModelInput(counterSpec()).prompt;
-    expect(prompt).toContain('`data` or `enable`');
+    for (const role of INPUT_ROLES) {
+      expect(prompt).toContain(`  ${role} - `);
+    }
     expect(prompt).toMatch(
       /Sample_Budget: ece_next_state and ece_expect are authored against \d+ steps/,
     );

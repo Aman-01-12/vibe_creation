@@ -84,6 +84,7 @@ import {
 import {
   PeerCalibratedMutationStrengthGate,
   judgeMutationStrength,
+  type MutantRunRecord,
   type MutationGateOutcome,
   type MutationStrengthRequest,
 } from '../agent/consensus/mutation-strength-gate.js';
@@ -380,7 +381,9 @@ describe('ReferenceModelRequest carries no field for RTL, a signature, or a log,
   it('asks for a Role_Declaration instead of an ece_stimulus header or body', () => {
     const prompt = buildReferenceModelInput(referenceModelFixtureSpec()).prompt;
     expect(prompt).not.toContain('ece_stimulus');
-    expect(prompt).toContain('`data` or `enable`');
+    for (const role of INPUT_ROLES) {
+      expect(prompt).toContain(`  ${role} - `);
+    }
   });
 });
 
@@ -424,13 +427,13 @@ describe('ConsensusRegressionConfigIdentity gains no identity field for this fea
 
 describe('the constants reference-model-rendered-stimulus adds or moves, each asserted once (C1, C4, C7, C10)', () => {
   it('pins INPUT_ROLES, ENABLE_FRAME_PERIOD, RESET_FRAME_PERIOD, SAMPLE_BUDGET, and the three bumped versions', () => {
-    expect(INPUT_ROLES).toEqual(['data', 'enable']);
+    expect(INPUT_ROLES).toEqual(['data', 'enable', 'strobe', 'hold']);
     expect(ENABLE_FRAME_PERIOD).toBe(20);
     expect(RESET_FRAME_PERIOD).toBe(256);
     expect(SAMPLE_BUDGET).toBe(2048);
-    expect(CONSENSUS_HARNESS_VERSION).toBe(3);
+    expect(CONSENSUS_HARNESS_VERSION).toBe(4);
     expect(AUTHORING_CONTRACT_VERSION).toBe(2);
-    expect(REFERENCE_MODEL_PROMPT_VERSION).toBe(9);
+    expect(REFERENCE_MODEL_PROMPT_VERSION).toBe(11);
   });
 
   it('pins the rendered Stimulus_Mixer text: the additive constant, both multipliers, and the three shift amounts in order', () => {
@@ -474,5 +477,32 @@ describe('the Mutation_Strength_Gate is untouched by this feature (Req 7.1-7.5)'
     expect(harnessSource).not.toMatch(/\bMUTATION_OPERATORS\b/);
     expect(harnessSource).not.toMatch(/\bgenerateMutants\b/);
     expect(harnessSource).not.toMatch(/\bMutationOperatorId\b/);
+  });
+
+  it('pins the gate to its current pass condition - zero survivors among the required mutant runs (stimulus-transaction-structure C16, Req 6.6)', () => {
+    // A no-change pin, in the same build-time style as the version constants pinned further
+    // below in this file: this feature keeps judgeMutationStrength's pass condition untouched,
+    // so a later edit that moves it fails one of these two assertions instead of passing silently.
+    const requiredRun: MutantRunRecord = {
+      mutant: {
+        mutantId: 'ARITH_PLUS_TO_MINUS@1:1',
+        operator: 'ARITH_PLUS_TO_MINUS',
+        site: { line: 1, column: 1, before: '+', after: '-' },
+      },
+      compiled: true,
+      parentPassedJudged: true,
+      killedByPeer: true,
+      killedByJudged: true,
+    };
+    const request: MutationStrengthRequest = {
+      testbenchId: 'testbench-1',
+      mutantRuns: [requiredRun],
+    };
+
+    expect(judgeMutationStrength(request).kind).toBe('passed');
+    expect(
+      judgeMutationStrength({ ...request, mutantRuns: [{ ...requiredRun, killedByJudged: false }] })
+        .kind,
+    ).toBe('failed');
   });
 });

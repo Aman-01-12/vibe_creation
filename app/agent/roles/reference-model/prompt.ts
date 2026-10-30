@@ -6,10 +6,15 @@
 import type { ModuleInterface, Spec, TimingContract } from '@app/core';
 import {
   ECE_STATE_W,
+  ENABLE_FRAME_PERIOD,
+  HOLD_FRAME_PERIOD,
+  type InputRole,
+  INPUT_ROLES,
   packedPortSlices,
   referenceModelFunctionHeaders,
   SAMPLE_BUDGET,
   sizedSampleBudget,
+  STROBE_PERIOD,
 } from '@app/tools';
 
 import type { ModelRequest } from '../../model-router/index.js';
@@ -47,13 +52,48 @@ const STATE_RULE = [
   'chain may be a range - assign the part-select to a local reg first if you must narrow it.',
 ].join('\n');
 
-/** The closed Role_Vocabulary and what each member drives, named explicitly (Req 4.1, 4.2). */
+/**
+ * Every member keyed by itself, so a description that has to name a member OTHER than its own
+ * entry still reads that spelling out of INPUT_ROLES. A property access here fails to compile
+ * when the member leaves the vocabulary, which a quoted literal would not.
+ */
+const ROLE_NAME = Object.fromEntries(INPUT_ROLES.map((role) => [role, role])) as Readonly<
+  Record<InputRole, InputRole>
+>;
+
+/**
+ * One step-pattern-then-selecting-behaviour description per INPUT_ROLES member. Keyed by role
+ * name (matches the existing TIMING_MEANING convention below) rather than written inline, so
+ * ROLE_RULE itself only ever reads a name through INPUT_ROLES and never spells one out again.
+ */
+const ROLE_DESCRIPTIONS: Readonly<Record<InputRole, string>> = {
+  data:
+    'a fresh value on every step. For a port whose value the design may read freshly at ' +
+    'any step.',
+  enable:
+    `asserted on every step of a ${String(ENABLE_FRAME_PERIOD)}-step frame except one ` +
+    'released step. For a port that gates whether the design advances, where a periodic ' +
+    'pause is the behaviour to exercise, and for a port the Spec requires to stay asserted ' +
+    'for the whole of a multi-step operation.',
+  strobe:
+    `asserted on exactly one step of a ${String(STROBE_PERIOD)}-step period and zero on ` +
+    'every other step. For a port whose assertion begins an operation the Spec describes ' +
+    'as taking more than one step to complete and as running to completion without that ' +
+    'port staying asserted; if deasserting the port restarts or abandons that operation, ' +
+    `declare it ${ROLE_NAME.enable} instead.`,
+  hold:
+    `one constant value across each ${String(HOLD_FRAME_PERIOD)}-step window, a different ` +
+    'value in the next window. For a port whose value the Spec requires to stay constant ' +
+    'while such an operation consumes it.',
+};
+
+/** The closed Role_Vocabulary, one flat list, each member the same three-part form: its name,
+ *  its driven step pattern, and the port behaviour that selects it (Req 8.1, 8.2, 8.3). */
 const ROLE_RULE = [
-  'Roles: declare exactly one role per input port, from the vocabulary `data` or `enable`.',
-  'The product renders that port\u2019s stimulus from the declared role; you do not author',
-  'stimulus. `data` may change at every step. `enable` is held asserted and released for',
-  'one step periodically, so the operation it gates restarts; declare a port `enable` only',
-  'when that periodic restart is the condition your expectation should be exercised under.',
+  'Roles: declare exactly one role per input port. The product renders that port\u2019s',
+  'stimulus from the declared role; you do not author stimulus. The four roles, and the',
+  'port each one fits:',
+  ...INPUT_ROLES.map((role) => `  ${role} - ${ROLE_DESCRIPTIONS[role]}`),
 ].join('\n');
 
 /** The state convention (Q-15): v3's "value after the edge" was contradicted by 7 of 8 draws. */
@@ -76,6 +116,9 @@ const BODY_CONTRACT =
   'per input port. The product renders the stimulus itself: no reply is asked for a ' +
   'stimulus body. ece_expect must state a value for every output port at every step.';
 
+/** The `"role"` field's union, built from INPUT_ROLES so this site cannot drift from it either. */
+const ROLE_UNION = INPUT_ROLES.map((role) => `"${role}"`).join(' | ');
+
 /** The JSON reply envelope parseReferenceModelDraft requires; named explicitly (v2). */
 const REPLY_FORMAT_RULE = [
   'Reply with exactly one JSON object and nothing else - no prose, no markdown fence:',
@@ -84,7 +127,7 @@ const REPLY_FORMAT_RULE = [
   '  {"name": "ece_next_state", "body": "<statements inside the ece_next_state header>"},',
   '  {"name": "ece_expect", "body": "<statements inside the ece_expect header>"}',
   '], "roles": [',
-  '  {"port": "<input port name>", "role": "data" | "enable"},',
+  `  {"port": "<input port name>", "role": ${ROLE_UNION}},`,
   '  ...one entry for every input port, no omission, no duplicate, no unknown port',
   ']}',
 ].join('\n');

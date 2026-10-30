@@ -236,9 +236,21 @@ function renderRefModelBody(
 export class LiveReferenceModelGenerator implements ReferenceModelGenerator {
   readonly #routers: ReadonlyMap<string, ReturnType<typeof createModelRouter>>;
   #calls = 0;
+  /** Every router failure, unparseable reply, or Authoring_Contract rejection across every
+   * `generate()` call this instance has made - stimulus-transaction-structure criterion 8.6's
+   * "count of Reference_Model_Replies the Role_Parser refused", which nothing on `SessionRecord`
+   * tracks (figures.ts's `roleAdoptionShareOf` takes it as a caller-supplied parameter for the
+   * same reason). One instance is constructed fresh per Session by every caller in this module's
+   * own scripts, so this count is already scoped to one Session without extra bookkeeping. */
+  #refusedCount = 0;
 
   constructor(routers: ReadonlyMap<string, ReturnType<typeof createModelRouter>>) {
     this.#routers = routers;
+  }
+
+  /** Reset at construction, so this is always "refused replies this instance has drawn". */
+  refusedReplyCount(): number {
+    return this.#refusedCount;
   }
 
   async generate(spec: Spec, ledger: BudgetLedger): Promise<GeneratedReferenceModel> {
@@ -301,16 +313,19 @@ export class LiveReferenceModelGenerator implements ReferenceModelGenerator {
       ledger.charge(budget.consumed().tokens);
       if (!routed.ok) {
         lastReason = `router call failed: ${routed.error.code}`;
+        this.#refusedCount += 1;
         continue;
       }
       const parsed = parseReferenceModelDraft(routed.value.outputText, spec.moduleInterface);
       if (!parsed.ok) {
         lastReason = `unparseable reply: ${parsed.error.reason}`;
+        this.#refusedCount += 1;
         continue;
       }
       const checked = checkAuthoringContract(parsed.value);
       if (checked.kind === 'rejected') {
         lastReason = `Authoring_Contract rejected: ${checked.excluded.join(', ')}`;
+        this.#refusedCount += 1;
         continue;
       }
       return checked.bodies;

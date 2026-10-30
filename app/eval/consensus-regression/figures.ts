@@ -36,8 +36,19 @@
 //   entry can be found for it (never generated, or generated but excluded before any run).
 
 import type { Ulid } from '@app/core';
-import { distinctOutputCount, type WaveformSignature } from '@app/agent';
-import type { RoleDeclaration } from '@app/tools';
+import {
+  distinctOutputCount,
+  REFERENCE_MODEL_PROMPT_VERSION,
+  type WaveformSignature,
+} from '@app/agent';
+import {
+  CONSENSUS_HARNESS_VERSION,
+  HOLD_FRAME_PERIOD,
+  INPUT_ROLES,
+  STROBE_PERIOD,
+  type InputRole,
+  type RoleDeclaration,
+} from '@app/tools';
 
 import type { ConsensusRegressionSample, GroundTruthEntry } from './harness.js';
 
@@ -181,6 +192,95 @@ export function reduceGatedFigures(
   };
 }
 
+// -- Role_Adoption_Share: whether the widened Role_Vocabulary is actually reached for (C11;
+//    Req 8.6-8.8, 8.11). UNLIKE Quality_Signals below, criteria 8.9 and 8.10 gate on this
+//    figure, so it is reported per Session rather than pooled across the suite. -----------------
+
+/** Below this many accepted replies, a Session's Role_Adoption_Share floor is not met (Req 8.8). */
+const ROLE_ADOPTION_FLOOR_DENOMINATOR = 8;
+
+/**
+ * Req 8.6: `numerator`/`denominator` are kept apart rather than reduced to a ratio, so a floor
+ * reader can tell a shrunken denominator from a genuinely low adoption rate.
+ */
+export interface RoleAdoptionShare {
+  readonly problemId: string;
+  readonly role: InputRole;
+  /** Accepted replies whose Role_Declaration names at least one port with this role. */
+  readonly numerator: number;
+  /** Accepted replies drawn for this design in this Session. */
+  readonly denominator: number;
+  readonly refusedReplyCount: number;
+  readonly referenceModelPromptVersion: number;
+  /** False when `denominator < 8` (Req 8.8): a shrunk denominator cannot satisfy the floor. */
+  readonly floorMeasurable: boolean;
+}
+
+/**
+ * Role_Adoption_Share of `role` over one Session's own accepted Role_Declarations (Req 8.6,
+ * 8.7): `sample.outcome.record.roleDeclarations` already holds one entry per accepted reply
+ * and nothing for a refused one (task 7.6 pins that a refused reply never reaches the pool), so
+ * its length is the denominator with refusals already excluded.
+ *
+ * `refusedReplyCount` and `referenceModelPromptVersion` are not on `SessionRecord` today -
+ * no record yet tallies a Session's refused replies - so the caller supplies both rather than
+ * this reducer inventing a plumbing path that does not exist.
+ */
+export function roleAdoptionShareOf(
+  sample: ConsensusRegressionSample,
+  role: InputRole,
+  refusedReplyCount: number,
+  referenceModelPromptVersion: number,
+): RoleAdoptionShare {
+  const declarations = sample.outcome.record.roleDeclarations;
+  const denominator = declarations.length;
+  const numerator = declarations.filter((declaration) =>
+    declaration.roles.some((entry) => entry.role === role),
+  ).length;
+  return {
+    problemId: sample.problemId,
+    role,
+    numerator,
+    denominator,
+    refusedReplyCount,
+    referenceModelPromptVersion,
+    floorMeasurable: denominator >= ROLE_ADOPTION_FLOOR_DENOMINATOR,
+  };
+}
+
+/** The fixed label the below-floor Role_Adoption_Share diagnostic is printed under (Req 8.11). */
+export const BELOW_FLOOR_DIAGNOSTIC_LABEL = 'BELOW-FLOOR ROLE ADOPTION DIAGNOSTIC' as const;
+
+/** One accepted reply's complete Role_Declaration: every port name paired with its declared role. */
+function renderAcceptedDeclarationLine(declaration: RoleDeclaration): string {
+  const portText = declaration.map((entry) => `${entry.portName}=${entry.role}`).join(', ');
+  return `  accepted: ${portText}`;
+}
+
+/** One refused reply's stated reason, printed verbatim. */
+function renderRefusalReasonLine(reason: string): string {
+  return `  refused: ${reason}`;
+}
+
+/**
+ * Render the below-floor Role_Adoption_Share diagnostic (Req 8.11): every accepted reply's
+ * complete Role_Declaration and every refused reply's stated reason, so a reader diagnoses the
+ * wording from the declarations themselves. Takes no parameter a Candidate_Design could occupy
+ * (criterion 8.5's own structural guarantee), so wiring this diagnostic toward a later
+ * Reference_Model_Prompt cannot smuggle design text through it.
+ */
+export function renderBelowFloorAdoptionDiagnostic(
+  acceptedDeclarations: readonly RoleDeclaration[],
+  refusalReasons: readonly string[],
+): string {
+  const lines: string[] = [
+    BELOW_FLOOR_DIAGNOSTIC_LABEL,
+    ...acceptedDeclarations.map(renderAcceptedDeclarationLine),
+    ...refusalReasons.map(renderRefusalReasonLine),
+  ];
+  return lines.join('\n');
+}
+
 // -- Quality_Signals: distinct-output-tuple count against mutation outcome, and the per-port
 //    Input_Role assignments each run was rendered under (C9; Req 6.1-6.5). NEITHER feeds the
 //    gate: see this file's header for why and for where each figure is sourced from. ----------
@@ -304,14 +404,41 @@ export function reduceQualitySignals(
 export const QUALITY_SIGNAL_LABEL = 'QUALITY SIGNAL (does not gate)' as const;
 
 /**
- * Criterion 9.6's own sentence: comparability with the 46-problem Baseline_Sweep ends at this
- * identity change (`CONSENSUS_HARNESS_VERSION` 2 -> 3), so a reader of this printed text does
- * not pool these figures with that run's.
+ * Criterion 9.5's own sentence (Req 9.5): this run's figures are not the same population as
+ * every figure recorded before this feature's identity move, and must not be pooled with
+ * them - including the Baseline_Sweep at .eval-runs/consensus-sweep-2026-10-17T13-20-39-950Z.
+ * The two version numbers are interpolated live rather than hardcoded, so a later move (the
+ * next `CONSENSUS_HARNESS_VERSION` bump after this one) leaves this sentence still true of
+ * itself instead of citing a pair it no longer measures.
  */
 export const BASELINE_SWEEP_COMPARABILITY_SENTENCE: string =
-  'Comparability with the Baseline_Sweep .eval-runs/consensus-sweep-2026-10-17T13-20-39-950Z ' +
-  'ENDS at this run: CONSENSUS_HARNESS_VERSION moved, so these figures are not the same ' +
-  'population and must not be pooled with that run.';
+  'Comparability with every figure recorded before this run ENDS here: this run was measured ' +
+  `under CONSENSUS_HARNESS_VERSION ${String(CONSENSUS_HARNESS_VERSION)} and ` +
+  `REFERENCE_MODEL_PROMPT_VERSION ${String(REFERENCE_MODEL_PROMPT_VERSION)} (including the ` +
+  'Baseline_Sweep at .eval-runs/consensus-sweep-2026-10-17T13-20-39-950Z), so these figures ' +
+  'are not the same population and must not be pooled with any run recorded under a ' +
+  'different identity.';
+
+/** The fixed label criterion 9.6's measurement regime block is printed under. */
+export const MEASUREMENT_REGIME_LABEL = 'MEASUREMENT REGIME' as const;
+
+/**
+ * Render criterion 9.6's measurement regime block (Req 9.6): the Strobe_Period, the
+ * Hold_Frame_Period, the Role_Vocabulary's own members, and the two identity constants this
+ * run was measured under - each read live from its own constant, never copied, so a later
+ * version move needs no edit here. Pure and parameterless: a function of the build's own
+ * identity rather than of any sample, so it is testable with no paid run.
+ */
+export function renderMeasurementRegime(): string {
+  return [
+    MEASUREMENT_REGIME_LABEL,
+    `  Strobe_Period: ${String(STROBE_PERIOD)}`,
+    `  Hold_Frame_Period: ${String(HOLD_FRAME_PERIOD)}`,
+    `  Role_Vocabulary: ${INPUT_ROLES.join(', ')}`,
+    `  CONSENSUS_HARNESS_VERSION: ${String(CONSENSUS_HARNESS_VERSION)}`,
+    `  REFERENCE_MODEL_PROMPT_VERSION: ${String(REFERENCE_MODEL_PROMPT_VERSION)}`,
+  ].join('\n');
+}
 
 /** One line per bucket row, in the Introduction table's own column order. */
 function renderDistinctOutputRows(rows: readonly DistinctOutputBucketRow[]): readonly string[] {
@@ -331,8 +458,10 @@ function renderRoleAssignmentRows(rows: readonly RoleAssignmentRow[]): readonly 
 }
 
 /**
- * Render both Quality_Signal blocks plus criterion 9.6's comparability sentence as plain text
- * (Req 6.3, 6.4, 6.5, 9.6), testable with no paid run: a pure function of `signals` alone.
+ * Render both Quality_Signal blocks plus criterion 9.5's comparability sentence and
+ * criterion 9.6's measurement regime block as plain text (Req 6.3, 6.4, 6.5, 9.5, 9.6),
+ * testable with no paid run: a pure function of `signals` alone (the regime block reads its
+ * own constants, never `signals`).
  */
 export function renderQualitySignals(signals: SweepQualitySignals): string {
   const lines: string[] = [
@@ -343,6 +472,8 @@ export function renderQualitySignals(signals: SweepQualitySignals): string {
     ...renderRoleAssignmentRows(signals.roleAssignments),
     '',
     BASELINE_SWEEP_COMPARABILITY_SENTENCE,
+    '',
+    renderMeasurementRegime(),
   ];
   return lines.join('\n');
 }

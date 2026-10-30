@@ -15,6 +15,9 @@ import type { ReferenceModelDraft, ReferenceModelParseError } from './types.js';
 /** Bounds one function body's length, to bound memory from untrusted output. */
 const MAX_BODY_CHARS = 20_000;
 
+/** Longest responsible port name or role text a refusal reason embeds (criterion 2.11). */
+const MAX_REASON_TEXT_CHARS = 64;
+
 const EXPECTED_NAMES = ['ece_reset_state', 'ece_next_state', 'ece_expect'] as const;
 type ExpectedName = (typeof EXPECTED_NAMES)[number];
 
@@ -34,6 +37,11 @@ function isInputRole(value: unknown): value is InputRole {
 
 function parseError(reason: string): ReferenceModelParseError {
   return { reason };
+}
+
+/** Truncates untrusted text before it enters a refusal reason, so a pathological role string cannot inflate the reason itself. */
+function boundedText(value: string): string {
+  return value.slice(0, MAX_REASON_TEXT_CHARS);
 }
 
 function parseEnvelope(raw: string): Result<UnknownRecord, ReferenceModelParseError> {
@@ -63,9 +71,12 @@ function readBody(entries: UnknownRecord[], name: ExpectedName): string | undefi
 /**
  * Parse the untrusted `roles` field into a Total_Role_Declaration over `inputPortNames`.
  *
- * Checks run in the fixed order criterion 1.4-1.6 names, so a reply with two faults
- * reports the first deterministically: no roles array, a malformed entry, an out-of-
- * vocabulary role, a duplicate port, an undeclared port, then an omitted input port.
+ * Checks run in the fixed order criterion 2.6 names, so a reply with two faults reports
+ * the first deterministically: no roles array, too many entries, a malformed entry (now
+ * including an empty port name), an out-of-vocabulary role, a duplicate port, an
+ * undeclared port, then an omitted input port. The entry count is checked before any
+ * entry's content, so that fault stays fixed rather than depending on what a later,
+ * otherwise well-formed entry happens to contain (criterion 2.6, 2.10).
  */
 function parseRoleDeclaration(
   roles: unknown,
@@ -74,16 +85,26 @@ function parseRoleDeclaration(
   if (!Array.isArray(roles)) {
     return err(parseError('model output carried no roles array'));
   }
+  if (roles.length > inputPortNames.size) {
+    return err(
+      parseError('model output carried more role entries than the interface declares input ports'),
+    );
+  }
   const entries: { readonly port: string; readonly role: string }[] = [];
   for (const entry of roles) {
     if (!isRecord(entry) || typeof entry.port !== 'string' || typeof entry.role !== 'string') {
       return err(parseError('model output had a malformed role entry'));
     }
+    if (entry.port.length === 0) {
+      return err(
+        parseError(`model output named an empty port name for role "${boundedText(entry.role)}"`),
+      );
+    }
     entries.push({ port: entry.port, role: entry.role });
   }
   for (const entry of entries) {
     if (!isInputRole(entry.role)) {
-      return err(parseError('model output named a role outside {data, enable}'));
+      return err(parseError(`model output named a role outside {${INPUT_ROLES.join(', ')}}`));
     }
   }
   const seenPorts = new Set<string>();

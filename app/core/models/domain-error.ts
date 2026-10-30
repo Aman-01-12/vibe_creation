@@ -41,7 +41,9 @@ export type DomainErrorCode =
   | 'BEHAVIOUR_QUESTION_FRAME_COUNT_NOT_ONE'
   | 'BEHAVIOUR_QUESTION_UNADMITTED_TOKEN'
   | 'CONSENSUS_REGRESSION_RECORD_INVALID'
-  | 'INCOMPLETE_ROLE_DECLARATION';
+  | 'INCOMPLETE_ROLE_DECLARATION'
+  | 'ROLE_OUTSIDE_VOCABULARY'
+  | 'NON_VACUITY_PROBE_BUDGET_EXCEEDS_CAP';
 
 /** A typed, descriptive failure produced by a validating constructor. */
 export interface DomainError {

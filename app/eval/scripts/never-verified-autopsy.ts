@@ -40,6 +40,7 @@ import { FileSystemCorpusCheckout } from '../corpus/checkout-port.js';
 import { RTLLM_CHECKOUT_PATH } from '../corpus/fetch-node.js';
 import { importRtllmCorpus } from '../corpus/import.js';
 import { localTimingDerivation } from '../corpus/timing-derivation-node.js';
+import { cliquePartitionOf } from '../consensus-regression/clique-partition.js';
 import { liveConsensusSessionDeps, REPOSITORY_ROOT } from '../consensus-regression/live-wiring.js';
 import { requirePaidReRunApproval } from './paired-contract-approval-gate.js';
 
@@ -163,6 +164,9 @@ async function autopsy(spec: Spec, index: number, outDir: string): Promise<strin
           passed: cell.passed,
           failureCause: cell.failureCause,
         })),
+        // The clique-partition data criterion 10.6 asks for (C14): computed, never re-simulated,
+        // from this same `record` - see clique-partition.ts for why no field here is a verdict.
+        cliquePartition: cliquePartitionOf(record),
       },
       null,
       2,
