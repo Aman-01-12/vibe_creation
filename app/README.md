@@ -7,7 +7,8 @@ The layout mirrors the architectural layers in `product-ece/ECE-CODE-QUALITY-STA
 web -> api -> agent -> {knowledge, tools} -> core
 ```
 
-`eval` and `test` are consumer layers: they may import any inner layer to drive or verify the loop, and nothing imports them.
+`eval` and `test` are the outermost consumer layers: no inner layer imports either of them, and each drives the loop through the layers listed for it below.
+`test` is the outermost of the two, so it may also drive `@app/eval` (the Eval_Harness integration tests do).
 
 ## Layers
 
@@ -19,8 +20,8 @@ web -> api -> agent -> {knowledge, tools} -> core
 | `@app/agent`     | `app/agent`      | core, knowledge, tools             |
 | `@app/api`       | `app/api`        | agent (and deeper)                 |
 | `@app/web`       | `app/web`        | api (and deeper)                   |
-| `@app/eval`      | `app/eval`       | any inner layer                    |
-| `@app/test`      | `app/test`       | any inner layer                    |
+| `@app/eval`      | `app/eval`       | api (and deeper)                   |
+| `@app/test`      | `app/test`       | eval, web (and deeper)             |
 
 `knowledge` and `tools` are siblings at the same depth and must not import each other.
 
@@ -34,7 +35,7 @@ The two mechanisms are deliberately redundant: references catch it at build time
 ## Python
 
 The only Python in the repo is the thin Tool_Runner worker at `app/tools/sandbox/worker`, which has its own `pyproject.toml`.
-It is the sole TypeScript-to-Python seam; all trust-boundary logic stays in TypeScript.
+It is the sole TypeScript-to-Python seam; `app/tools/sandbox/worker/README.md` owns the responsibility split across it.
 
 ## Layout
 

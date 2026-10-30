@@ -12,6 +12,10 @@ Describe a hardware idea, and the copilot plans it, writes the Verilog and testb
 
 ## Status
 
-This is the M0 spine.
-The `app/` monorepo is scaffolded with inward-only layer boundaries, and the deterministic oracle path runs end to end on a hardcoded Verilog module and testbench: Editor -> API_Gateway -> Orchestrator -> sandboxed Tool_Runner -> Icarus (`iverilog` + `vvp`), returning a `pass`/`fail`/`error` verdict.
-The M1 single-module hero loop and the Eval_Harness CI gate are planned in `.kiro/specs/hdl-creation-loop/tasks.md`.
+The M1 foundation is in place.
+The `app/` monorepo is scaffolded with inward-only layer boundaries, and the single-module loop runs end to end through the deterministic oracle: Editor -> API_Gateway -> Orchestrator -> Intent/Spec -> Generation plus an RTL-isolated Testbench -> Verification_Loop -> sandboxed Tool_Runner -> Icarus (`iverilog` + `vvp`), with the Trust_Labeler and a fail-closed Display_Layer deciding what a `Verified` label is allowed to claim.
+The sandbox bounds a runaway simulation: captured output is streamed to a fixed ceiling with truncation flagged, `ResourceLimits.diskMb` is enforced while the tool runs, and the workspace lifecycle is owned by the side that issues the kill.
+Truncated output, a disk-cap kill, and incomplete check coverage each force a non-passing verdict rather than a pass on partial evidence.
+The real provider path (an OpenAI-compatible bedrock-mantle transport with an env-backed secret manager and measured token usage) and the Eval_Harness with its sweep runner are stood up for the first measured campaign.
+The eval pass@k CI gate is still unarmed, because no non-zero baseline has been measured yet: lint, type, unit, and property gates remain the merge authority, and `app/eval/eval-baseline.json` records the arming procedure.
+Per-task plan state lives in `.kiro/specs/hdl-creation-loop/tasks.md`.
