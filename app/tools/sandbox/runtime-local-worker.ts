@@ -29,7 +29,7 @@
 // resolves it from configuration - so this module never probes, never reads the
 // environment for a path, and never guesses a binary.
 
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type {
@@ -54,13 +54,31 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
+ * This package's root directory, resolved from this module's own location in either
+ * layout.
+ *
+ * The worker's Python tree is only ever the AUTHORED one. This module is authored at
+ * `app/tools/sandbox/` and compiles to `app/tools/dist/sandbox/`, and `tsc` compiles
+ * TypeScript only - nothing copies `worker/` into `dist` - so resolving the worker
+ * relative to this module's own directory would point every consumer of `@app/tools`
+ * (which is published through `dist`) at a path that does not exist, leaving the real
+ * oracle unable to import its own worker. The parent directory name distinguishes the
+ * two layouts exactly - `tools` versus `dist` - so the level count is decided on
+ * evidence rather than guessed.
+ */
+function packageRoot(): string {
+  const levelsUp = basename(dirname(HERE)) === 'dist' ? 2 : 1;
+  return resolve(HERE, ...new Array<string>(levelsUp).fill('..'));
+}
+
+/**
  * The thin Python worker's importable source root (`.../sandbox/worker/src`).
  *
  * A fact about this package's own layout, so it is owned here and exported for the
  * callers that must put it on `PYTHONPATH` themselves - notably a capability probe
  * that checks whether an interpreter can import the worker before selecting it.
  */
-export const WORKER_SOURCE_ROOT = resolve(HERE, 'worker/src');
+export const WORKER_SOURCE_ROOT = resolve(packageRoot(), 'sandbox/worker/src');
 
 /** The module invoked to run one job: `python -m tool_runner_worker`. */
 const WORKER_MODULE = 'tool_runner_worker';
