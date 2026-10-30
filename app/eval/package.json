@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Eval_Harness and VerilogEval/RTLLM subset fixtures. Consumer layer; may import any inner layer, and nothing imports it.",
+  "description": "Eval_Harness and VerilogEval/RTLLM subset fixtures. Consumer layer; may import the inner layers down to @app/api, and only @app/test imports it.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

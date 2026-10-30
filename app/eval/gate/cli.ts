@@ -1,6 +1,9 @@
 // The runnable eval pass@k gate entry (task 19.5, Req 15.4, 15.7).
 //
-// CI invokes this (see `.github/workflows/ci.yml`). It:
+// This is the gate entry a CI job runs, via the `@app/eval` `gate` script. The
+// `eval-gate` job in `.github/workflows/ci.yml` is still the disarmed echo
+// placeholder and does NOT invoke it yet; that wiring belongs with arming the
+// baseline. It:
 //   1. reads the version-controlled `eval-baseline.json`,
 //   2. resolves it to an `EvalGate` (unarmed by default, Req 15.7),
 //   3. obtains a pass@k measurement (through the real oracle when wired), and

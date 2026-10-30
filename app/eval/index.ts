@@ -1,7 +1,8 @@
 // @app/eval - the Eval_Harness and the fixed VerilogEval/RTLLM subset (Req 15).
 //
-// Consumer layer: it may import any inner layer to drive the loop end to end, and
-// nothing imports it. The Eval_Harness (task 19.3) runs the fixed subset through the
+// Consumer layer: it may import the inner layers down to `api` to drive the loop
+// end to end, and only `@app/test` imports it (see `app/README.md` for the layer
+// map). The Eval_Harness (task 19.3) runs the fixed subset through the
 // Verification_Loop inside the Tool_Runner sandbox under student-session caps, and
 // reports + records pass@k, iterations-to-pass, and per-session cost with fixed
 // seeds/temperature/sample count for reproducibility. Its integration test is task

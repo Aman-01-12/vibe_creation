@@ -45,7 +45,10 @@ function workerPackageIsImportable(): boolean | null {
   for (const bin of ['python3', 'python']) {
     const probe = spawnSync(
       bin,
-      ['-c', 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("tool_runner_worker") else 1)'],
+      [
+        '-c',
+        'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("tool_runner_worker") else 1)',
+      ],
       {
         encoding: 'utf8',
         timeout: PROBE_TIMEOUT_MS,

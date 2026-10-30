@@ -37,7 +37,7 @@ const ALLOWED_INNER = {
   api: ['core', 'knowledge', 'tools', 'agent'],
   web: ['core', 'knowledge', 'tools', 'agent', 'api'],
   eval: ['core', 'knowledge', 'tools', 'agent', 'api'],
-  test: ['core', 'knowledge', 'tools', 'agent', 'api'],
+  test: ['core', 'knowledge', 'tools', 'agent', 'api', 'web', 'eval'],
 };
 
 const pkgName = (layer) => `@app/${layer}`;
