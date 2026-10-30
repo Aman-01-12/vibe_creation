@@ -8,12 +8,13 @@ Describe a hardware idea, and the copilot plans it, writes the Verilog and testb
 - **`app/`** - the application monorepo (the code). Dependencies flow inward only: `web -> api -> agent -> {knowledge, tools} -> core`. See `app/README.md` for the layer map and how the boundary is enforced.
 - **`product-ece/`** - the finalized product docs: philosophy, the v1 PRD (`ECE-PRD-v1.md`), v1 features, tech stack and decisions, knowledge architecture, verification methodology, security/performance/resilience, reliability/self-healing, code-quality standards, and implementation references.
 - **`chipAgent/`** - the Obsidian knowledge vault and learning memory (design in `product-ece/ECE-OBSIDIAN-KNOWLEDGE-MEMORY.md`). Start at `chipAgent/MANIFEST.md`, the generated catalog of every note; regenerate it with `npm run vault:manifest`.
-- **`.kiro/`** - steering docs, the specs under `.kiro/specs/` (`hdl-creation-loop` and `eval-campaign-readiness`, each with `requirements.md`, `design.md`, `tasks.md`), skills, and hooks.
+- **`.kiro/`** - steering docs, the specs under `.kiro/specs/` (one folder per spec, each with `requirements.md`, `design.md`, `tasks.md`), skills, and hooks.
 
 ## Status
 
 The M1 foundation is in place.
 The `app/` monorepo is scaffolded with inward-only layer boundaries, and the single-module loop runs end to end through the deterministic oracle: Editor -> API_Gateway -> Orchestrator -> Intent/Spec -> Generation plus an RTL-isolated Testbench -> Verification_Loop -> sandboxed Tool_Runner -> Icarus (`iverilog` + `vvp`), with the Trust_Labeler and a fail-closed Display_Layer deciding what a `Verified` label is allowed to claim.
+Before that oracle spends an iteration, the generated testbench is desugared by a deterministic, model-free Dialect_Normalizer and then build-checked by the Testbench_Precheck against a spec-derived interface stub, with one Testbench_Repair attempt on a build failure; a testbench that still will not build is refused as a measuring instrument rather than scored as a failure of the student's design.
 The sandbox bounds a runaway simulation: captured output is streamed to a fixed ceiling with truncation flagged, `ResourceLimits.diskMb` is enforced while the tool runs, and the workspace lifecycle is owned by the side that issues the kill.
 Truncated output, a disk-cap kill, and incomplete check coverage each force a non-passing verdict rather than a pass on partial evidence.
 The real provider path (an OpenAI-compatible bedrock-mantle transport with an env-backed secret manager and measured token usage) and the Eval_Harness with its sweep runner are stood up for the first measured campaign.

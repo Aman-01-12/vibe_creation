@@ -16,8 +16,9 @@
 // `{ attempted: true, accepted: false }` - the repair was attempted and declined,
 // never accepted - while the other two trajectories (which never reach a precheck
 // build failure) still assert `NO_REPAIR` exactly, unaffected by task 6.4 landing.
-// Task 8.3 (the positive-control-path wiring) has not landed yet, so this test
-// still asserts nothing about that trigger point.
+// The precheck path is now the ONLY trigger point: testbench-dialect-normalization
+// task 10.3 retired the positive-control-path trigger task 8.3 had wired in, so
+// there is no second trigger point left for this test to cover.
 //
 // This test's remaining scope:
 //
@@ -31,17 +32,9 @@
 //      the ONE repair attempt task 6.4 wires in, declined by this fixture's
 //      always-fails `repairTestbench`, finalizing the identical
 //      `InstrumentRefusedModule` an unrepaired failure would have produced.
-//   3. The structural half of the property that holds regardless of what task 8.3
-//      later adds - `accepted` implies `attempted` - is checked directly against
-//      arbitrary `RepairProvenance`-shaped values, not derived from a loop run.
-//
-// Once task 8.3 (positive-control-path repair) lands, this test needs a FOURTH
-// arm: drive a trajectory that reaches a positive-control repair attempt and
-// assert the oracle verdict / golden verdict / Recorded_Instrument_Verdict a
-// `NO_REPAIR` baseline would have produced are unaffected by the mere fact that a
-// repair was attempted elsewhere in the same run - the comparison design.md
-// actually states. That comparison is not reachable yet, so it is not attempted
-// here.
+//   3. The structural half of the property - `accepted` implies `attempted` - is
+//      checked directly against arbitrary `RepairProvenance`-shaped values, not
+//      derived from a loop run.
 //
 // Validates: Requirements 4.1, 4.2, 4.3, 4.4, 6.6
 

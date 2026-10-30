@@ -1,9 +1,11 @@
 // Minimal runnable check for `sized-literal.ts`'s rewrite/decline rules against the four cases
 // named in the task and in design.md's calibration table.
 //
-// This is a throwaway self-check, not the property-test suite: tasks 4.6/4.7 (determinism,
-// fixed point) and a future `normalizer.test.ts` are the real coverage once task 4.5 lands.
-// Delete this file once that coverage subsumes it.
+// This is a throwaway self-check, not the property-test suite. Task 4.5 has since landed,
+// and the real coverage now exists: `./sized-literal.test.ts` plus
+// `app/test/dialect-sized-literal.property.test.ts` and
+// `app/test/dialect-fixtures.integration.test.ts`. This file is kept only until someone
+// confirms it is fully subsumed; it is safe to delete at that point.
 
 import { describe, expect, it } from 'vitest';
 import { scanSource } from '@app/tools';

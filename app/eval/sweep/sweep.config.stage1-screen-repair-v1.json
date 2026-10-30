@@ -2,6 +2,13 @@
   "_README": [
     "REPAIR-LOOP RE-MEASUREMENT under the testbench-repair-loop spec.",
     "",
+    "HISTORICAL RECORD - ALREADY RUN, DO NOT RE-RUN AS WRITTEN. The regime described below",
+    "no longer exists: the positive-control-path repair trigger was retired by the",
+    "testbench-dialect-normalization spec (TESTBENCH_REPAIR_POLICY_VERSION 2), leaving only",
+    "the precheck-path trigger, and RESULTS_SCHEMA_VERSION has since moved past 11. The",
+    "current campaign config - and the owner of what is measured now - is",
+    "sweep.config.stage1-screen-dialect-v1.json, which scores itself against this run.",
+    "",
     "Identical arms/problems/n=3/caps/limits/seed/temperature to stage1-screen-v3. The ONLY",
     "difference is the testbench-repair-loop capability now active in the sweep composition",
     "root (both the precheck-path repair inside app/agent and the positive-control-path",

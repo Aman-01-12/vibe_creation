@@ -111,9 +111,9 @@ export {
 export { INSTRUMENT_POLICY_VERSION } from './instrument-policy-version.js';
 
 // The build constant identifying the testbench-repair-loop's behaviour (task
-// 6.3): whether `#admitInstrument` attempts a precheck-path repair, and whether
-// the harness attempts a positive-control-path repair, folded into the
-// experiment identity the same way `INSTRUMENT_POLICY_VERSION` is.
+// 6.3): whether `#admitInstrument` attempts a precheck-path repair, and which
+// trigger points can reach one at all, folded into the experiment identity the
+// same way `INSTRUMENT_POLICY_VERSION` is.
 export { TESTBENCH_REPAIR_POLICY_VERSION } from './testbench-repair-policy-version.js';
 
 // The build constant identifying the Dialect_Normalizer's transform behaviour

@@ -567,8 +567,8 @@ export interface SweepSampleRecord {
    */
   readonly noVerdictCause: NoVerdictCause | null;
   /**
-   * Whether a Testbench_Repair was attempted for this sample, at either trigger point
-   * (`RepairProvenance.attempted` from `@app/agent`, copied verbatim).
+   * Whether a Testbench_Repair was attempted for this sample at the one trigger point
+   * that can reach one (`RepairProvenance.attempted` from `@app/agent`, copied verbatim).
    *
    * Required, not optional, matching `instrumentValidity` itself: the Testbench_Repair
    * capability either exists for the build that measured this sample or it does not, and a
