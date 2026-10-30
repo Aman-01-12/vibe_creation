@@ -396,11 +396,12 @@ export interface ArmSummary {
   /**
    * Of `testbenchRepairAttempted`, how many were accepted on re-check.
    *
-   * Read from `SweepSampleRecord.repairAccepted`, which is `true` if and only if the
-   * sample's FINAL recorded instrument verdict is `valid` (see `harness.ts`'s
-   * `#runSample`: `accepted: finalControl.verdict.validity === 'valid'`). An accepted
-   * Testbench_Repair therefore always contributes to `instrument.validSamples`, which is
-   * what `validAfterRepair` below decomposes.
+   * Read from `SweepSampleRecord.repairAccepted`, which owns this field's meaning and
+   * carries the loop's own `RepairProvenance.accepted` verbatim: the revised testbench
+   * passed the Testbench_Precheck RE-CHECK, so it is the testbench the sample's final
+   * `instrumentValidity` was decided from (`VerificationLoop#repairPrecheckFailure`).
+   * Acceptance is a statement about the instrument BUILDING, not about the Positive_Control
+   * subsequently finding it `valid`.
    */
   readonly testbenchRepairAccepted: number;
   /**
@@ -417,19 +418,17 @@ export interface ArmSummary {
   /**
    * Of `instrument.validSamples`, how many needed no Testbench_Repair at all.
    *
-   * `instrument.validSamples - testbenchRepairAccepted`: every accepted repair ends
-   * `valid` (see `testbenchRepairAccepted`), so subtracting that count from the headline
-   * total leaves exactly the samples that were valid on the FIRST testbench, with no
-   * repair attempt in their history.
+   * Derived as `instrument.validSamples - testbenchRepairAccepted`, which treats the
+   * accepted count as a SUBSET of the headline valid total, so subtracting it leaves the
+   * samples that were valid on the FIRST testbench with no repair attempt in their history.
    */
   readonly validNoRepair: number;
   /**
    * Of `instrument.validSamples`, how many reached `valid` only after a Testbench_Repair.
    *
-   * Equal to `testbenchRepairAccepted`: an accepted repair is defined as one whose sample
-   * ended `valid`, so every accepted repair is counted here and nothing else is - a
-   * repair that was attempted but NOT accepted left its sample instrument-invalid or
-   * unchecked and is not part of this headline total at all.
+   * Equal to `testbenchRepairAccepted`; see that field for what acceptance means and where
+   * the flag comes from. A repair that was attempted but NOT accepted left its sample on
+   * the original testbench and is not part of this count.
    */
   readonly validAfterRepair: number;
   /**

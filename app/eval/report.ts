@@ -143,15 +143,16 @@ export interface SampleResult {
    */
   readonly mutationProbe: MutationProbeReport | null;
   /**
-   * Whether a Testbench_Repair was attempted/accepted for this sample, at either
-   * the Testbench_Precheck trigger point (inside `app/agent`) or the Positive_
-   * Control trigger point (`EvalHarness#repairIfTriggered`, below).
+   * Whether a Testbench_Repair was attempted/accepted for this sample at the
+   * Testbench_Precheck trigger point (`VerificationLoop#repairPrecheckFailure`,
+   * inside `app/agent`), which is now the only trigger point: the Positive_Control
+   * trigger point was retired.
    *
-   * `attempted: false` means neither trigger point ever consulted the repair
-   * port for this sample - the unrepaired baseline (`NO_REPAIR`). `accepted`
-   * is `true` only when the attempt's revised testbench is the one the final
-   * verdict in this very record was decided from; every other combination
-   * means the sample's recorded fields describe the ORIGINAL, unrepaired run.
+   * `attempted: false` means the precheck path never consulted the repair port for
+   * this sample - the unrepaired baseline (`NO_REPAIR`). `accepted` is `true` only
+   * when the attempt's revised testbench is the one the final verdict in this very
+   * record was decided from; every other combination means the sample's recorded
+   * fields describe the ORIGINAL, unrepaired run.
    */
   readonly repairProvenance: RepairProvenance;
   /**

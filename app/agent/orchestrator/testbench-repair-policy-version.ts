@@ -1,12 +1,12 @@
 // The identity of the testbench-repair-loop's behaviour (Req 7.1; task 6.3).
 //
 // WHY THIS EXISTS
-//   Whether `#admitInstrument` attempts a precheck-path repair, and whether the
-//   harness attempts a positive-control-path repair via `EvalTestbenchRepair`, is
-//   part of the experiment, not part of the harness: change that behaviour, and a
-//   sample measured with the repair loop OFF answers a different question than one
+//   Whether `#admitInstrument` attempts a precheck-path repair at all is part of
+//   the experiment, not part of the harness: change that behaviour, and a sample
+//   measured with the repair loop OFF answers a different question than one
 //   measured with it ON - the same reasoning `instrument-policy-version.ts`
-//   already applies to the Verification_Loop's instrument-admission behaviour.
+//   already applies to the Verification_Loop's instrument-admission behaviour. The
+//   SET of trigger points is part of that same identity; see the v1 -> v2 note below.
 //
 // WHY A THIRD CONSTANT AND NOT A BUMP OF `TESTBENCH_PROMPT_VERSION` OR `INSTRUMENT_POLICY_VERSION`
 //   Neither the Testbench_Agent's first-draft prompt nor the existing

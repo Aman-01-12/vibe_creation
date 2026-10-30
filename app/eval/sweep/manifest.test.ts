@@ -79,9 +79,8 @@ import { assembleManifest, finalizeManifest, type ManifestFacts } from './manife
  *     is a different experiment from the one before it - a run before the repair
  *     capability existed and a run after it answer a different question about the same
  *     testbench-generation failure, so their samples must never pool, exactly like every
- *     prior move.
- * Nothing was orphaned in any case - the results schema bump had already refused every
- * pre-existing smoke record for the same reason.
+ *     prior move. Nothing was orphaned by any of the moves to this point - the results
+ *     schema bump had already refused every pre-existing smoke record for the same reason.
  *   - when `NORMALIZER_VERSION` arrived and `TESTBENCH_REPAIR_POLICY_VERSION` went 1 -> 2
  *     (testbench-dialect-normalization) - the identical reason recorded above: a run
  *     before the dialect normalizer existed (repair driven only by the control loop) and

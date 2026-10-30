@@ -49,6 +49,7 @@ app/
       worker/  # thin Python worker (own pyproject.toml)
     simulator/
     synth/
+    verilog/   # the shared source mask: parser-free, offset-preserving source classification
   agent/       # Orchestrator + roles + Model_Router + Action_Recorder
     orchestrator/  roles/  model-router/  action-recorder/
   api/         # API_Gateway + Project_Store
