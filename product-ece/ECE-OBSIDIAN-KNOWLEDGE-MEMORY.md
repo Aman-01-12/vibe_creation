@@ -73,7 +73,7 @@ The shipped product's `retrieve` tool is a different component and reads only `a
 - Continuity, not size: keep memory curated and small; capture the decisive facts, not everything.
 - Oracle still decides: a note is a heuristic that improves the proposal; it never overrides the deterministic verdict.
 - Eval-gate before trust: a behavior-changing lesson is `candidate` until the eval harness validates it; only then `trusted`. Prevents a bad lesson from compounding.
-- Reproducibility: the vault is git-versioned; behavior-affecting changes are diffable and revertible; golden traces catch regressions.
+- Reproducibility: golden traces catch regressions. The vault itself is local-only and untracked (see "Concrete setup" below), so it carries no git history of its own and a vault edit is not diffable or revertible from the repo.
 - Poisoning defense: only curated/trusted sources write durable notes; never auto-persist untrusted web or raw model output as a lesson; every note carries provenance; promotion needs human/curator approval. Attackers otherwise plant memories that steer the agent later. Rephrased from [Microsoft: guarding AI memory](https://www.microsoft.com/en-us/security/blog/2026/06/22/guarding-ai-memory/).
 - Temporal validity: timestamp + expiry + invalidation; distinguish "true when" from "true now."
 - Secrets/PII: never stored in a shared/committed vault; keep a private, uncommitted area for anything sensitive (see security doc).
@@ -90,7 +90,7 @@ The shipped product's `retrieve` tool is a different component and reads only `a
 
 Decisions made:
 - Path: `chipAgent/` inside this repo.
-- Git: versioned WITH the repo (single repo), so a commit pins code + knowledge together (reproducibility for the eval-gate). `chipAgent/_private/` and `chipAgent/.obsidian/workspace.json` are gitignored.
+- Git: NOT versioned with the repo. The whole `chipAgent/` tree is gitignored and untracked (`.gitignore`), so it is local-only dev-process state: no future edit under it appears as a pending change or reaches the remote, and a commit therefore does not pin code + knowledge together. The earlier per-path exclusions for `chipAgent/_private/` and `chipAgent/.obsidian/workspace.json` are subsumed by the tree-level ignore.
 - Access: read now via Kiro's direct filesystem access (no MCP process needed); controlled write path via a `postTaskExecution` hook ("Capture learning to vault") that writes `candidate` notes into `_inbox/`. An Obsidian MCP stays a future option for richer BUILD-time search only; it is never a path for the shipped product to reach this vault.
 
 Structure scaffolded (OKF-conformant):

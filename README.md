@@ -7,7 +7,10 @@ Describe a hardware idea, and the copilot plans it, writes the Verilog and testb
 
 - **`app/`** - the application monorepo (the code). Dependencies flow inward only: `web -> api -> agent -> {knowledge, tools} -> core`. See `app/README.md` for the layer map and how the boundary is enforced.
 - **`product-ece/`** - the finalized product docs: philosophy, the v1 PRD (`ECE-PRD-v1.md`), v1 features, tech stack and decisions, knowledge architecture, verification methodology, security/performance/resilience, reliability/self-healing, code-quality standards, and implementation references.
-- **`chipAgent/`** - the Obsidian knowledge vault and learning memory (design in `product-ece/ECE-OBSIDIAN-KNOWLEDGE-MEMORY.md`). Start at `chipAgent/MANIFEST.md`, the generated catalog of every note; regenerate it with `npm run vault:manifest`.
+
+Two development-process trees are deliberately local-only: both are gitignored and untracked, so a fresh clone does not contain them and an edit inside them is never pushed.
+
+- **`chipAgent/`** - the Obsidian knowledge vault and learning memory on the developer's machine (design in `product-ece/ECE-OBSIDIAN-KNOWLEDGE-MEMORY.md`). Where it is present, start at `chipAgent/MANIFEST.md`, the generated catalog of every note; regenerate it with `npm run vault:manifest`.
 - **`.kiro/`** - steering docs, the specs under `.kiro/specs/` (one folder per spec, each with `requirements.md`, `design.md`, `tasks.md`), skills, and hooks.
 
 ## Status
@@ -22,4 +25,4 @@ A second deterministic oracle is landing alongside the simulator: a formal prope
 The Reference_Model_Consensus_Gate's decision algebra and its real-toolchain harness are in progress.
 The real provider path (an OpenAI-compatible bedrock-mantle transport with an env-backed secret manager and measured token usage) and the Eval_Harness with its sweep runner are stood up for the first measured campaign.
 The eval pass@k CI gate is still unarmed, because no non-zero baseline has been measured yet: lint, type, unit, and property gates remain the merge authority, and `app/eval/eval-baseline.json` records the arming procedure.
-Per-task plan state lives in each spec's `tasks.md` under `.kiro/specs/`.
+Per-task plan state lives in each spec's `tasks.md` under the local-only `.kiro/specs/` tree described above.
