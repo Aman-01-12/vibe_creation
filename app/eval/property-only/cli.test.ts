@@ -14,6 +14,8 @@
 // No model call, no toolchain, and no network: every function under test here is either pure or
 // reads a file the repository already holds.
 
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -37,7 +39,6 @@ import {
   recordedLimitsFor,
   runPropertyOnly,
   supersessionNote,
-  SUPERSEDED_RUN_DIR,
   workerIsolationFailure,
   type WorkerEnvironmentProjector,
 } from './cli.js';
@@ -372,13 +373,20 @@ describe('the measurement output', () => {
   });
 
   it('refuses an output directory that is an end-to-end run directory (Req 9.10)', async () => {
-    // The pilot's own directory holds a results log, so writing a property-only record into it
-    // would put this figure where a reader of that run expects an end-to-end one.
-    const refusal = await endToEndRunDirectoryRefusal(join(REPOSITORY_ROOT, SUPERSEDED_RUN_DIR));
+    // A directory holding a results log would put this figure where a reader of an end-to-end
+    // run expects an end-to-end one. The log is written here rather than read from a recorded
+    // run, so the refusal is exercised on every machine and not only where a paid run happened.
+    const directory = await mkdtemp(join(tmpdir(), 'property-only-end-to-end-'));
+    try {
+      await writeFile(join(directory, RESULTS_LOG_FILENAME), '{}\n', 'utf8');
+      const refusal = await endToEndRunDirectoryRefusal(directory);
 
-    expect(refusal).not.toBeNull();
-    expect(refusal?.code).toBe('output-unwritable');
-    expect(refusal?.problem).toContain(RESULTS_LOG_FILENAME);
+      expect(refusal).not.toBeNull();
+      expect(refusal?.code).toBe('output-unwritable');
+      expect(refusal?.problem).toContain(RESULTS_LOG_FILENAME);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('accepts a directory holding no end-to-end results log', async () => {
