@@ -1,14 +1,14 @@
 // The Legacy_Byte_Identity_Check's shared render logic (stimulus-transaction-structure, C7).
 //
-// WHY THIS IS ITS OWN MODULE, SEPARATE FROM THE CLI AND THE FUTURE COMPARISON TEST
+// WHY THIS IS ITS OWN MODULE, SEPARATE FROM THE CLI AND THE COMPARISON TEST
 //   `CONSENSUS_HARNESS_VERSION` 3's text cannot be re-rendered once the Stimulus_Function
 //   renderer gains its new emission sites (task 4.1), so the version-3 golden corpus is
-//   captured and committed FIRST, by `legacy-golden-capture-cli.ts`. The later byte
-//   comparison (task 5.1) runs AFTER that renderer edit and must build the exact same
-//   render request over the exact same real imported Declared_Interface, or a text
-//   difference it reports could be this module's own drift rather than the renderer's. So
-//   the request-construction logic lives here, once, imported by both the capture CLI
-//   (today) and the comparison test (task 5.1) - never restated at either call site.
+//   captured and committed FIRST, by `legacy-golden-capture-cli.ts`. The byte comparison
+//   (`legacy-byte-identity-comparison.integration.test.ts`) runs AFTER that renderer edit and
+//   must build the exact same render request over the exact same real imported
+//   Declared_Interface, or a text difference it reports could be this module's own drift rather
+//   than the renderer's. So the request-construction logic lives here, once, imported by both the
+//   capture CLI and that comparison test - never restated at either call site.
 //
 // `data`, NOT A MIX OF `data` AND `enable`
 //   Criterion 5.6 only requires a Total_Role_Declaration naming every input port with a
@@ -41,8 +41,9 @@ import type { EvalProblem } from '../problem.js';
 
 /**
  * Fixed per-render identity: reproducibility, not realism, is what this check needs. Neither
- * may be random or sized per design, because the future byte comparison (task 5.1) must build
- * the identical request over the identical design to stay a comparison rather than a new draw.
+ * may be random or sized per design, because the byte comparison
+ * (`legacy-byte-identity-comparison.integration.test.ts`) must build the identical request over
+ * the identical design to stay a comparison rather than a new draw.
  */
 export const LEGACY_GOLDEN_NONCE = 'legacygold';
 export const LEGACY_GOLDEN_WATCHDOG_BUDGET_NS = 2_000_000;

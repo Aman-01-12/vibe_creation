@@ -36,8 +36,8 @@ import {
   type RoleDeclaration,
   type StrobePeriodReading,
 } from '@app/tools';
-// STROBE_PERIOD/HOLD_FRAME_PERIOD are not re-exported through the `@app/tools` barrel
-// (simulator/index.ts); read from their own module directly, the convention
+// STROBE_PERIOD/HOLD_FRAME_PERIOD are read from their own defining module
+// (`consensus-harness.ts`) rather than through the `@app/tools` barrel, the convention
 // `rendered-stimulus-strobe.property.test.ts` already uses.
 import { HOLD_FRAME_PERIOD, STROBE_PERIOD } from '../tools/simulator/consensus-harness.js';
 

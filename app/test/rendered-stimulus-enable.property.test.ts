@@ -41,8 +41,8 @@ import {
   type ConsensusHarnessRequest,
   type RoleDeclaration,
 } from '@app/tools';
-// ENABLE_FRAME_PERIOD is not re-exported through the `@app/tools` barrel (simulator/index.ts),
-// so it is read from its own module directly, matching the convention
+// ENABLE_FRAME_PERIOD is read from its own defining module (`consensus-harness.ts`) rather than
+// through the `@app/tools` barrel, matching the convention
 // `consensus-determinism.integration.test.ts` and its siblings already use for this file.
 import { ENABLE_FRAME_PERIOD } from '../tools/simulator/consensus-harness.js';
 

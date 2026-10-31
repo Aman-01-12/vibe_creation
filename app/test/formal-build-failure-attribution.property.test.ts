@@ -135,15 +135,16 @@ const NUM_RUNS = 500;
 const BUILD_FAILURE_NUM_RUNS = 4_000;
 
 /**
- * An explicit timeout, above vitest's 5s default. HEADROOM NOW, not a workaround.
+ * An explicit timeout, above the suite's configured `testTimeout` (`vitest.config.ts`, which owns
+ * that value). HEADROOM NOW, not a workaround.
  *
  * It was written for a MEASURED defect that is now FIXED: `sanitizeDiagnostic` applied its
  * redactions to the whole raw string and only then applied `MAX_DIAGNOSTIC_CHARS`, so a long
  * WHITESPACE-FREE `lowering.stderrTail` - which `arbFormalReport()` generates on about a fifth of
  * draws - cost quadratic time (84ms, 320ms, 1268ms, 5046ms per 100 calls at 500, 1000, 2000, 4000
  * characters). `interpret.ts` now bounds the text BEFORE any regex sees it, so that path costs
- * 0.003ms and this file's slowest test is a measured 166ms - 30x inside the default. The timeout
- * stays only as headroom for a 2000-run property on a shared runner; nothing here depends on it
+ * 0.003ms and this file's slowest test is a measured 166ms. The timeout stays only as headroom
+ * for a 2000-run property on a shared runner; nothing here depends on it
  * (`chipAgent/_inbox/gotcha-sanitizediagnostic-redacts-before-bounding-so-a-long-unbroken-tail-is-quadratic.md`,
  * and `app/test/formal-diagnostic-bound.test.ts` is the guard that keeps the cost from returning).
  */

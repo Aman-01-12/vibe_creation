@@ -47,8 +47,9 @@ import {
   type ConsensusHarnessRequest,
   type RoleDeclaration,
 } from '@app/tools';
-// HOLD_FRAME_PERIOD is not re-exported through the `@app/tools` barrel (simulator/index.ts), the
-// same convention `rendered-stimulus-strobe.property.test.ts` already follows for STROBE_PERIOD.
+// HOLD_FRAME_PERIOD is read from its own defining module (`consensus-harness.ts`) rather than
+// through the `@app/tools` barrel, the same convention
+// `rendered-stimulus-strobe.property.test.ts` already follows for STROBE_PERIOD.
 import { HOLD_FRAME_PERIOD } from '../tools/simulator/consensus-harness.js';
 
 import { arbModuleInterface } from './interface-header-arbitraries.js';

@@ -61,8 +61,8 @@ import {
   type InputRole,
   type RoleDeclaration,
 } from '@app/tools';
-// ENABLE_FRAME_PERIOD is not re-exported through the `@app/tools` barrel (simulator/index.ts),
-// so it is read from its own module directly, matching the convention
+// ENABLE_FRAME_PERIOD is read from its own defining module (`consensus-harness.ts`) rather than
+// through the `@app/tools` barrel, matching the convention
 // `rendered-stimulus-enable.property.test.ts` already uses for this same constant.
 import { ENABLE_FRAME_PERIOD } from '../tools/simulator/consensus-harness.js';
 

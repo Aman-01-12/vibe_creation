@@ -15,8 +15,8 @@
 //        each other and then against design.md's own claim: "exactly the multiples of the
 //        Reset_Frame_Period below the budget".
 //
-//   `RESET_FRAME_PERIOD` is not re-exported through the `@app/tools` barrel
-//   (`simulator/index.ts`), so it is read from its own module directly, the same convention
+//   `RESET_FRAME_PERIOD` is read from its own defining module (`consensus-harness.ts`) rather
+//   than through the `@app/tools` barrel, the same convention
 //   `rendered-stimulus-enable.property.test.ts` and `rendered-stimulus-layout.property.test.ts`
 //   already use for `ENABLE_FRAME_PERIOD`.
 //
@@ -58,8 +58,8 @@ import {
   type ConsensusHarnessRequest,
   type RoleDeclaration,
 } from '@app/tools';
-// RESET_FRAME_PERIOD is not re-exported through the `@app/tools` barrel (simulator/index.ts), so
-// it is read from its own module directly, matching the convention
+// RESET_FRAME_PERIOD is read from its own defining module (`consensus-harness.ts`) rather than
+// through the `@app/tools` barrel, matching the convention
 // `rendered-stimulus-enable.property.test.ts` and `rendered-stimulus-layout.property.test.ts`
 // already use for ENABLE_FRAME_PERIOD.
 import { RESET_FRAME_PERIOD } from '../tools/simulator/consensus-harness.js';

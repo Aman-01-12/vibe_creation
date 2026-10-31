@@ -29,8 +29,8 @@ import {
   type NonVacuityOutcome,
   type RoleDeclaration,
 } from '@app/tools';
-// STROBE_PERIOD is not re-exported through the `@app/tools` barrel (simulator/index.ts); read it
-// from its own module directly, the convention this spec's other property tests already use
+// STROBE_PERIOD is read from its own defining module (`consensus-harness.ts`) rather than through
+// the `@app/tools` barrel, the convention this spec's other property tests already use
 // (e.g. `rendered-stimulus-strobe.property.test.ts`).
 import { STROBE_PERIOD } from '../tools/simulator/consensus-harness.js';
 

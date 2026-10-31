@@ -217,7 +217,8 @@ const PROPERTY =
 
 /**
  * Half 2's ceiling. Measured at about 0.1s (exhausted rows) and 0.3s (sampled) on an idle
- * machine; the margin is for a loaded full-suite run, where vitest's default 5s is thin.
+ * machine; the margin is for a loaded full-suite run, above the suite's configured `testTimeout`
+ * (`vitest.config.ts`, which owns that value).
  */
 const SWEEP_TEST_TIMEOUT_MS = 30_000;
 
