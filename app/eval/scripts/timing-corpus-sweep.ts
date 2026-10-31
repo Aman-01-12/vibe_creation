@@ -26,8 +26,9 @@
 //   A multi-hour paid sweep must not lose finished designs to a network blip or a process death.
 //   Each design's Sessions are individually guarded, so one failure is logged and skipped rather
 //   than fatal, and results flush after every design. `--resume <dir>` then reads that directory's
-//   own `report.json`, skips every design already recorded in it, and continues appending - so a
-//   relaunch costs only the designs that had not finished.
+//   own `report.json`, skips every design it already MEASURED, and continues appending - so a
+//   relaunch costs only the designs that had not finished. A row recorded with `sessions: 0` is
+//   not a measurement (every Session threw), so resume drops it and re-runs that design.
 //
 // Run: `node app/eval/dist/scripts/timing-corpus-sweep.js [--sessions N] [--limit M]
 //      [--resume DIR] [--never-verified-from REPORT]`.
