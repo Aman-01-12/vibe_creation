@@ -25,11 +25,11 @@ export const SANDBOX_RESULT_REF = `${CONTRACT_SCHEMA_ID}#/definitions/SandboxRes
 /**
  * The rule "`<field>` is present IF AND ONLY IF `kind` is `<kind>`", as one `allOf` member.
  *
- * ONE OWNER OF THE SHAPE, because there are now TWO kind-specific payloads (`formal` and
- * `formalPrepass`) and both halves of both rules are load-bearing: the `then` stops a job of
- * that kind arriving with no parameters, and the `else` stops parameters riding along on a kind
- * whose worker path never reads them. Expressed in the schema rather than only in the worker so
- * ajv refuses a malformed job at the boundary, before it crosses the seam.
+ * ONE OWNER OF THE SHAPE, because there are now FOUR kind-specific payloads (`formal`,
+ * `formalPrepass`, `synthesize`, and `lint`) and both halves of every rule are load-bearing: the
+ * `then` stops a job of that kind arriving with no parameters, and the `else` stops parameters
+ * riding along on a kind whose worker path never reads them. Expressed in the schema rather than
+ * only in the worker so ajv refuses a malformed job at the boundary, before it crosses the seam.
  *
  * THE BOOLEAN-SCHEMA BRANCHES ARE NOT A STYLE CHOICE - they are the schema satisfying a strict
  * validator, never the validator relaxed for the schema. `validation.ts` builds ajv with
@@ -45,7 +45,7 @@ export const SANDBOX_RESULT_REF = `${CONTRACT_SCHEMA_ID}#/definitions/SandboxRes
  *   - `type: 'object'` on each branch keeps `strictTypes` quiet.
  *
  * Returned as an `allOf` member because draft-07 permits only ONE `if`/`then`/`else` per schema
- * object, and `SandboxJob` now needs two independent ones.
+ * object, and `SandboxJob` now needs five independent ones.
  */
 function payloadBiconditional(kind: string, field: string): SchemaObject {
   return {

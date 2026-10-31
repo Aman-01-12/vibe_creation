@@ -2,9 +2,10 @@
 //
 // Inward dependency: may import @app/core only. The sandbox isolation, path
 // validation, and capture-all-or-error logic (tasks 3.1-3.2), the iverilog+vvp
-// simulator oracle (task 3.5), the Yosys/netlistsvg synth adapter, and the Yosys+Z3
-// formal oracle live in the subfolders below. The thin Python worker is the sole
-// TS-to-Python seam and lives under sandbox/worker with its own project config.
+// simulator oracle (task 3.5), the Yosys/netlistsvg synth adapter, the Yosys
+// `check -assert` lint adapter, and the Yosys+Z3 formal oracle live in the subfolders
+// below. The thin Python worker is the sole TS-to-Python seam and lives under
+// sandbox/worker with its own project config.
 
 import { CORE_LAYER } from '@app/core';
 
