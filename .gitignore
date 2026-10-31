@@ -8,6 +8,9 @@
 *.pem
 *.key
 .kiro/settings/mcp.json
+# Credential_File directory (app/agent DEFAULT_CREDENTIAL_FILE = .secrets/bedrock-token). The
+# whole directory, not the one filename: a refresh writes a sibling temp file and moves it in.
+/.secrets/
 
 # Obsidian knowledge vault: keep notes versioned, but never commit private/sensitive area or user-local UI state
 chipAgent/_private/
