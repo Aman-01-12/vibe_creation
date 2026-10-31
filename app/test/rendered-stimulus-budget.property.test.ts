@@ -106,10 +106,10 @@ function readRenderedBudget(contents: string): number {
 
 /**
  * The width-reduced figure the Reference_Model_Prompt's own "Sample_Budget:" line states FOR THE
- * SPEC'S OWN INTERFACE, not for the worked example's. `describeExample()` renders a second,
- * earlier "Sample_Budget:" line of its own (for `EXAMPLE_INTERFACE`, always small enough that the
- * width cap never binds, so it always reads 2048) ahead of the one that matters here - taking the
- * LAST match is what distinguishes the two.
+ * SPEC'S OWN INTERFACE, not for either worked example's. `describeExamples()` renders one earlier
+ * "Sample_Budget:" line per example (for `EXAMPLE_INTERFACE` and `EXAMPLE2_INTERFACE`, both always
+ * small enough that the width cap never binds, so both read 2048) ahead of the one that matters
+ * here - taking the LAST match is what distinguishes the spec's line from the examples'.
  */
 function readPromptBudget(spec: Spec): number {
   const prompt = buildReferenceModelInput(spec).prompt;

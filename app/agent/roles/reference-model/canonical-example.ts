@@ -1,7 +1,9 @@
-// The one worked example the Reference_Model prompt carries (Q-19).
+// The two worked examples the Reference_Model prompt carries (Q-19): the Moore down counter,
+// then the design whose registered output the input determines.
 //
-// A design outside every corpus, so it shows the encoding and not any benchmark's behaviour.
-// `reference-model-example.integration.test.ts` runs these bodies against EXAMPLE_RTL.
+// Both designs sit outside every corpus, so they show the encoding and not any benchmark's
+// behaviour. `reference-model-example.integration.test.ts` runs each example's bodies against
+// its own matching RTL (EXAMPLE_RTL and EXAMPLE2_RTL).
 
 import type { ModuleInterface, TimingContract } from '@app/core';
 
