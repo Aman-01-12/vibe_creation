@@ -5,7 +5,6 @@
 // The copied fields matter as much as the new ones: a Campaign that changed a cap or a price
 // while changing the prompt would not isolate the prompt.
 
-import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -163,7 +162,8 @@ describe('sweep.config.grounding-confirmatory-v1.json', () => {
     expect(JSON.stringify(campaign)).not.toContain('credential');
     expect(JSON.stringify(campaign)).not.toContain('apiKey');
     expect(DEFAULT_CREDENTIAL_FILE).toBe('.secrets/bedrock-token');
-    expect(existsSync(resolve(HERE, '../../..', DEFAULT_CREDENTIAL_FILE))).toBe(true);
+    // Whether that file is present on this machine is developer-local state, not a property of
+    // the config; `credential-file-ignored.test.ts` owns the exclusion of the path itself.
   });
 });
 

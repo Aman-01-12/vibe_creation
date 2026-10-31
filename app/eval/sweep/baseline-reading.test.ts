@@ -121,55 +121,68 @@ describe('readBaseline', () => {
 });
 
 describe('the Reference_Campaign as a baseline (testbench-spec-grounding, Req 11.6)', () => {
-  it('reads its v15 Control_Arm records for the 19 Campaign_Designs', () => {
-    const path = resolve(HERE, '../../../.eval-runs/scoreboard-ab-v1/results.jsonl');
-    const config = JSON.parse(
-      readFileSync(resolve(HERE, 'sweep.config.grounding-confirmatory-v1.json'), 'utf8'),
-    ) as {
-      readonly problems: { readonly ids: readonly string[] };
-      readonly groundingCampaign: {
-        readonly referenceCampaign: { readonly configHash: string; readonly schemaVersion: 15 };
+  // The Reference_Campaign's results log is gitignored local evidence of a paid run, so it is
+  // absent from every clone. These two readings run where it exists; a skip is the correct
+  // outcome elsewhere, and it is not a pass.
+  const REFERENCE_RESULTS = resolve(HERE, '../../../.eval-runs/scoreboard-ab-v1/results.jsonl');
+  const REFERENCE_RECORDED = existsSync(REFERENCE_RESULTS);
+
+  if (!REFERENCE_RECORDED) {
+    console.warn(
+      '[baseline-reading] The Reference_Campaign reading was NOT exercised: .eval-runs/scoreboard-ab-v1/results.jsonl is absent.',
+    );
+  }
+
+  it.runIf(REFERENCE_RECORDED)(
+    'reads its v15 Control_Arm records for the 19 Campaign_Designs',
+    () => {
+      const config = JSON.parse(
+        readFileSync(resolve(HERE, 'sweep.config.grounding-confirmatory-v1.json'), 'utf8'),
+      ) as {
+        readonly problems: { readonly ids: readonly string[] };
+        readonly groundingCampaign: {
+          readonly referenceCampaign: { readonly configHash: string; readonly schemaVersion: 15 };
+        };
       };
-    };
-    const reference = config.groundingCampaign.referenceCampaign;
+      const reference = config.groundingCampaign.referenceCampaign;
 
-    const reading = readBaseline({
-      text: readFileSync(path, 'utf8'),
-      configHash: reference.configHash,
-      schemaVersion: reference.schemaVersion,
-      strategyArm: 'control',
-      modelArms: MODEL_ARMS,
-      problemIds: config.problems.ids,
-    });
+      const reading = readBaseline({
+        text: readFileSync(REFERENCE_RESULTS, 'utf8'),
+        configHash: reference.configHash,
+        schemaVersion: reference.schemaVersion,
+        strategyArm: 'control',
+        modelArms: MODEL_ARMS,
+        problemIds: config.problems.ids,
+      });
 
-    expect(reading.available).toBe(true);
-    if (!reading.available) {
-      return;
-    }
-    expect(reading.cells).toHaveLength(MODEL_ARMS.length * 19);
-    // Non-vacuous: the recorded run really holds Control_Arm records for these cells.
-    expect(reading.cells.reduce((sum, cell) => sum + cell.records, 0)).toBeGreaterThan(0);
-  });
+      expect(reading.available).toBe(true);
+      if (!reading.available) {
+        return;
+      }
+      expect(reading.cells).toHaveLength(MODEL_ARMS.length * 19);
+      // Non-vacuous: the recorded run really holds Control_Arm records for these cells.
+      expect(reading.cells.reduce((sum, cell) => sum + cell.records, 0)).toBeGreaterThan(0);
+    },
+  );
 
-  it('reads nothing when the arm or the schema does not match those records', () => {
-    const text = readFileSync(
-      resolve(HERE, '../../../.eval-runs/scoreboard-ab-v1/results.jsonl'),
-      'utf8',
-    );
-    const parts = {
-      text,
-      configHash: '09bf541fcae9dbb9',
-      modelArms: MODEL_ARMS,
-      problemIds: ['rtllm/arithmetic/accu'],
-    };
+  it.runIf(REFERENCE_RECORDED)(
+    'reads nothing when the arm or the schema does not match those records',
+    () => {
+      const parts = {
+        text: readFileSync(REFERENCE_RESULTS, 'utf8'),
+        configHash: '09bf541fcae9dbb9',
+        modelArms: MODEL_ARMS,
+        problemIds: ['rtllm/arithmetic/accu'],
+      };
 
-    // v12 is the stage-1 screen's schema, and those records are v15.
-    expect(readBaseline({ ...parts, schemaVersion: 12, strategyArm: 'control' }).available).toBe(
-      false,
-    );
-    // `grounded` records do not exist in the Reference_Campaign at all.
-    expect(readBaseline({ ...parts, schemaVersion: 15, strategyArm: 'grounded' }).available).toBe(
-      false,
-    );
-  });
+      // v12 is the stage-1 screen's schema, and those records are v15.
+      expect(readBaseline({ ...parts, schemaVersion: 12, strategyArm: 'control' }).available).toBe(
+        false,
+      );
+      // `grounded` records do not exist in the Reference_Campaign at all.
+      expect(readBaseline({ ...parts, schemaVersion: 15, strategyArm: 'grounded' }).available).toBe(
+        false,
+      );
+    },
+  );
 });
