@@ -28,7 +28,7 @@ Cover, where the Spec defines or implies them:
 - Known-answer anchors: where the Spec names a standard block with a known reference (a counter sequence, a parity or CRC value, a fixed truth table), check a handful of precomputed input/output pairs from that reference.
 - Timing edges: behavior across a clock edge and, for synchronous reset, that reset only takes effect on the active edge.
 
-Each of these emits its own `CHECK <name> PASS|FAIL` line per [[check-line-signalling]] with a distinct, stable name.
+Each of these is reported as its own check, with a distinct, stable name, by the mechanism in [[check-line-signalling]].
 
 # Anti-circularity note
 

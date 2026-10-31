@@ -116,9 +116,20 @@ const DESIGNS = importedDesigns(
 
 const DESIGN_IDS: readonly string[] = [...DESIGNS.keys()];
 
-if (DESIGN_IDS.length === 0) {
-  throw new Error(
-    'the pinned RTLLM checkout holds no scored design, so there is no golden reference to submit; run `npm run corpus:fetch` and re-run',
+/**
+ * The corpus is unfetched on a fresh clone, which is a skip rather than a failure.
+ *
+ * Same convention as every other corpus-backed suite here (for example
+ * `formal-cover-cross-check-refutation.integration.test.ts`): a missing checkout is an absent
+ * input, not a defect, so it must not turn `npm test` red on a clone or on a CI runner that has
+ * not fetched it. The skip is loud, and it is NOT a pass.
+ */
+const CORPUS_AVAILABLE = DESIGN_IDS.length > 0;
+
+if (!CORPUS_AVAILABLE) {
+  console.warn(
+    '[property-only-path] Property 10 was NOT exercised: the pinned RTLLM checkout holds no ' +
+      'scored design, so there is no golden reference to submit. Run `npm run corpus:fetch`.',
   );
 }
 
@@ -379,8 +390,20 @@ interface Scenario {
   readonly verdict: ScriptedVerdict;
 }
 
+/**
+ * The design ids the generator draws from.
+ *
+ * `fc.constantFrom` rejects an empty parameter list, and this arbitrary is built at module scope,
+ * so an absent checkout would throw here before `describe.skipIf` could skip the suite. The
+ * placeholder is only ever reachable when `CORPUS_AVAILABLE` is false, in which case every case
+ * below is skipped and no scenario is generated from it.
+ */
+const ARB_DESIGN_IDS: readonly string[] = CORPUS_AVAILABLE
+  ? DESIGN_IDS
+  : ['corpus-absent-placeholder'];
+
 const arbScenario: fc.Arbitrary<Scenario> = fc.record({
-  designId: fc.constantFrom(...DESIGN_IDS),
+  designId: fc.constantFrom(...ARB_DESIGN_IDS),
   model: fc.constantFrom(...AUTHORING_MODELS),
   propertyCount: fc.constantFrom(1, 2, 3),
   verdict: fc.constantFrom<ScriptedVerdict>(
@@ -489,7 +512,7 @@ function expectByteIdentical(submitted: SourceFile, golden: SourceFile, where: s
   ).toBe(0);
 }
 
-describe(PROPERTY_10, () => {
+describe.skipIf(!CORPUS_AVAILABLE)(PROPERTY_10, () => {
   it(
     'submits the imported golden reference byte for byte, through the Property_Author and the Formal_Oracle alone',
     async () => {

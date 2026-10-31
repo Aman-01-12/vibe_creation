@@ -98,6 +98,20 @@ const CORPUS = FORMAL_PROBE.available
   ? await importRtllmCorpus(new FileSystemCorpusCheckout(RTLLM_CHECKOUT_PATH))
   : null;
 
+/**
+ * Whether the pinned checkout is present at all.
+ *
+ * The corpus is unfetched on a fresh clone, which is a skip rather than a failure - the same
+ * convention every other corpus-backed suite here follows. Without it a host that HAS the formal
+ * toolchain but has not run `npm run corpus:fetch` fails this group for a missing input rather
+ * than for a defect. A checkout that is present but does not carry a design this group names is
+ * a broken fixture, and `namedDesign` still throws loudly for that.
+ */
+const CORPUS_AVAILABLE = CORPUS !== null && CORPUS.problems.length > 0;
+
+/** Both gates: the solver chain must be invocable AND the pinned checkout must be present. */
+const RUNNABLE = FORMAL_PROBE.available && CORPUS_AVAILABLE;
+
 /** The host design as the adapter needs it: its source and its declared interface. */
 interface BoundaryDesign {
   readonly rtl: SourceFile;
@@ -194,7 +208,7 @@ async function decide(criterionRef: string): Promise<DecidedHalf> {
   return { result, context };
 }
 
-describe.skipIf(!FORMAL_PROBE.available)(
+describe.skipIf(!RUNNABLE)(
   'the Warm_Up_Boundary_Measurement decides the Warm_Up_Ceiling at the first clocked rung',
   () => {
     it(
@@ -372,7 +386,7 @@ async function enableGatedHalf(criterionRef: string): Promise<EnableGatedHalf> {
   return half;
 }
 
-describe.skipIf(!FORMAL_PROBE.available)(
+describe.skipIf(!RUNNABLE)(
   'the Warm_Up_Boundary_Measurement decides an enable-gated reset assume from its emitted text',
   () => {
     it(
@@ -407,9 +421,12 @@ describe.skipIf(!FORMAL_PROBE.available)(
   },
 );
 
-if (!FORMAL_PROBE.available) {
+if (!RUNNABLE) {
+  const reason = FORMAL_PROBE.available
+    ? `no RTLLM checkout at ${RTLLM_CHECKOUT_PATH}; run \`npm run corpus:fetch\``
+    : FORMAL_PROBE.reason;
   console.warn(
     `[formal-warm-up-boundary] The Warm_Up_Ceiling of ${String(EXPECTED_COVER_STEP)} was NOT ` +
-      `decided on this host: ${FORMAL_PROBE.reason}. Component 18's claim stands unmeasured here.`,
+      `decided on this host: ${reason}. Component 18's claim stands unmeasured here.`,
   );
 }

@@ -13,7 +13,7 @@ interprets tool output, fixes, and explains.
 | Lint / style | Verilator lint, Verible | apply fixes |
 | Synthesis (real HW?) | Yosys (gate count, warnings) | explain |
 | Timing | static timing analysis (STA) | explain slack |
-| Formal / critical props | SymbiYosys (proof) | choose properties |
+| Formal / critical props | Yosys lowering to SMT2 + `yosys-smtbmc` (bitwuzla, z3 cross-check) | choose properties |
 | Circuit diagram | Yosys → netlistsvg (rendered) | annotate |
 | PCB track | ERC / DRC / SPICE | interpret violations |
 

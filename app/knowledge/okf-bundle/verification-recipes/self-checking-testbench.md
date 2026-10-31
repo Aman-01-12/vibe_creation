@@ -25,9 +25,9 @@ Every expected value is computed from the Spec and intent, not read back from th
 1. Instantiate the DUT against the exact Module_Interface from the Spec (same port names, directions, and widths).
 2. Generate a free-running clock, for example a fixed half-period toggle, when the module is synchronous.
 3. Apply the reset sequence the Spec defines before asserting any functional check, so checks start from a known state.
-4. For each acceptance criterion, drive stimulus, wait the defined number of clock edges, sample the output, and compare against the independently computed expected value.
-5. Emit one `CHECK <name> PASS|FAIL` line per criterion per [[check-line-signalling]], then `$finish`.
-6. Include a watchdog (a bounded time limit that calls `$finish`) so a hung design ends the run instead of relying only on the sandbox wall-clock cap.
+4. For each acceptance criterion, drive stimulus, wait the defined number of clock edges, sample the output, and compute the expected value independently from the Spec.
+5. Report each criterion once, by the mechanism in [[check-line-signalling]], passing both the expected and the observed value.
+6. Do not write a watchdog, a `$dumpfile`, or a `$dumpvars` call: the product-written Simulation_Harness owns the waveform dump and the simulated-time liveness bound, and a second one competes with it.
 
 Skeleton:
 
@@ -42,12 +42,7 @@ module tb;
 
   initial begin
     // reset sequence from the Spec
-    // per-criterion stimulus + compare + CHECK line
-    $finish;
-  end
-
-  initial begin
-    #100000 $display("CHECK watchdog FAIL");  // bounded safety net
+    // per-criterion stimulus + expected value + one report call
     $finish;
   end
 endmodule
@@ -61,8 +56,8 @@ Assemble its model context from the Spec, the intent, and OKF retrieval, with no
 # Pitfalls
 
 - Sampling combinational output on the same edge that changes it can read a stale or racing value; sample after the settling edge the Spec implies.
-- A testbench that never prints a `CHECK` line makes the whole run `error`, not a pass; always emit at least one check.
-- Comparing with `==` instead of `===` hides `x`/`z` bugs, because `==` returns `x` when either operand has unknown bits.
+- A testbench that never reports a check makes the whole run `error`, not a pass; always report at least one check.
+- Comparing with `==` instead of `===` hides `x`/`z` bugs, because `==` returns `x` when either operand has unknown bits. The reporting task already compares with `===`, so hand it both values rather than pre-deciding pass or fail yourself.
 
 # Links
 
