@@ -42,16 +42,20 @@ It is the sole TypeScript-to-Python seam; `app/tools/sandbox/worker/README.md` o
 ```
 app/
   core/        # domain types + pure logic (trust, verdict, budget, eval-gate, models)
+    redaction/ # the Secret_Pattern_Set: the one set of secret-shaped tokens we redact by
   knowledge/   # Knowledge_Retriever, OKF traversal, web-fetch adapter
     okf-bundle/
   tools/       # Tool_Runner sandbox + EDA adapters
     sandbox/
       worker/  # thin Python worker (own pyproject.toml)
-    simulator/
+    simulator/ # the Icarus oracle adapter + the product-written Simulation_Harness
     synth/
-    verilog/   # the shared source mask: parser-free, offset-preserving source classification
+    formal/    # the formal oracle adapter: Yosys/yosys-smtbmc report parsing + the five-condition gate
+    mutation/  # the pure mutation vocabulary: what a mutant is and the fixed operator order
+    verilog/   # the shared source mask, the typed Formal_Property, and the token admission lexer
   agent/       # Orchestrator + roles + Model_Router + Action_Recorder
     orchestrator/  roles/  model-router/  action-recorder/
+    consensus/ # the Reference_Model_Consensus_Gate's decision algebra (agreement, grant, trust vote)
   api/         # API_Gateway + Project_Store
     project-store/
   web/         # Editor, Display_Layer, Waveform_Viewer, Schematic_View, Live_Run
@@ -59,6 +63,8 @@ app/
     corpus/    # RTLLM import (pinned fetch) + the independent golden-testbench judge
     sweep/     # the sweep runner: campaign configs, pass@k aggregation, transport throttling
     gate/      # the ratcheting pass@k CI gate
+    property-only/  # Property_Only_Mode's own entry point, off the Student_Path by construction
+    scripts/   # per-campaign measurement entry points: replay gate, probes, closeouts
   test/        # shared property generators + integration fixtures
 ```
 
