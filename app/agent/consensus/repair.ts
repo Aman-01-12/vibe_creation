@@ -56,6 +56,16 @@ const MIN_MAJORITY_FAMILY_COUNT = 3;
  * exists, a Strict_Majority spans at least 3 Model_Families, the Pool_Correctness
  * gate is actionable, and the Fault_Verdict is `TESTBENCH`. An advisory verdict
  * or an `ABSTAIN` has no path through here.
+ *
+ * UNSATISFIABLE FROM ANY CONSISTENT SESSION STATE (DQ4-01, open). `poolCorrectness`
+ * IS the trusted share, so `attributionStatus === 'actionable'` requires a
+ * Trusted_Testbench to exist, which falsifies `!hasTrustedTestbench`. The two
+ * conjuncts come from independently motivated requirements (Req 10 and Req 11.1)
+ * and are satisfied by disjoint states, so this returns `false` for every state a
+ * real Session can reach - enumerated in `repair-satisfiability.test.ts`, which is
+ * the standing witness and will fail if the contradiction is resolved. The body is
+ * not itself wrong: fed inconsistent inputs it fires. Resolve DQ4-01 before wiring
+ * a caller, or the branch is wired dead.
  */
 export function shouldTriggerRepair(trigger: RepairStartCondition): boolean {
   return (

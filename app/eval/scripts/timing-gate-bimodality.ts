@@ -1,27 +1,25 @@
 // Why is the Session outcome BIMODAL on the Mutation_Strength_Gate? N Sessions, with the one
 // measurement that discriminates the candidate mechanisms.
 //
-// THE HYPOTHESIS UNDER TEST: A BROKEN PEER POISONS `killedByPeer`
-//   `requirementOf` admits a mutant into T's requirement when some OTHER pool testbench killed
-//   it, and `judgeMutationStrength` then fails T unless T kills all of them. The gate's own
-//   header justifies that with: "A true equivalent mutant can never enter the requirement,
-//   because no peer killed it either."
+// THE HYPOTHESIS, NOW CONFIRMED AND FIXED: A BROKEN PEER POISONED `killedByPeer`
+//   `killed` is `verdict !== 'pass'`, so a testbench that is BROKEN - one that fails every
+//   design - killed every mutant too, indiscriminately, by being broken rather than by being
+//   strong. One such peer marked every mutant peer-killable, inflating every good testbench's
+//   requirement set with behaviourally-equivalent mutants that nothing can legitimately kill,
+//   and the gate then failed every good testbench at once.
 //
-//   That argument assumes a peer kills by being STRONG. A testbench that is BROKEN - one that
-//   fails every design - kills every mutant too, indiscriminately, because `killed` is simply
-//   `verdict !== 'pass'`. So one broken peer marks every mutant peer-killable, inflating every
-//   good testbench's requirement set to include behaviourally-equivalent mutants that nothing
-//   can legitimately kill, and every good testbench then fails at once.
+//   Every Session measured before the fix had exactly ONE `not-run` testbench - the signature of
+//   a testbench that passes no design, since an empty requirement is what `not-run` means - and
+//   the free replay (`timing-mutation-gate-replay.ts`), which had NO broken member, passed all 8.
+//   `recordsFor` in `mutant-matrix-executor.ts` now requires a peer to pass the mutant's own
+//   parent before its kill counts, and owns the measured rationale; `adder_8bit` went 3 of 5
+//   Sessions verified to 5 of 5, including 2 that still CONTAINED a broken peer.
 //
-//   Every Session measured so far had exactly ONE `not-run` testbench - the signature of a
-//   testbench that passes no design, since an empty requirement is what `not-run` means. The
-//   free replay (`timing-mutation-gate-replay.ts`) had NO broken member and passed all 8.
-//
-// THE DISCRIMINATING MEASUREMENT
-//   Per testbench, per Session: how many designs it PASSES, and how many mutants it KILLS. The
-//   hypothesis predicts an inverse pair - the testbench passing ~0 designs kills ~all mutants -
-//   present in failing Sessions. It also predicts that `killedByPeer` for the good members is
-//   driven by that one member.
+// WHAT THIS SCRIPT NOW MEASURES
+//   The same discriminating pair, as the standing regression readout for that guard: per
+//   testbench, per Session, how many designs it PASSES and how many mutants it KILLS, plus the
+//   `hypothesis` block's `failingSessionsWithBrokenPeer` - which the fix is expected to hold at
+//   zero even when `sessionsWithBrokenPeer` is not.
 //
 // TOKEN ACCOUNTING
 //   Every Session's own `tokensSpent` is recorded per run and accumulated, and the aggregate is

@@ -8,10 +8,13 @@
 //   it decides what to fix: a miscalibrated gate, or testbench heterogeneity.
 //
 //   The gate is ZERO-COVERAGE-GAP and PEER-RELATIVE (`judgeMutationStrength`): T's requirement
-//   set is every compiled mutant whose parent passes T and that at least one OTHER pool member
-//   killed, and T passes only by killing all of them. So a pool of individually-strong members
-//   with DIFFERENT blind spots can fail every member at once - nobody is weak, each just misses
-//   something some peer caught. This replay measures whether that is what happens.
+//   set is every compiled mutant whose parent passes T and that a CREDIBLE peer killed - the
+//   exact peer rule, and why a peer must itself pass that parent, is owned by `recordsFor` in
+//   `mutant-matrix-executor.ts` - and T passes only by killing all of them. So a pool of
+//   individually-strong members with DIFFERENT blind spots can fail every member at once -
+//   nobody is weak, each just misses something some peer caught. This replay measures whether
+//   that is what happens. (The peer-must-pass-the-parent guard landed after this replay ran. No
+//   member here fails the single known-correct parent, so it does not move this result.)
 //
 // WHY IT COSTS NOTHING
 //   The 8 Reference_Models of the paid re-run are already on disk, and all 8 were measured
