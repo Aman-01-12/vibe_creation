@@ -162,9 +162,10 @@ export {
 } from './stage0-quarantine.js';
 export { RTLLM_VALIDITY_OUTPUTS, validityOutputFor } from './validity-outputs.js';
 
-// The Legacy_Byte_Identity_Check's shared render logic (C7, task 1.1): the one request
-// builder both the capture CLI and the future byte comparison (task 5.1) import, so neither
-// can drift from the other.
+// The Legacy_Byte_Identity_Check's shared render logic (C7, task 1.1): the one request builder
+// both the capture CLI and the byte comparison
+// (`legacy-byte-identity-comparison.integration.test.ts`) import, so neither can drift from the
+// other.
 export {
   legacyGoldenFileName,
   legacyRoleDeclarationFor,

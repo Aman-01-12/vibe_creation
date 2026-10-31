@@ -4,9 +4,11 @@
 // `node app/eval/dist/corpus/legacy-golden-capture-cli.js` (npm: `npm run
 // corpus:capture-legacy-golden`) renders every scored RTLLM design's harness text through
 // `renderLegacyGoldenDesign` and writes one golden file per design into
-// `app/test/fixtures/legacy-byte-identity/`. MUST run and be committed before task 4.1 edits
-// the Stimulus_Function renderer: `CONSENSUS_HARNESS_VERSION` 3's text cannot be re-rendered
-// once that edit lands, so this is the one chance to capture what it rendered.
+// `app/test/fixtures/legacy-byte-identity/`. It RAN, and its output was committed, before task
+// 4.1 edited the Stimulus_Function renderer: `CONSENSUS_HARNESS_VERSION` 3's text cannot be
+// re-rendered now that the edit has landed, so re-running this would overwrite the pre-edit
+// baseline rather than reproduce it - see the STOP, DO NOT FIX note in
+// `legacy-byte-identity-comparison.integration.test.ts`, which owns that invariant.
 //
 // The decision logic - which designs, which request, which file name - lives in
 // `legacy-byte-identity.ts` behind no injected seam beyond the corpus checkout and timing

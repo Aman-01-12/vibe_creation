@@ -38,9 +38,9 @@ import {
   type ConsensusHarnessRequest,
   type RoleDeclaration,
 } from '@app/tools';
-// STROBE_PERIOD is not re-exported through the `@app/tools` barrel (simulator/index.ts), so it is
-// read from its own module directly, the convention `rendered-stimulus-strobe.property.test.ts`
-// already uses.
+// STROBE_PERIOD is read from its own defining module (`consensus-harness.ts`) rather than through
+// the `@app/tools` barrel, the convention `rendered-stimulus-strobe.property.test.ts` already
+// uses.
 import { STROBE_PERIOD } from '../tools/simulator/consensus-harness.js';
 
 import { arbModuleInterface } from './interface-header-arbitraries.js';

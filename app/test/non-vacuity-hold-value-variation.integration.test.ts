@@ -40,8 +40,9 @@ import {
   type ResourceLimits,
   type RoleDeclaration,
 } from '@app/tools';
-// HOLD_FRAME_PERIOD is not re-exported through the `@app/tools` barrel (simulator/index.ts),
-// the same convention the sibling Non_Vacuity_Probe integration tests already follow.
+// HOLD_FRAME_PERIOD is read from its own defining module (`consensus-harness.ts`) rather than
+// through the `@app/tools` barrel, the same convention the sibling Non_Vacuity_Probe integration
+// tests already follow.
 import { HOLD_FRAME_PERIOD } from '../tools/simulator/consensus-harness.js';
 
 import { PROBE, realOracleAdapter } from './real-oracle-harness.js';

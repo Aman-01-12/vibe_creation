@@ -1,9 +1,10 @@
 // Unit tests for the Legacy_Byte_Identity_Check's shared render logic (C7, task 1.1).
 //
 // The real corpus run needs the fetched RTLLM checkout and lives in the capture CLI and the
-// future comparison test (task 5.1). What is tested HERE is the logic those two share: the
-// deterministic file-name mapping, the all-`data` Legacy_Role_Set declaration, and that
-// rendering a real `EvalProblem`'s own Spec produces non-empty, reproducible harness text.
+// comparison test (`legacy-byte-identity-comparison.integration.test.ts`). What is tested HERE is
+// the logic those two share: the deterministic file-name mapping, the all-`data` Legacy_Role_Set
+// declaration, and that rendering a real `EvalProblem`'s own Spec produces non-empty,
+// reproducible harness text.
 
 import { describe, expect, it } from 'vitest';
 

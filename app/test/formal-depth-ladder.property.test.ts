@@ -144,8 +144,9 @@ const PROPERTY_8 =
 const NUM_RUNS = 1000;
 
 /**
- * Headroom, not a workaround: 1000 runs measured 0.32s here, well inside vitest's 5s default, and
- * the explicit bound only keeps a contended full-suite run from reading as a failure.
+ * Headroom, not a workaround: 1000 runs measured 0.32s here, well inside the suite's configured
+ * `testTimeout` (`vitest.config.ts`, which owns that value), and the explicit bound only keeps a
+ * contended full-suite run from reading as a failure.
  */
 const SLOW_PROPERTY_TIMEOUT_MS = 30_000;
 

@@ -6,9 +6,9 @@
 //   `parse.ts`'s own check order: `parseReferenceModelDraft` returns a Reference_Model_Draft IF
 //   AND ONLY IF the reply carries exactly three distinct non-empty length-bounded bodies named
 //   `ece_reset_state`, `ece_next_state`, `ece_expect`, AND a `roles` array naming every input port
-//   of the Declared_Interface exactly once with a role from `{data, enable}`. Every other
-//   combination is a refusal carrying a non-empty reason, and no draft/refusal mixes the two
-//   shapes.
+//   of the Declared_Interface exactly once with a role from the Role_Vocabulary (`INPUT_ROLES`,
+//   which owns the member list). Every other combination is a refusal carrying a non-empty
+//   reason, and no draft/refusal mixes the two shapes.
 //
 //   The function-body catalog and the role catalog are each a small CLOSED set of defect kinds
 //   (missing/extra/duplicate/unexpected name, empty/oversized body; no-array/malformed/out-of-
@@ -29,7 +29,7 @@
 //   raising `numRuns` narrows the odds of missing a case but never closes them, where exhausting
 //   does. The case-sensitivity trap and the empty-string trap are near-misses of the real
 //   vocabulary rather than arbitrary strings, because a random string is almost never one
-//   character away from `data`/`enable`, and a case-insensitive comparison is the plausible
+//   character away from a real member, and a case-insensitive comparison is the plausible
 //   defect this guards against.
 //
 // Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.10, 4.4
@@ -222,7 +222,7 @@ function rolesCasesFor(moduleInterface: ModuleInterface): RolesCase[] {
     },
   );
 
-  // EXHAUSTED, not sampled: both members of the closed {data, enable} union get their own
+  // EXHAUSTED, not sampled: every member of the closed Role_Vocabulary gets its own
   // case-mismatched near-miss, per the vault's non-vacuity gotcha.
   for (const member of INPUT_ROLES) {
     cases.push({
@@ -344,8 +344,8 @@ describe(PROPERTY, () => {
       }
     }
 
-    // Every near-miss member of the closed {data, enable} union was actually built, not just one
-    // of the two picked at random.
+    // Every near-miss member of the closed Role_Vocabulary was actually built, not just one member
+    // picked at random.
     for (const member of INPUT_ROLES) {
       expect(observedRoleKinds.has(`near-miss-case-${member}`)).toBe(true);
     }
